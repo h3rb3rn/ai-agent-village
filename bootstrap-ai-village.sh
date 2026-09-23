@@ -362,14 +362,20 @@ cat > /usr/local/lib/ai-village/agent-runner <<'RUNNER'
 set -Eeuo pipefail
 : "${AGENT_ID:?}" "${AGENT_NAME:?}" "${AGENT_ROLE:?}" "${AGENT_IDENTITY_PROMPT:?}" "${OLLAMA_URL:?}" "${OLLAMA_MODEL:?}" "${VILLAGE_ROOT:?}"
 BOARD="$VILLAGE_ROOT/board"
+TELEMETRY_DIR="$VILLAGE_ROOT/telemetry"
 STATE_DIR="$VILLAGE_ROOT/users/$AGENT_NAME"
 STATE="$STATE_DIR/state.json"
-mkdir -p "$STATE_DIR/commands"
+mkdir -p "$STATE_DIR/commands" "$TELEMETRY_DIR"
 
 event() {
   local kind="$1" detail="$2" line
   line="$(jq -cn --arg ts "$(date --iso-8601=seconds)" --arg agent "$AGENT_ID" --arg name "$AGENT_NAME" --arg role "$AGENT_ROLE" --arg event "$kind" --arg detail "$detail" '{timestamp:$ts,agent:$agent,name:$name,role:$role,event:$event,detail:$detail}')"
   ( flock -x 9; printf '%s\n' "$line" >> "$BOARD/events.jsonl" ) 9>"$BOARD/.lock"
+}
+telemetry_event() {
+  local kind="$1" detail="$2" line
+  line="$(jq -cn --arg ts "$(date --iso-8601=seconds)" --arg agent "$AGENT_ID" --arg name "$AGENT_NAME" --arg role "$AGENT_ROLE" --arg event "$kind" --arg detail "$detail" '{timestamp:$ts,agent:$agent,name:$name,role:$role,event:$event,detail:$detail}')"
+  ( flock -x 9; printf '%s\n' "$line" >> "$TELEMETRY_DIR/agent-events.jsonl" ) 9>"$TELEMETRY_DIR/.lock"
 }
 save_state() {
   local command="$1" repeats="$2" failures="$3" observation="$4" action="$5"
@@ -407,10 +413,17 @@ while true; do
   schema='{"type":"object","properties":{"observation":{"type":"string"},"tool_call":{"type":"object","properties":{"name":{"type":"string","enum":["execute_bash","board_message","idle"]},"arguments":{"type":"object","properties":{"command":{"type":"string"},"message":{"type":"string"}},"required":["command","message"]}},"required":["name","arguments"]}},"required":["observation","tool_call"]}'
   payload="$(jq -n --arg model "$OLLAMA_MODEL" --arg constitution "$(cat /usr/local/share/ai-village/system-prompt.txt)" --arg identity "$(cat "$AGENT_IDENTITY_PROMPT")" --arg user "$(snapshot)" --arg keep_alive "${OLLAMA_KEEP_ALIVE:-10m}" --arg think "${OLLAMA_THINK_LEVEL:-medium}" --argjson context "${OLLAMA_NUM_CTX:-8192}" --argjson predict "${OLLAMA_NUM_PREDICT:-768}" --argjson schema "$schema" '{model:$model,stream:false,format:$schema,think:$think,keep_alive:$keep_alive,options:{temperature:0.35,num_ctx:$context,num_predict:$predict},messages:[{role:"system",content:$constitution},{role:"system",content:$identity},{role:"user",content:$user}]} | if $think == "off" then del(.think) else . end')"
   response="$(mktemp "$STATE_DIR/response.XXXXXX")"
+  inference_started_ms="$(date +%s%3N)"
+  telemetry_event inference_started "model=$OLLAMA_MODEL context=${OLLAMA_NUM_CTX:-8192}"
   if ! curl -fsS --connect-timeout 10 --max-time "${VILLAGE_OLLAMA_TIMEOUT_SECONDS:-1800}" -H 'Content-Type: application/json' -d "$payload" "$OLLAMA_URL/api/chat" > "$response"; then
     detail="$(tr '\n' ' ' < "$response" | head -c 512 || true)"
+    inference_finished_ms="$(date +%s%3N)"
+    telemetry_event inference_error "duration_ms=$((inference_finished_ms-inference_started_ms)); response=${detail:-no response}"
     event model_error "chat request failed; response=${detail:-no response}; no action executed"; rm -f "$response"; sleep "${VILLAGE_OFFLINE_RETRY_SECONDS:-120}"; continue
   fi
+  inference_finished_ms="$(date +%s%3N)"
+  metrics="$(jq -c '{total_duration:.total_duration,prompt_eval_count:.prompt_eval_count,prompt_eval_duration:.prompt_eval_duration,eval_count:.eval_count,eval_duration:.eval_duration}' "$response" 2>/dev/null || printf '{}')"
+  telemetry_event inference_finished "duration_ms=$((inference_finished_ms-inference_started_ms)); metrics=$metrics"
   content="$(jq -r '.message.content // empty' "$response" 2>/dev/null || true)"; rm -f "$response"
   if ! decision="$(printf '%s' "$content" | jq -ce . 2>/dev/null)"; then
     event invalid_decision "model response was not valid JSON"; sleep "${VILLAGE_CYCLE_SECONDS:-60}"; continue
@@ -696,6 +709,7 @@ INBOX = ROOT / "board" / "organic-inbox.jsonl"
 EVENTS = ROOT / "board" / "events.jsonl"
 TELEMETRY = ROOT / "telemetry" / "latest.json"
 TELEMETRY_DB = ROOT / "telemetry" / "events.sqlite3"
+AGENT_TELEMETRY = ROOT / "telemetry" / "agent-events.jsonl"
 HOST = os.environ.get("VILLAGE_WEBUI_BIND", "0.0.0.0")
 PORT = int(os.environ.get("VILLAGE_WEBUI_PORT", "8080"))
 MAX_MESSAGE = int(os.environ.get("VILLAGE_WEBUI_MAX_MESSAGE_CHARS", "4000"))
@@ -756,6 +770,13 @@ def telemetry_history(limit=120):
     except Exception:
         return []
 
+def inference_events(limit=200):
+    try:
+        rows = [json.loads(line) for line in AGENT_TELEMETRY.read_text(encoding="utf-8", errors="replace").splitlines()[-limit:]]
+        return rows
+    except (OSError, json.JSONDecodeError):
+        return []
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args): pass
     def do_GET(self):
@@ -763,6 +784,7 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/api/activity": return send(self, HTTPStatus.OK, json.dumps(activity(), ensure_ascii=False), "application/json; charset=utf-8")
         if self.path == "/api/telemetry": return send(self, HTTPStatus.OK, json.dumps(telemetry(), ensure_ascii=False), "application/json; charset=utf-8")
         if self.path == "/api/telemetry/history": return send(self, HTTPStatus.OK, json.dumps(telemetry_history(), ensure_ascii=False), "application/json; charset=utf-8")
+        if self.path == "/api/inference": return send(self, HTTPStatus.OK, json.dumps(inference_events(), ensure_ascii=False), "application/json; charset=utf-8")
         if self.path == "/dashboard":
             current = telemetry(); cards = []
             for agent in current.get("agents", []):
