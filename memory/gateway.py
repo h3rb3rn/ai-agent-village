@@ -15,6 +15,7 @@ DB = Path(os.environ.get('MEMORY_DB', ROOT / 'memory' / 'memory.sqlite3'))
 HOST = os.environ.get('MEMORY_BIND', '127.0.0.1')
 PORT = int(os.environ.get('MEMORY_PORT', '8090'))
 TOKEN = os.environ.get('MEMORY_GATEWAY_TOKEN', '')
+TOKENS_FILE = Path(os.environ.get('MEMORY_AGENT_TOKENS_FILE', '/etc/ai-village/memory-agent-tokens.json'))
 MAX_CONTENT = int(os.environ.get('MEMORY_MAX_CONTENT_CHARS', '12000'))
 MAX_RESULTS = int(os.environ.get('MEMORY_MAX_RESULTS', '12'))
 RATE_LIMIT = int(os.environ.get('MEMORY_WRITES_PER_HOUR', '120'))
@@ -32,8 +33,14 @@ def db():
 
 def now(): return time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
 def tokens(text): return set(re.findall(r'[a-z0-9äöüß_-]{3,}', text.lower()))
-def auth(handler):
-    return not TOKEN or handler.headers.get('Authorization', '') == f'Bearer {TOKEN}'
+def caller(handler):
+    supplied = handler.headers.get('Authorization', '').removeprefix('Bearer ').strip()
+    if TOKEN and supplied == TOKEN: return '*'
+    try:
+        tokens = json.loads(TOKENS_FILE.read_text())
+        return next((agent for agent, token in tokens.items() if token == supplied), None)
+    except (OSError, ValueError): return None
+def auth(handler): return caller(handler) is not None if (TOKEN or TOKENS_FILE.exists()) else True
 def json_body(handler):
     length = int(handler.headers.get('Content-Length', '0'))
     if length <= 0 or length > MAX_CONTENT + 8192: raise ValueError('invalid body size')
@@ -67,6 +74,8 @@ class Handler(BaseHTTPRequestHandler):
         except (ValueError, json.JSONDecodeError) as exc: return self.send_json(400, {'error': str(exc)})
         if route == '/v1/memories':
             content = str(value.get('content', '')).strip(); agent = str(value.get('agent', '')).strip()
+            owner = caller(self)
+            if owner not in (None, '*') and owner != agent: return self.send_json(403, {'error': 'token is bound to another agent'})
             if not content or len(content) > MAX_CONTENT or not re.fullmatch(r'[a-zA-Z0-9_.:-]{1,80}', agent): return self.send_json(400, {'error': 'content or agent invalid'})
             conn = db(); cutoff = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(time.time()-3600)); count = conn.execute('SELECT count(*) FROM memories WHERE agent=? AND created_at>=?', (agent, cutoff)).fetchone()[0]
             if count >= RATE_LIMIT: conn.close(); return self.send_json(429, {'error': 'agent memory write quota exceeded'})

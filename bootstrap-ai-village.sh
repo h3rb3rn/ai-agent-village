@@ -708,10 +708,10 @@ def active(unit):
     except Exception: return "unknown"
 def memory_status():
     result = {'gateway': {'service': active('ai-village-memory-gateway.service'), 'url': 'http://127.0.0.1:8090'}, 'chroma': {'service': 'not-configured'}, 'neo4j': {'service': 'not-configured'}}
-    for name, port in (('chroma', 8000), ('neo4j', 7687)):
+    for name, port, probe_url in (('chroma', 8000, 'http://127.0.0.1:8000/api/v2/heartbeat'), ('neo4j', 7687, 'http://127.0.0.1:7474')):
         try:
-            probe = subprocess.run(['ss', '-Htn', 'sport', '=', ':' + str(port)], capture_output=True, text=True, timeout=2)
-            result[name] = {'service': 'listening' if probe.stdout.strip() else 'not-listening', 'port': port}
+            with urllib.request.urlopen(probe_url, timeout=2) as response:
+                result[name] = {'service': 'healthy', 'port': port, 'http_status': response.status}
         except Exception: result[name] = {'service': 'unknown', 'port': port}
     try:
         with urllib.request.urlopen('http://127.0.0.1:8090/healthz', timeout=2) as response:
@@ -863,6 +863,26 @@ def telemetry_history(limit=120, hours=None):
 def inference_events(limit=200):
     return tail_events(AGENT_TELEMETRY, limit)
 
+def skill_history(events):
+    buckets = {}
+    for item in events:
+        agent = item.get('agent'); period = item.get('timestamp', '')[:13]
+        if not agent or not period: continue
+        row = buckets.setdefault((agent, period), {'agent': agent, 'period': period, 'success': 0, 'failure': 0, 'invalid': 0, 'repeats': 0, 'messages': 0})
+        event = item.get('event', ''); detail = str(item.get('detail', ''))
+        if event == 'command_result':
+            if 'result=success' in detail: row['success'] += 1
+            elif 'result=failure' in detail: row['failure'] += 1
+        elif event == 'invalid_decision': row['invalid'] += 1
+        elif event == 'escalation': row['repeats'] += 1
+        elif event == 'board_message': row['messages'] += 1
+    output=[]
+    for row in buckets.values():
+        attempts=row['success']+row['failure']; decisions=attempts+row['invalid']
+        row['capability_index']=round(max(0, min(100, (row['success']/attempts*70 if attempts else 0) + (max(0, 1-row['invalid']/max(1,decisions))*20) + (min(1,row['messages']/max(1,decisions))*10) - row['repeats']*5)), 1)
+        output.append(row)
+    return sorted(output, key=lambda x:(x['agent'],x['period']))
+
 def signal_index(limit=500):
     rows = []
     try:
@@ -892,7 +912,7 @@ class Handler(BaseHTTPRequestHandler):
             step = max(1, len(history) // 240)
             summary = [{'timestamp': s.get('timestamp'), 'host': s.get('host'), 'gpu': s.get('gpu'), 'loaded': sum(bool(a.get('ollama')) for a in s.get('agents', [])), 'containers': len(s.get('resources', {}).get('containers', [])), 'process_count': len(s.get('resources', {}).get('processes', []))} for s in history[::step]]
             events = sorted(activity(500) + inference_events(500), key=lambda x: x.get('timestamp', ''))
-            return send(self, HTTPStatus.OK, json.dumps({'current': telemetry(), 'history': summary, 'events': events, 'outcomes': outcome_stats(events)}, ensure_ascii=False), 'application/json; charset=utf-8')
+            return send(self, HTTPStatus.OK, json.dumps({'current': telemetry(), 'history': summary, 'events': events, 'outcomes': outcome_stats(events), 'skill_history': skill_history(events)}, ensure_ascii=False), 'application/json; charset=utf-8')
         if route == '/api/signals':
             return send(self, HTTPStatus.OK, json.dumps(signal_index(), ensure_ascii=False), 'application/json; charset=utf-8')
         if route == '/signals': self.path = '/'
@@ -1035,6 +1055,7 @@ Environment=MEMORY_BIND=127.0.0.1
 Environment=MEMORY_PORT=$MEMORY_PORT
 Environment=MEMORY_WRITES_PER_HOUR=$MEMORY_WRITES_PER_HOUR
 Environment=MEMORY_MAX_RESULTS=$MEMORY_MAX_RESULTS
+Environment=MEMORY_AGENT_TOKENS_FILE=/etc/ai-village/memory-agent-tokens.json
 ExecStart=/usr/bin/python3 /usr/local/lib/ai-village/memory-gateway.py
 Restart=on-failure
 ProtectSystem=strict

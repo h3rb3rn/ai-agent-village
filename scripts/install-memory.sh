@@ -15,6 +15,7 @@ Group=ai-village
 Environment=VILLAGE_ROOT=$root
 Environment=MEMORY_BIND=127.0.0.1
 Environment=MEMORY_PORT=8090
+Environment=MEMORY_AGENT_TOKENS_FILE=/etc/ai-village/memory-agent-tokens.json
 ExecStart=/usr/bin/python3 /usr/local/lib/ai-village/memory-gateway.py
 Restart=on-failure
 ProtectSystem=strict
