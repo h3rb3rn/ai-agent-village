@@ -1,0 +1,52 @@
+# Local operator configuration and generated runtime state
+.env
+.env.*
+!.env.example
+/var/
+/state/
+/logs/
+/run/
+/data/
+/backups/
+/artifacts/
+
+# Village material that can contain messages, agent state, or credentials
+*.jsonl
+*.log
+*.sqlite
+*.sqlite3
+*.db
+*.pid
+*.sock
+*.state
+
+# Secrets, keys, certificates, and local credential stores
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.csr
+*.kdbx
+*.age
+*.gpg
+*.asc
+secrets/
+private/
+credentials/
+*.token
+*_token
+*_secret
+*_password
+
+# Build, cache, and editor artefacts
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.cache/
+.venv/
+venv/
+node_modules/
+.DS_Store
+*~
