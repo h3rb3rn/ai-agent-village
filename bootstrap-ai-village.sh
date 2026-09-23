@@ -1067,7 +1067,7 @@ systemctl daemon-reload
 systemctl enable ai-village-authority.service ai-village-bootstrap.service ai-village-webui.service ai-village-telemetry.service
 for index in "${AGENT_INDEXES[@]}"; do systemctl enable "ai-village-agent-$(printf '%02d-%s' "$index" "$(get_agent "$index" NAME)").service"; done
 if is_true "$VILLAGE_AUTO_UPDATE"; then systemctl enable --now ai-village-update.timer; else systemctl disable --now ai-village-update.timer >/dev/null 2>&1 || true; fi
-if is_true "$VILLAGE_WEBUI_ENABLED"; then systemctl start ai-village-webui.service; else systemctl disable --now ai-village-webui.service >/dev/null 2>&1 || true; fi
-systemctl start ai-village-telemetry.service
+if is_true "$VILLAGE_WEBUI_ENABLED"; then systemctl restart ai-village-webui.service; else systemctl disable --now ai-village-webui.service >/dev/null 2>&1 || true; fi
+systemctl restart ai-village-telemetry.service
 systemctl start ai-village-bootstrap.service
 note "Village awake. Board: tail -f $VILLAGE_ROOT/board/events.jsonl"
