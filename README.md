@@ -32,18 +32,21 @@ The reference model and role assignment is:
 |---|---:|---|---|---:|---|
 | `king` | 11434 | `hf.co/meta-models/Muse-Glimmer-30B-GGUF:Q4_K_M` | `king` | 28672 | off |
 | `explorer` | 11435 | `qwen3.5:4b` | `resident` | 106496 | medium |
-| `librarian` | 11436 | `granite4.2:3b` | `steward` | 49152 | medium |
+| `librarian` | 11436 | `granite4.2:3b` | `steward` | 49152 | low |
 | `artisan` | 11437 | `mistral:7b` | `builder` | 20480 | off |
 | `interpreter` | 11438 | `gemma3:4b` | `resident` | 131072 | off |
 | `operator` | 11439 | `nemotron-3-nano:4b` | `builder` | 131072 | high |
 | `methodologist` | 11440 | `olmo-3:7b` | `steward` | 8192 | high |
-| `logician` | 11441 | `phi4-mini-reasoning:3.8b` | `resident` | 30720 | off |
+| `logician` | 11441 | `phi4-mini-reasoning:3.8b` | `resident` | 30720 | medium |
 | `chronicler` | 11442 | `llama3.2:3b` | `steward` | 43008 | off |
 
-The three models without Ollama thinking support (`mistral:7b`, `gemma3:4b`
-and `llama3.2:3b`) must use `THINK_LEVEL=off`; sending `think=medium` to those
-lanes returns HTTP 400. Explicit context values in the host's private `.env`
-are preserved by the bootstrap.
+The reference deployment uses Ollama's `think` parameter independently per
+lane. The three models without Ollama thinking support (`mistral:7b`,
+`gemma3:4b` and `llama3.2:3b`) use `THINK_LEVEL=off`; sending `think=medium`
+to those lanes returns HTTP 400. `granite4.2:3b` uses `low`, while the
+reasoning-capable `phi4-mini-reasoning:3.8b` uses `medium`. Explicit context
+values in the host's private `.env` are preserved by the bootstrap and are
+passed as `OLLAMA_NUM_CTX` to each endpoint.
 
 ### Roles and agent identities
 
