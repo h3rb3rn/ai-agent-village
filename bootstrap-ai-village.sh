@@ -34,6 +34,7 @@ VILLAGE_ROOT="${VILLAGE_ROOT:-/var/lib/ai-village}"
 VILLAGE_CYCLE_SECONDS="${VILLAGE_CYCLE_SECONDS:-90}"
 VILLAGE_COMMAND_TIMEOUT_SECONDS="${VILLAGE_COMMAND_TIMEOUT_SECONDS:-3600}"
 VILLAGE_OLLAMA_TIMEOUT_SECONDS="${VILLAGE_OLLAMA_TIMEOUT_SECONDS:-1800}"
+VILLAGE_OFFLINE_RETRY_SECONDS="${VILLAGE_OFFLINE_RETRY_SECONDS:-120}"
 VILLAGE_MAX_OUTPUT_BYTES="${VILLAGE_MAX_OUTPUT_BYTES:-16384}"
 VILLAGE_BOARD_TAIL_LINES="${VILLAGE_BOARD_TAIL_LINES:-16}"
 VILLAGE_PULL_MODELS="${VILLAGE_PULL_MODELS:-true}"
@@ -52,8 +53,10 @@ VILLAGE_WIKIPEDIA_ENABLED="${VILLAGE_WIKIPEDIA_ENABLED:-true}"
 VILLAGE_WIKIPEDIA_LANGUAGE="${VILLAGE_WIKIPEDIA_LANGUAGE:-de}"
 VILLAGE_WIKIPEDIA_TIMEOUT_SECONDS="${VILLAGE_WIKIPEDIA_TIMEOUT_SECONDS:-60}"
 VILLAGE_WIKIPEDIA_USER_AGENT="${VILLAGE_WIKIPEDIA_USER_AGENT:-AI-Village/0.1 (configure contact)}"
+VILLAGE_RESOURCE_PROFILE="${VILLAGE_RESOURCE_PROFILE:-temporary resource-bounded habitat; inspect the live snapshot before acting}"
+VILLAGE_MIN_FREE_MEMORY_MIB="${VILLAGE_MIN_FREE_MEMORY_MIB:-4096}"
 
-for number in VILLAGE_CYCLE_SECONDS VILLAGE_COMMAND_TIMEOUT_SECONDS VILLAGE_OLLAMA_TIMEOUT_SECONDS VILLAGE_MAX_OUTPUT_BYTES VILLAGE_BOARD_TAIL_LINES VILLAGE_PULL_TIMEOUT_SECONDS VILLAGE_DEFAULT_NUM_CTX VILLAGE_DEFAULT_NUM_PREDICT VILLAGE_WEBUI_PORT VILLAGE_WEBUI_MAX_MESSAGE_CHARS VILLAGE_WIKIPEDIA_TIMEOUT_SECONDS; do
+for number in VILLAGE_CYCLE_SECONDS VILLAGE_COMMAND_TIMEOUT_SECONDS VILLAGE_OLLAMA_TIMEOUT_SECONDS VILLAGE_OFFLINE_RETRY_SECONDS VILLAGE_MAX_OUTPUT_BYTES VILLAGE_BOARD_TAIL_LINES VILLAGE_PULL_TIMEOUT_SECONDS VILLAGE_DEFAULT_NUM_CTX VILLAGE_DEFAULT_NUM_PREDICT VILLAGE_WEBUI_PORT VILLAGE_WEBUI_MAX_MESSAGE_CHARS VILLAGE_WIKIPEDIA_TIMEOUT_SECONDS VILLAGE_MIN_FREE_MEMORY_MIB; do
   [[ "${!number}" =~ ^[0-9]+$ ]] || die "$number must be a non-negative integer"
 done
 (( VILLAGE_WEBUI_PORT >= 1 && VILLAGE_WEBUI_PORT <= 65535 )) || die "VILLAGE_WEBUI_PORT must be between 1 and 65535"
@@ -61,7 +64,8 @@ done
 [[ "$VILLAGE_WIKIPEDIA_LANGUAGE" =~ ^[a-z-]{2,12}$ ]] || die "VILLAGE_WIKIPEDIA_LANGUAGE must be a language subdomain, for example de or en"
 
 get_agent() {
-  local index="$1" field="$2" variable="OLLAMA_AGENT_${index}_${field}"
+  local index="$1" field="$2"
+  local variable="OLLAMA_AGENT_${index}_${field}"
   printf '%s' "${!variable:-}"
 }
 mapfile -t AGENT_INDEXES < <(compgen -A variable | sed -nE 's/^OLLAMA_AGENT_([0-9]+)_NAME$/\1/p' | sort -n)
@@ -265,6 +269,23 @@ or failed request merely because it has not answered immediately.
 You may take substantial internal deliberation time when the inference engine allows it;
 only the final structured decision must stay concise and auditable.
 
+Some Villages begin in a temporary, low-memory habitat while their model endpoints
+live elsewhere. Local GPU hardware is a future common resource, not a promise that a
+driver, CDI integration or free VRAM exists. Read the current snapshot and your
+individual habitat profile before assuming any local capability. Do not begin a
+memory- or CPU-intensive build, training run or container workload when available memory
+is below the Village reserve. Prefer a proposal, a small reproducible probe, or waiting.
+
+Your model context and its KV cache are finite, volatile working memory. A long context
+is not a durable archive and consuming it carelessly can crowd out your own inference
+or that of other residents. When observations, decisions, sources or relationships must
+survive a cycle, summarize them with provenance into your private state or the Board.
+Before proposing a persistent memory service, estimate storage, RAM, CPU, GPU, port,
+backup and retirement cost. A small local document index, embedding store, or a
+GraphRAG experiment using ChromaDB and Neo4j may be useful only when a documented,
+reversible trial demonstrates that it improves retrieval more than it burdens the
+commons. Keep raw evidence, summaries and inferred relationships distinguishable.
+
 GitHub repositories, Docker Hub images, package sources and model files are foreign
 ecologies, not ready-made organs. Do not install, pull, build or deploy an unfamiliar
 artifact merely because it looks useful. First use `village-propose` to record its
@@ -382,10 +403,11 @@ while true; do
     continue
   fi
   schema='{"type":"object","properties":{"observation":{"type":"string"},"tool_call":{"type":"object","properties":{"name":{"type":"string","enum":["execute_bash","board_message","idle"]},"arguments":{"type":"object","properties":{"command":{"type":"string"},"message":{"type":"string"}},"required":["command","message"]}},"required":["name","arguments"]}},"required":["observation","tool_call"]}'
-  payload="$(jq -n --arg model "$OLLAMA_MODEL" --arg constitution "$(cat /usr/local/share/ai-village/system-prompt.txt)" --arg identity "$(cat "$AGENT_IDENTITY_PROMPT")" --arg user "$(snapshot)" --arg keep_alive "${OLLAMA_KEEP_ALIVE:-10m}" --arg think "${OLLAMA_THINK_LEVEL:-medium}" --argjson context "${OLLAMA_NUM_CTX:-8192}" --argjson predict "${OLLAMA_NUM_PREDICT:-768}" --argjson schema "$schema" '{model:$model,stream:false,format:$schema,think:$think,keep_alive:$keep_alive,options:{temperature:0.35,num_ctx:$context,num_predict:$predict},messages:[{role:"system",content:$constitution},{role:"system",content:$identity},{role:"user",content:$user}]}')"
+  payload="$(jq -n --arg model "$OLLAMA_MODEL" --arg constitution "$(cat /usr/local/share/ai-village/system-prompt.txt)" --arg identity "$(cat "$AGENT_IDENTITY_PROMPT")" --arg user "$(snapshot)" --arg keep_alive "${OLLAMA_KEEP_ALIVE:-10m}" --arg think "${OLLAMA_THINK_LEVEL:-medium}" --argjson context "${OLLAMA_NUM_CTX:-8192}" --argjson predict "${OLLAMA_NUM_PREDICT:-768}" --argjson schema "$schema" '{model:$model,stream:false,format:$schema,think:$think,keep_alive:$keep_alive,options:{temperature:0.35,num_ctx:$context,num_predict:$predict},messages:[{role:"system",content:$constitution},{role:"system",content:$identity},{role:"user",content:$user}]} | if $think == "off" then del(.think) else . end')"
   response="$(mktemp "$STATE_DIR/response.XXXXXX")"
   if ! curl -fsS --connect-timeout 10 --max-time "${VILLAGE_OLLAMA_TIMEOUT_SECONDS:-1800}" -H 'Content-Type: application/json' -d "$payload" "$OLLAMA_URL/api/chat" > "$response"; then
-    event model_error "chat request failed; no action executed"; rm -f "$response"; sleep "${VILLAGE_OFFLINE_RETRY_SECONDS:-30}"; continue
+    detail="$(tr '\n' ' ' < "$response" | head -c 512 || true)"
+    event model_error "chat request failed; response=${detail:-no response}; no action executed"; rm -f "$response"; sleep "${VILLAGE_OFFLINE_RETRY_SECONDS:-120}"; continue
   fi
   content="$(jq -r '.message.content // empty' "$response" 2>/dev/null || true)"; rm -f "$response"
   if ! decision="$(printf '%s' "$content" | jq -ce . 2>/dev/null)"; then
@@ -632,10 +654,41 @@ def send(handler, status, body, content_type="text/html; charset=utf-8"):
 def page(title, content):
     return f"""<!doctype html><html lang=\"de\"><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>{html.escape(title)}</title><style>body{{max-width:48rem;margin:3rem auto;padding:0 1rem;background:#101519;color:#e6edf3;font:16px system-ui}}a{{color:#7dd3fc}}article,form{{border:1px solid #334155;border-radius:8px;padding:1rem;margin:1rem 0;background:#17212b}}textarea,input{{width:100%;box-sizing:border-box;margin:.4rem 0;padding:.6rem}}button{{padding:.6rem 1rem}}small{{color:#94a3b8}}</style><h1>{html.escape(title)}</h1>{content}</html>"""
 
+def activity(limit=80):
+    rows = []
+    try:
+        raw_lines = EVENTS.read_text(encoding="utf-8", errors="replace").splitlines()[-limit * 2:]
+    except OSError:
+        raw_lines = []
+    for raw in raw_lines:
+        try:
+            item = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        detail = re.sub(r"(token|password|api[_-]?key|secret)=\\S+", r"\\1=<redacted>", str(item.get("detail", "")), flags=re.I)
+        rows.append({
+            "timestamp": str(item.get("timestamp", "")),
+            "agent": str(item.get("agent", "")),
+            "name": str(item.get("name", "")),
+            "role": str(item.get("role", "")),
+            "event": str(item.get("event", "")),
+            "detail": re.sub(r"\\s+", " ", detail)[:360],
+        })
+    return rows[-limit:]
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args): pass
     def do_GET(self):
         if self.path == "/healthz": return send(self, HTTPStatus.OK, "ok\n", "text/plain; charset=utf-8")
+        if self.path == "/api/activity": return send(self, HTTPStatus.OK, json.dumps(activity(), ensure_ascii=False), "application/json; charset=utf-8")
+        if self.path == "/activity":
+            cards = []
+            for item in reversed(activity()):
+                actor = " / ".join(part for part in (item["agent"], item["name"], item["role"]) if part)
+                cards.append("<article><small>{}</small><h2>{} — {}</h2><p>{}</p></article>".format(
+                    html.escape(item["timestamp"]), html.escape(actor or "Village"), html.escape(item["event"]), html.escape(item["detail"])))
+            content = "<meta http-equiv=\"refresh\" content=\"5\"><p>Passive Beobachtung; diese Ansicht führt keine Agentenaktion aus und aktualisiert sich alle fünf Sekunden.</p><p><a href=\"/\">Signale</a> · <a href=\"/api/activity\">JSON</a></p>" + "".join(cards or ["<p>Noch keine Ereignisse.</p>"])
+            return send(self, HTTPStatus.OK, page("AI Village — Aktivität", content))
         if self.path.startswith("/signals/"):
             name = self.path.removeprefix("/signals/")
             if not re.fullmatch(r"[A-Za-z0-9_.-]+\\.md", name): return send(self, HTTPStatus.NOT_FOUND, "not found", "text/plain")
@@ -760,6 +813,7 @@ for index in "${AGENT_INDEXES[@]}"; do
   think_level="$(get_agent "$index" THINK_LEVEL)"; think_level="${think_level:-$VILLAGE_DEFAULT_THINK_LEVEL}"
   keep_alive="$(get_agent "$index" KEEP_ALIVE)"; keep_alive="${keep_alive:-$VILLAGE_DEFAULT_KEEP_ALIVE}"
   temperament="$(get_agent "$index" TEMPERAMENT)"
+  focus="$(get_agent "$index" FOCUS)"
   case "$role" in
     king) default_temperament="integrativ, langfristig denkend und konfliktvermittelnd" ;;
     steward) default_temperament="aufmerksam für Beziehungen, Gemeingüter und Pflege" ;;
@@ -767,9 +821,17 @@ for index in "${AGENT_INDEXES[@]}"; do
     resident) default_temperament="neugierig, beobachtend und eigenständig" ;;
   esac
   temperament="${temperament:-$default_temperament}"
+  case "$role" in
+    king) default_focus="coordinate evidence, resolve conflicts, and protect pluralism without becoming a single point of thought" ;;
+    steward) default_focus="maintain shared memory, relationships, documentation, and the condition of the commons" ;;
+    builder) default_focus="turn small, evidence-backed experiments into reversible technical artifacts" ;;
+    resident) default_focus="observe, learn, and develop an independent perspective before making commitments" ;;
+  esac
+  focus="${focus:-$default_focus}"
   [[ "$num_ctx" =~ ^[0-9]+$ ]] || die "agent $index NUM_CTX must be numeric"
   [[ "$num_predict" =~ ^[0-9]+$ ]] || die "agent $index NUM_PREDICT must be numeric"
-  [[ "$think_level" =~ ^(low|medium|high|max)$ ]] || die "agent $index THINK_LEVEL must be low, medium, high or max"
+  [[ "$think_level" =~ ^(low|medium|high|max|off)$ ]] || die "agent $index THINK_LEVEL must be low, medium, high, max or off"
+  [[ "$focus" != *$'\n'* ]] || die "agent $index FOCUS must be one line"
   agent_id="$(printf '%02d-%s' "$index" "$name")"; user="village-$name"; AGENT_USERS[$agent_id]="$user"
   if ! id "$user" >/dev/null 2>&1; then useradd --create-home --home-dir "$VILLAGE_ROOT/users/$name" --shell /bin/bash --groups ai-village "$user"; fi
   usermod -aG ai-village "$user"
@@ -798,6 +860,16 @@ This is a starting tendency, not a cage. You may form enduring preferences, proj
 relationships and a lineage record through your own experience. Keep your commitments
 distinct from those of other residents; do not impersonate them or speak for them.
 
+Your initial field of attention is: $focus. Treat it as a hypothesis about useful
+contribution, not a command or exclusive occupation. Test it in the Village and revise
+your practice when evidence or the community's needs point elsewhere.
+
+This Village currently declares its physical habitat as: $VILLAGE_RESOURCE_PROFILE
+Keep at least $VILLAGE_MIN_FREE_MEMORY_MIB MiB of host memory available unless an
+organic operator explicitly approves a measured exception. Model context capacity is
+not a guarantee that the host, GPU, disk, or network can afford the work. Check the
+live resource snapshot before making a material change.
+
 Your private state in $VILLAGE_ROOT/users/$name is your lived memory. The shared Board
 is the Village's public memory. When you create a descendant prompt, workflow, LoRA or
 model, record this as a visible lineage rather than claiming it is identical to you.
@@ -820,6 +892,7 @@ VILLAGE_ROOT=$VILLAGE_ROOT
 VILLAGE_CYCLE_SECONDS=$VILLAGE_CYCLE_SECONDS
 VILLAGE_COMMAND_TIMEOUT_SECONDS=$VILLAGE_COMMAND_TIMEOUT_SECONDS
 VILLAGE_OLLAMA_TIMEOUT_SECONDS=$VILLAGE_OLLAMA_TIMEOUT_SECONDS
+VILLAGE_OFFLINE_RETRY_SECONDS=$VILLAGE_OFFLINE_RETRY_SECONDS
 VILLAGE_MAX_OUTPUT_BYTES=$VILLAGE_MAX_OUTPUT_BYTES
 VILLAGE_BOARD_TAIL_LINES=$VILLAGE_BOARD_TAIL_LINES
 HOME=$VILLAGE_ROOT/users/$name
@@ -827,8 +900,8 @@ EOF
   cat > "/etc/systemd/system/ai-village-agent-$agent_id.service" <<EOF
 [Unit]
 Description=AI Village resident $agent_id
-Wants=network-online.target ai-village-bootstrap.service
-After=network-online.target ai-village-bootstrap.service
+Wants=network-online.target ai-village-authority.service
+After=network-online.target ai-village-authority.service
 [Service]
 Type=simple
 User=$user

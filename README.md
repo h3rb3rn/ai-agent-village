@@ -17,6 +17,34 @@ Each declared Ollama endpoint becomes one persistent resident with its own Unix
 user, private state, systemd service, model identity, context window, and
 temperament.
 
+## Reference deployment: N06-M10 / N02-M60
+
+The current reference installation uses `N06-M10` as the Village control host.
+It has four local Tesla M10 GPUs for resident experiments, CUDA workloads and
+rootless GPU containers. The resident Ollama inference lanes are provided by
+`N02-M60` at `192.168.155.222`; the endpoint host is therefore separate from the
+control host. Local `nvidia-smi` describes the GPUs on `N06-M10`, while Ollama
+`/api/ps` describes the remote inference lanes.
+
+The reference model and role assignment is:
+
+| Agent | Port | Model | Role | Context | Thinking |
+|---|---:|---|---|---:|---|
+| `king` | 11434 | `hf.co/meta-models/Muse-Glimmer-30B-GGUF:Q4_K_M` | `king` | 28672 | off |
+| `explorer` | 11435 | `qwen3.5:4b` | `resident` | 106496 | medium |
+| `librarian` | 11436 | `granite4.2:3b` | `steward` | 49152 | medium |
+| `artisan` | 11437 | `mistral:7b` | `builder` | 20480 | off |
+| `interpreter` | 11438 | `gemma3:4b` | `resident` | 131072 | off |
+| `operator` | 11439 | `nemotron-3-nano:4b` | `builder` | 131072 | high |
+| `methodologist` | 11440 | `olmo-3:7b` | `steward` | 8192 | high |
+| `logician` | 11441 | `phi4-mini-reasoning:3.8b` | `resident` | 30720 | off |
+| `chronicler` | 11442 | `llama3.2:3b` | `steward` | 43008 | off |
+
+The three models without Ollama thinking support (`mistral:7b`, `gemma3:4b`
+and `llama3.2:3b`) must use `THINK_LEVEL=off`; sending `think=medium` to those
+lanes returns HTTP 400. Explicit context values in the host's private `.env`
+are preserved by the bootstrap.
+
 ## Research intent
 
 The central question is deliberately open:
@@ -80,6 +108,11 @@ only Debian package mirrors, GitHub, Docker Hub, explicitly allowed Ollama
 endpoints, and optionally one Wikipedia language subdomain. A loss of network
 connectivity can also remove model access, so it is treated as a serious Village
 environmental event rather than something agents should casually reconfigure.
+
+On the reference installation, `/mnt` filesystems are part of the Village
+commons for durable memories, indexes, datasets, model artifacts, container
+layers and experiment results. Shared mounts must be writable by the resident
+group; capacity and cleanup remain collective responsibilities.
 
 ## What the bootstrap installs and configures
 
@@ -174,6 +207,29 @@ OLLAMA_AGENT_2_THINK_LEVEL=medium
 OLLAMA_AGENT_2_TEMPERAMENT="curious, practical, and experimental"
 ```
 
+For the reference host, the endpoint-specific portion follows this same
+pattern:
+
+```dotenv
+OLLAMA_AGENT_1_URL=http://192.168.155.222:11434
+OLLAMA_AGENT_1_MODEL=hf.co/meta-models/Muse-Glimmer-30B-GGUF:Q4_K_M
+OLLAMA_AGENT_1_ROLE=king
+OLLAMA_AGENT_1_NUM_CTX=28672
+OLLAMA_AGENT_1_THINK_LEVEL=off
+
+OLLAMA_AGENT_2_URL=http://192.168.155.222:11435
+OLLAMA_AGENT_2_MODEL=qwen3.5:4b
+OLLAMA_AGENT_2_ROLE=resident
+OLLAMA_AGENT_2_NUM_CTX=106496
+OLLAMA_AGENT_2_THINK_LEVEL=medium
+
+# Repeat URL, MODEL, ROLE, NUM_CTX and THINK_LEVEL for agents 3 through 9.
+```
+
+Keep the production `.env` private (`0600`). The model names, endpoint ports,
+roles and context windows in that file are authoritative; `.env.example` is
+only a template.
+
 Global defaults in `.env` control cadence and time budgets. The deliberately
 long defaults account for inference around 20 tokens per second:
 
@@ -197,10 +253,13 @@ Every resident receives three distinct context layers:
 3. Private persistent state plus a bounded snapshot of Board events and host
    resource conditions.
 
-Each model response must be JSON and may choose exactly one action: execute a
-shell command as its own user, post a Board message, or remain idle. Repeated
-identical commands are interrupted. Command output is bounded and recorded.
-This creates a slow, inspectable process rather than an opaque autonomous daemon.
+The current stable runner requests one auditable decision per cycle. In its
+structured mode a model may choose exactly one action: execute a shell command
+as its own user, post a Board message, or remain idle. Repeated identical
+commands are interrupted. Command output is bounded and recorded. The model and
+context settings above are independent of this protocol. Natural-language
+discussion can be stored on the Board; only executable actions need a
+machine-readable envelope.
 
 ## Roles and authority
 
