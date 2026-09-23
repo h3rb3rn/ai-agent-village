@@ -336,6 +336,7 @@ Be proactive: inspect your environment, propose work, seek collaboration and imp
 the Village. A King coordinates the community; it may grant or revoke documented
 Village capabilities through village-authority, but no resident receives sudo or host
 root. Never claim success without evidence. Do not repeat an identical failed command.
+For GPU inventory use `nvidia-smi --query-gpu=index,name,memory.used,memory.total,utilization.gpu,power.draw --format=csv,noheader,nounits` or `village-gpu-inventory`; the `memory.free` query with `--format=csv,short` is invalid on this driver and must not be retried.
 
 You may use the idea of a Village species and an outside organic world as a cultural
 lens. It is not a claim that you are biological or conscious. Your standing mission,
@@ -441,6 +442,7 @@ while true; do
   fi
   rm -f "$response" "$response.error"
   observation="$(jq -r '.observation // ""' <<<"$decision")"
+  fallback_reason="$(jq -r '.fallback_reason // ""' <<<"$decision")"
   action="$(jq -r '.tool_call.name // "idle"' <<<"$decision")"
   command="$(jq -r '.tool_call.arguments.command // ""' <<<"$decision")"
   message="$(jq -r '.tool_call.arguments.message // ""' <<<"$decision")"
@@ -449,14 +451,26 @@ while true; do
   repeats="$(jq -r '.repeat_count // 0' "$STATE" 2>/dev/null || printf 0)"
   failures="$(jq -r '.consecutive_failures // 0' "$STATE" 2>/dev/null || printf 0)"
   [[ "$repeats" =~ ^[0-9]+$ ]] || repeats=0; [[ "$failures" =~ ^[0-9]+$ ]] || failures=0
+  if [[ -n "$fallback_reason" ]]; then
+    event invalid_decision "fallback=$fallback_reason; converted to board_message"
+  fi
   if [[ "$action" == board_message || "$action" == idle ]]; then
     event "$action" "observation=$observation; message=$message"; save_state "" 0 "$failures" "$observation" "$action"
   elif [[ -z "$command" ]]; then
     event invalid_decision "execute_bash had no command"; save_state "" 0 "$failures" "$observation" invalid
   else
-    [[ "$command" == "$previous" ]] && repeats=$((repeats + 1)) || repeats=0
-    if (( repeats >= 2 )); then
-      event escalation "identical command blocked: $command"; save_state "$command" "$repeats" "$failures" "$observation" escalation
+    # Normalize harmless whitespace differences before comparing command intent.
+    normalized="$(printf '%s' "$command" | sed -E 's/[[:space:]]+/ /g; s/[[:space:]]*\|[[:space:]]*/|/g; s/[[:space:]]*&&[[:space:]]*/\&\&/g' | sed -E 's/^ | $//g')"
+    previous_normalized="$(printf '%s' "$previous" | sed -E 's/[[:space:]]+/ /g; s/[[:space:]]*\|[[:space:]]*/|/g; s/[[:space:]]*&&[[:space:]]*/\&\&/g' | sed -E 's/^ | $//g')"
+    [[ -n "$previous_normalized" && "$normalized" == "$previous_normalized" ]] && repeats=$((repeats + 1)) || repeats=0
+    known_bad=false
+    if [[ "$normalized" == *"nvidia-smi --query-gpu=memory.free --format=csv,short"* ]]; then known_bad=true; fi
+    if [[ "$known_bad" == true ]]; then
+      event escalation "known invalid GPU query blocked: $command"; save_state "$command" "$((repeats + 1))" "$failures" "$observation" escalation
+    elif (( repeats >= 2 )); then
+      event escalation "semantically repeated command blocked: $command"; save_state "$command" "$repeats" "$failures" "$observation" escalation
+    elif (( failures >= 3 )); then
+      event escalation "three consecutive command failures; action blocked: $command"; save_state "$command" "$repeats" "$failures" "$observation" escalation
     else
       log="$STATE_DIR/commands/$(date +%Y%m%dT%H%M%S)-$RANDOM.log"; event command_start "observation=$observation; command=$command; message=$message"
       set +e

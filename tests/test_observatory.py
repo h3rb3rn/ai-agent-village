@@ -31,8 +31,16 @@ class ObservatoryTests(unittest.TestCase):
 
     def test_incomplete_or_ambiguous_action_never_executes(self):
         for content in ('{"name":', '```village-action\n{}', '```village-action\n{}\n```\n```village-action\n{}\n```', '{"name":"execute_bash","arguments":{"command":123}}'):
-            with self.assertRaises(ValueError): decision({'message': {'content': content}})
-        with self.assertRaises(ValueError): decision({'done_reason': 'length', 'message': {'content': '{"name":"idle"}'}})
+            parsed = decision({'message': {'content': content}})
+            self.assertEqual(parsed['tool_call']['name'], 'board_message')
+            self.assertTrue(parsed.get('fallback_reason'))
+        parsed = decision({'done_reason': 'length', 'message': {'content': '{"name":"idle"}'}})
+        self.assertEqual(parsed['tool_call']['name'], 'board_message')
+
+    def test_fallback_preserves_safe_communication(self):
+        parsed = decision({'message': {'content': '```village-action\n{"name":"execute_bash"}\n```'}})
+        self.assertEqual(parsed['tool_call']['name'], 'board_message')
+        self.assertNotIn('execute_bash', parsed['tool_call']['arguments']['message'])
 
     def test_execution_and_repeats_are_distinct(self):
         events = [dict(agent='a', event='command_start', detail='observation=x; command=ls  -l; message=x'),
