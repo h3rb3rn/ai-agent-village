@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+base="${MEMORY_GATEWAY_URL:-http://127.0.0.1:8090}"
+case "${1:-}" in
+  remember)
+    [[ $# -ge 2 ]] || { echo 'usage: village-memory remember TEXT [KIND] [SCOPE]' >&2; exit 2; }
+    agent="${AGENT_ID:-${AGENT_NAME:-unknown}}"; kind="${3:-observation}"; scope="${4:-private}"
+    jq -cn --arg agent "$agent" --arg content "$2" --arg kind "$kind" --arg scope "$scope" --arg source "${MEMORY_SOURCE_EVENT:-}" '{agent:$agent,content:$content,kind:$kind,scope:$scope,source_event:$source,confidence:0.5}' | curl -fsS --max-time 10 -H 'Content-Type: application/json' -d @- "$base/v1/memories"
+    ;;
+  search)
+    [[ $# -ge 2 ]] || { echo 'usage: village-memory search QUERY [SCOPE]' >&2; exit 2; }
+    jq -cn --arg query "$2" --arg scope "${3:-}" '{query:$query} + (if $scope != "" then {scope:$scope} else {} end)' | curl -fsS --max-time 10 -H 'Content-Type: application/json' -d @- "$base/v1/search"
+    ;;
+  *) echo 'usage: village-memory remember TEXT [KIND] [SCOPE] | search QUERY [SCOPE]' >&2; exit 2 ;;
+esac
