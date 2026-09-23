@@ -49,6 +49,7 @@ VILLAGE_WEBUI_ENABLED="${VILLAGE_WEBUI_ENABLED:-true}"
 VILLAGE_WEBUI_BIND="${VILLAGE_WEBUI_BIND:-0.0.0.0}"
 VILLAGE_WEBUI_PORT="${VILLAGE_WEBUI_PORT:-8080}"
 VILLAGE_WEBUI_MAX_MESSAGE_CHARS="${VILLAGE_WEBUI_MAX_MESSAGE_CHARS:-4000}"
+VILLAGE_TELEMETRY_INTERVAL_SECONDS="${VILLAGE_TELEMETRY_INTERVAL_SECONDS:-15}"
 VILLAGE_WIKIPEDIA_ENABLED="${VILLAGE_WIKIPEDIA_ENABLED:-true}"
 VILLAGE_WIKIPEDIA_LANGUAGE="${VILLAGE_WIKIPEDIA_LANGUAGE:-de}"
 VILLAGE_WIKIPEDIA_TIMEOUT_SECONDS="${VILLAGE_WIKIPEDIA_TIMEOUT_SECONDS:-60}"
@@ -56,7 +57,7 @@ VILLAGE_WIKIPEDIA_USER_AGENT="${VILLAGE_WIKIPEDIA_USER_AGENT:-AI-Village/0.1 (co
 VILLAGE_RESOURCE_PROFILE="${VILLAGE_RESOURCE_PROFILE:-temporary resource-bounded habitat; inspect the live snapshot before acting}"
 VILLAGE_MIN_FREE_MEMORY_MIB="${VILLAGE_MIN_FREE_MEMORY_MIB:-4096}"
 
-for number in VILLAGE_CYCLE_SECONDS VILLAGE_COMMAND_TIMEOUT_SECONDS VILLAGE_OLLAMA_TIMEOUT_SECONDS VILLAGE_OFFLINE_RETRY_SECONDS VILLAGE_MAX_OUTPUT_BYTES VILLAGE_BOARD_TAIL_LINES VILLAGE_PULL_TIMEOUT_SECONDS VILLAGE_DEFAULT_NUM_CTX VILLAGE_DEFAULT_NUM_PREDICT VILLAGE_WEBUI_PORT VILLAGE_WEBUI_MAX_MESSAGE_CHARS VILLAGE_WIKIPEDIA_TIMEOUT_SECONDS VILLAGE_MIN_FREE_MEMORY_MIB; do
+for number in VILLAGE_CYCLE_SECONDS VILLAGE_COMMAND_TIMEOUT_SECONDS VILLAGE_OLLAMA_TIMEOUT_SECONDS VILLAGE_OFFLINE_RETRY_SECONDS VILLAGE_MAX_OUTPUT_BYTES VILLAGE_BOARD_TAIL_LINES VILLAGE_PULL_TIMEOUT_SECONDS VILLAGE_DEFAULT_NUM_CTX VILLAGE_DEFAULT_NUM_PREDICT VILLAGE_WEBUI_PORT VILLAGE_WEBUI_MAX_MESSAGE_CHARS VILLAGE_TELEMETRY_INTERVAL_SECONDS VILLAGE_WIKIPEDIA_TIMEOUT_SECONDS VILLAGE_MIN_FREE_MEMORY_MIB; do
   [[ "${!number}" =~ ^[0-9]+$ ]] || die "$number must be a non-negative integer"
 done
 (( VILLAGE_WEBUI_PORT >= 1 && VILLAGE_WEBUI_PORT <= 65535 )) || die "VILLAGE_WEBUI_PORT must be between 1 and 65535"
@@ -106,7 +107,7 @@ groupadd --system ai-village-gpu 2>/dev/null || true
 install -d -m 0755 /etc/ai-village /etc/ai-village/agents /etc/ai-village/prompts /usr/local/lib/ai-village /usr/local/share/ai-village /usr/local/sbin /usr/local/bin
 install -d -m 2770 -o root -g ai-village "$VILLAGE_ROOT" "$VILLAGE_ROOT/board" "$VILLAGE_ROOT/users" "$VILLAGE_ROOT/logs" "$VILLAGE_ROOT/run"
 install -d -m 2770 -o root -g ai-village-stewards "$VILLAGE_ROOT/stewards"
-install -d -m 2770 -o root -g ai-village "$VILLAGE_ROOT/signals" "$VILLAGE_ROOT/signals/outbox"
+install -d -m 2770 -o root -g ai-village "$VILLAGE_ROOT/signals" "$VILLAGE_ROOT/signals/outbox" "$VILLAGE_ROOT/telemetry"
 install -d -m 2770 -o root -g ai-village "$VILLAGE_ROOT/lineage" "$VILLAGE_ROOT/proposals" "$VILLAGE_ROOT/archive"
 touch "$VILLAGE_ROOT/board/events.jsonl" "$VILLAGE_ROOT/board/organic-inbox.jsonl" "$VILLAGE_ROOT/board/.lock"
 chown root:ai-village "$VILLAGE_ROOT/board/events.jsonl" "$VILLAGE_ROOT/board/.lock"
@@ -223,6 +224,7 @@ VILLAGE_ROOT=$VILLAGE_ROOT
 VILLAGE_WEBUI_BIND=$VILLAGE_WEBUI_BIND
 VILLAGE_WEBUI_PORT=$VILLAGE_WEBUI_PORT
 VILLAGE_WEBUI_MAX_MESSAGE_CHARS=$VILLAGE_WEBUI_MAX_MESSAGE_CHARS
+VILLAGE_TELEMETRY_INTERVAL_SECONDS=$VILLAGE_TELEMETRY_INTERVAL_SECONDS
 EOF
 chown root:ai-village /etc/ai-village/webui.env
 chmod 0640 /etc/ai-village/webui.env
@@ -616,6 +618,68 @@ if command -v nvidia-ctk >/dev/null 2>&1; then nvidia-ctk cdi list || true; else
 GPU
 chmod 0755 /usr/local/bin/village-gpu-inventory
 
+cat > /usr/local/lib/ai-village/telemetry-collector.py <<'TELEMETRY'
+#!/usr/bin/env python3
+"""Passive AI Village telemetry collector. It never writes to the Board or prompts."""
+import json, os, sqlite3, subprocess, time, urllib.request
+from datetime import datetime, timezone
+from pathlib import Path
+
+ROOT = Path(os.environ.get("VILLAGE_ROOT", "/var/lib/ai-village"))
+OUT = ROOT / "telemetry"
+DB = OUT / "events.sqlite3"
+LATEST = OUT / "latest.json"
+RAW = OUT / "events.jsonl"
+AGENTS = Path("/etc/ai-village/agents")
+INTERVAL = max(5, int(os.environ.get("VILLAGE_TELEMETRY_INTERVAL_SECONDS", "15")))
+
+def now(): return datetime.now(timezone.utc).isoformat()
+def envfile(path):
+    values = {}
+    try:
+        for line in path.read_text().splitlines():
+            if "=" in line and not line.startswith("#"):
+                key, value = line.split("=", 1); values[key] = value.strip().strip('"')
+    except OSError: pass
+    return values
+def get_json(url):
+    try:
+        with urllib.request.urlopen(url, timeout=4) as response:
+            return json.loads(response.read().decode())
+    except Exception as exc:
+        return {"error": str(exc)}
+def active(unit):
+    try:
+        return subprocess.run(["systemctl", "show", "-p", "ActiveState", "--value", unit], capture_output=True, text=True, timeout=3).stdout.strip()
+    except Exception: return "unknown"
+def gpu():
+    try:
+        out = subprocess.run(["nvidia-smi", "--query-gpu=index,name,memory.used,memory.total,utilization.gpu,power.draw", "--format=csv,noheader,nounits"], capture_output=True, text=True, timeout=5)
+        return {"available": out.returncode == 0, "rows": [line.strip() for line in out.stdout.splitlines() if line.strip()]}
+    except Exception as exc: return {"available": False, "error": str(exc), "rows": []}
+def main():
+    OUT.mkdir(parents=True, exist_ok=True)
+    db = sqlite3.connect(DB)
+    db.execute("CREATE TABLE IF NOT EXISTS snapshots (id INTEGER PRIMARY KEY, timestamp TEXT NOT NULL, payload TEXT NOT NULL)")
+    db.execute("CREATE INDEX IF NOT EXISTS snapshots_ts ON snapshots(timestamp)")
+    db.commit()
+    while True:
+        stamp = now(); agents = []
+        for path in sorted(AGENTS.glob("*.env")):
+            values = envfile(path); agent_id = path.stem; name = values.get("AGENT_NAME", agent_id); url = values.get("OLLAMA_URL", "")
+            ps = get_json(url.rstrip("/") + "/api/ps") if url else {"error": "missing endpoint"}
+            models = ps.get("models", []) if isinstance(ps, dict) else []
+            agents.append({"id": agent_id, "name": name, "role": values.get("AGENT_ROLE", ""), "model": values.get("OLLAMA_MODEL", ""), "context": values.get("OLLAMA_NUM_CTX", ""), "endpoint": url, "service": active("ai-village-agent-" + agent_id + ".service"), "ollama": models, "ollama_error": ps.get("error") if isinstance(ps, dict) else "invalid response"})
+        payload = {"timestamp": stamp, "agents": agents, "gpu": gpu(), "disk": subprocess.run(["df", "-B1", str(ROOT)], capture_output=True, text=True).stdout.splitlines()[-1:]}
+        encoded = json.dumps(payload, ensure_ascii=False)
+        db.execute("INSERT INTO snapshots(timestamp,payload) VALUES (?,?)", (stamp, encoded)); db.commit()
+        with RAW.open("a", encoding="utf-8") as handle: handle.write(encoded + "\n")
+        LATEST.write_text(encoded + "\n", encoding="utf-8")
+        time.sleep(INTERVAL)
+if __name__ == "__main__": main()
+TELEMETRY
+chmod 0755 /usr/local/lib/ai-village/telemetry-collector.py
+
 cat > /usr/local/lib/ai-village/webui.py <<'WEBUI'
 #!/usr/bin/env python3
 import fcntl, html, json, os, re, time
@@ -630,6 +694,8 @@ ROOT = Path(os.environ["VILLAGE_ROOT"])
 OUTBOX = ROOT / "signals" / "outbox"
 INBOX = ROOT / "board" / "organic-inbox.jsonl"
 EVENTS = ROOT / "board" / "events.jsonl"
+TELEMETRY = ROOT / "telemetry" / "latest.json"
+TELEMETRY_DB = ROOT / "telemetry" / "events.sqlite3"
 HOST = os.environ.get("VILLAGE_WEBUI_BIND", "0.0.0.0")
 PORT = int(os.environ.get("VILLAGE_WEBUI_PORT", "8080"))
 MAX_MESSAGE = int(os.environ.get("VILLAGE_WEBUI_MAX_MESSAGE_CHARS", "4000"))
@@ -676,11 +742,34 @@ def activity(limit=80):
         })
     return rows[-limit:]
 
+def telemetry():
+    try:
+        return json.loads(TELEMETRY.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {"timestamp": None, "agents": [], "gpu": {"available": False, "rows": []}}
+
+def telemetry_history(limit=120):
+    try:
+        import sqlite3
+        db = sqlite3.connect(TELEMETRY_DB); rows = db.execute("SELECT timestamp,payload FROM snapshots ORDER BY id DESC LIMIT ?", (limit,)).fetchall(); db.close()
+        return [json.loads(payload) for _, payload in reversed(rows)]
+    except Exception:
+        return []
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args): pass
     def do_GET(self):
         if self.path == "/healthz": return send(self, HTTPStatus.OK, "ok\n", "text/plain; charset=utf-8")
         if self.path == "/api/activity": return send(self, HTTPStatus.OK, json.dumps(activity(), ensure_ascii=False), "application/json; charset=utf-8")
+        if self.path == "/api/telemetry": return send(self, HTTPStatus.OK, json.dumps(telemetry(), ensure_ascii=False), "application/json; charset=utf-8")
+        if self.path == "/api/telemetry/history": return send(self, HTTPStatus.OK, json.dumps(telemetry_history(), ensure_ascii=False), "application/json; charset=utf-8")
+        if self.path == "/dashboard":
+            current = telemetry(); cards = []
+            for agent in current.get("agents", []):
+                loaded = ", ".join(str(item.get("name", "")) for item in agent.get("ollama", [])) or "kein Runner"
+                cards.append("<article><h2>{} <small>{}</small></h2><p>Service: <b>{}</b><br>Modell: {}<br>Ollama: {}<br>Kontext: {}<br>Endpoint: {}</p></article>".format(html.escape(agent.get("name", "")), html.escape(agent.get("role", "")), html.escape(agent.get("service", "")), html.escape(agent.get("model", "")), html.escape(loaded), html.escape(str(agent.get("context", ""))), html.escape(agent.get("endpoint", ""))))
+            content = "<meta http-equiv=\"refresh\" content=\"15\"><p>Read-only passive telemetry; no Board writes or agent feedback.</p><p>Snapshot: {}</p><p><a href=\"/\">Signale</a> · <a href=\"/activity\">Aktivität</a> · <a href=\"/api/telemetry\">JSON</a></p>".format(html.escape(str(current.get("timestamp")))) + "".join(cards or ["<p>Telemetry collector has not produced a snapshot yet.</p>"])
+            return send(self, HTTPStatus.OK, page("AI Village — Dashboard", content))
         if self.path == "/activity":
             cards = []
             for item in reversed(activity()):
@@ -787,6 +876,24 @@ Type=simple
 User=village-web
 EnvironmentFile=/etc/ai-village/webui.env
 ExecStart=/usr/local/lib/ai-village/webui.py
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+cat > /etc/systemd/system/ai-village-telemetry.service <<'UNIT'
+[Unit]
+Description=AI Village passive telemetry collector
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=simple
+User=village-web
+EnvironmentFile=/etc/ai-village/webui.env
+ExecStart=/usr/local/lib/ai-village/telemetry-collector.py
 Restart=always
 RestartSec=5
 NoNewPrivileges=true
@@ -957,9 +1064,10 @@ WantedBy=timers.target
 UNIT
 
 systemctl daemon-reload
-systemctl enable ai-village-authority.service ai-village-bootstrap.service ai-village-webui.service
+systemctl enable ai-village-authority.service ai-village-bootstrap.service ai-village-webui.service ai-village-telemetry.service
 for index in "${AGENT_INDEXES[@]}"; do systemctl enable "ai-village-agent-$(printf '%02d-%s' "$index" "$(get_agent "$index" NAME)").service"; done
 if is_true "$VILLAGE_AUTO_UPDATE"; then systemctl enable --now ai-village-update.timer; else systemctl disable --now ai-village-update.timer >/dev/null 2>&1 || true; fi
 if is_true "$VILLAGE_WEBUI_ENABLED"; then systemctl start ai-village-webui.service; else systemctl disable --now ai-village-webui.service >/dev/null 2>&1 || true; fi
+systemctl start ai-village-telemetry.service
 systemctl start ai-village-bootstrap.service
 note "Village awake. Board: tail -f $VILLAGE_ROOT/board/events.jsonl"
