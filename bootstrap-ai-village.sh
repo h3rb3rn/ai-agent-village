@@ -691,7 +691,7 @@ class Handler(BaseHTTPRequestHandler):
             return send(self, HTTPStatus.OK, page("AI Village — Aktivität", content))
         if self.path.startswith("/signals/"):
             name = self.path.removeprefix("/signals/")
-            if not re.fullmatch(r"[A-Za-z0-9_.-]+\\.md", name): return send(self, HTTPStatus.NOT_FOUND, "not found", "text/plain")
+            if not re.fullmatch(r"[A-Za-z0-9_.-]+\.md", name): return send(self, HTTPStatus.NOT_FOUND, "not found", "text/plain")
             target = OUTBOX / name
             if not target.is_file(): return send(self, HTTPStatus.NOT_FOUND, "not found", "text/plain")
             return send(self, HTTPStatus.OK, target.read_text(encoding="utf-8", errors="replace"), "text/plain; charset=utf-8")
