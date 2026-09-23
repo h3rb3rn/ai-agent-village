@@ -1,6 +1,6 @@
 services:
   chromadb:
-    image: ${CHROMA_IMAGE:-chromadb/chroma:latest}
+    image: ${CHROMA_IMAGE:-docker.io/chromadb/chroma:latest}
     restart: unless-stopped
     environment:
       IS_PERSISTENT: "TRUE"
@@ -10,7 +10,7 @@ services:
     ports:
       - "127.0.0.1:8000:8000"
   neo4j:
-    image: ${NEO4J_IMAGE:-neo4j:community}
+    image: ${NEO4J_IMAGE:-docker.io/library/neo4j:community}
     restart: unless-stopped
     environment:
       NEO4J_AUTH: ${NEO4J_AUTH:?set NEO4J_AUTH in a private env file}

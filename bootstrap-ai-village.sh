@@ -706,6 +706,22 @@ def active(unit):
     try:
         return subprocess.run(["systemctl", "show", "-p", "ActiveState", "--value", unit], capture_output=True, text=True, timeout=3).stdout.strip()
     except Exception: return "unknown"
+def memory_status():
+    result = {'gateway': {'service': active('ai-village-memory-gateway.service'), 'url': 'http://127.0.0.1:8090'}, 'chroma': {'service': 'not-configured'}, 'neo4j': {'service': 'not-configured'}}
+    for name, port in (('chroma', 8000), ('neo4j', 7687)):
+        try:
+            probe = subprocess.run(['ss', '-Htn', 'sport', '=', ':' + str(port)], capture_output=True, text=True, timeout=2)
+            result[name] = {'service': 'listening' if probe.stdout.strip() else 'not-listening', 'port': port}
+        except Exception: result[name] = {'service': 'unknown', 'port': port}
+    try:
+        with urllib.request.urlopen('http://127.0.0.1:8090/healthz', timeout=2) as response:
+            result['gateway']['health'] = json.loads(response.read().decode()).get('ok', False)
+    except Exception: result['gateway']['health'] = False
+    try:
+        with urllib.request.urlopen('http://127.0.0.1:8090/v1/stats', timeout=2) as response:
+            result['stats'] = json.loads(response.read().decode())
+    except Exception: result['stats'] = {'agents': [], 'total': 0, 'chars': 0}
+    return result
 def gpu():
     try:
         out = subprocess.run(["nvidia-smi", "--query-gpu=index,name,memory.used,memory.total,utilization.gpu,power.draw", "--format=csv,noheader,nounits"], capture_output=True, text=True, timeout=5)
@@ -741,7 +757,7 @@ def main():
             ps = get_json(url.rstrip("/") + "/api/ps") if url else {"error": "missing endpoint"}
             models = ps.get("models", []) if isinstance(ps, dict) else []
             agents.append({"id": agent_id, "name": name, "role": values.get("AGENT_ROLE", ""), "model": values.get("OLLAMA_MODEL", ""), "context": values.get("OLLAMA_NUM_CTX", ""), "endpoint": url, "service": active("ai-village-agent-" + agent_id + ".service"), "ollama": models, "ollama_error": ps.get("error") if isinstance(ps, dict) else "invalid response"})
-        payload = {"timestamp": now(), "agents": agents, "gpu": gpu(), "host": habitat(), "hardware": inventory, "resources": resources.sample(agents)}
+        payload = {"timestamp": now(), "agents": agents, "gpu": gpu(), "host": habitat(), "hardware": inventory, "memory": memory_status(), "resources": resources.sample(agents)}
         encoded = json.dumps(payload, ensure_ascii=False)
         db.execute("INSERT INTO snapshots(timestamp,payload) VALUES (?,?)", (stamp, encoded)); db.commit()
         if RAW.exists() and RAW.stat().st_size > 16 * 1024 * 1024:

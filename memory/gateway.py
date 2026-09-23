@@ -56,6 +56,9 @@ class Handler(BaseHTTPRequestHandler):
         if urlsplit(self.path).path == '/v1/memories':
             conn = db(); rows = conn.execute('SELECT * FROM memories ORDER BY created_at DESC LIMIT ?', (MAX_RESULTS,)).fetchall(); conn.close()
             return self.send_json(200, {'items': [result(r) for r in rows]})
+        if urlsplit(self.path).path == '/v1/stats':
+            conn = db(); rows = conn.execute('SELECT agent, count(*) AS memories, coalesce(sum(length(content)),0) AS chars, max(created_at) AS last_at FROM memories GROUP BY agent ORDER BY agent').fetchall(); conn.close()
+            return self.send_json(200, {'agents': [dict(r) for r in rows], 'total': sum(r['memories'] for r in rows), 'chars': sum(r['chars'] for r in rows)})
         return self.send_json(404, {'error': 'not found'})
     def do_POST(self):
         if not auth(self): return self.send_json(401, {'error': 'unauthorized'})
