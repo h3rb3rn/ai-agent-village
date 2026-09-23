@@ -1,0 +1,134 @@
+'use strict';
+const $ = id => document.getElementById(id);
+const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const num = value => Number.isFinite(Number(value)) && value !== null && value !== '' ? Number(value) : null;
+const fmt = (value, digits=0) => num(value) === null ? '—' : Number(value).toLocaleString('de-DE', {maximumFractionDigits:digits});
+const bytes = value => num(value) === null ? '—' : `${fmt(value/2**30,1)} GiB`;
+const stamp = value => typeof value==='number' ? value : Date.parse(value) || 0;
+const time = value => stamp(value) ? new Date(value).toLocaleTimeString('de-DE') : '—';
+const age = value => {const s=Math.max(0,Math.round((Date.now()-stamp(value))/1000)); return !stamp(value)?'unbekannt':s<60?`${s} s`:`${Math.floor(s/60)} min`;};
+let data=null, paused=false, timer, selected=null, mapSelection=null, eventPage=0, signalPage=0, signals=[];
+const view=location.pathname.split('/')[1] || 'dashboard';
+const views={dashboard:['Übersicht','Ein Blick ins Village.','Bewohner, Aktivität und die gemeinsame Umgebung.'],agents:['Agenten','Neun Perspektiven. Ein Village.','Individuelle Zustände, Modellkonfiguration und letzte Handlungen.'],habitat:['Lebensraum','Die Welt, in der sie leben.','Ressourcen, Speicher und lokale Experimentier-GPUs im Verlauf.'],timeline:['Ereignisse','Was im Village geschieht.','Inferenz, Handlungen und Austausch als nachvollziehbarer Verlauf.'],signals:['Signale & Kontakt','Radioteleskop des Village.','Öffentliche Signale gruppiert, filterbar und mit begrenzter Seitenlänge.']};
+const config=views[view]||views.dashboard;
+$('title').textContent=config[1]; $('section-label').textContent=config[0].toUpperCase(); $('subtitle').textContent=config[2];
+document.querySelector(`[data-view="${views[view]?view:'dashboard'}"]`)?.setAttribute('aria-current','page');
+if(view==='agents'){ $('trends').hidden=true; $('habitat').hidden=true; }
+if(view==='habitat'){ $('monitor').hidden=true; $('event-panel').hidden=true; }
+if(view==='timeline'){ $('monitor').hidden=true; $('trends').hidden=true; $('habitat').hidden=true; }
+if(view==='timeline'||view==='agents')$('map-panel').hidden=true;
+if(view==='timeline')$('services-panel').hidden=true;
+if(view==='signals'){for(const id of ['kpis','map-panel','monitor','trends','habitat','event-panel','outcome-panel','services-panel'])$(id).hidden=true;$('signals-panel').hidden=false;}
+const labels={inference_started:'Inferenz angefragt',inference_finished:'Inferenz beendet',inference_error:'Inferenzfehler',command_start:'Aktion gestartet',command_result:'Aktion beendet',board_message:'Nachricht',invalid_decision:'Antwort verworfen',escalation:'Wiederholung blockiert',agent_start:'Agent gestartet',agent_stop:'Agent gestoppt',idle:'Bewusste Pause',model_error:'Modellfehler',hypoxia:'Endpoint nicht erreichbar'};
+function category(e){const kind=e.event||'';if(/error|invalid|escalation|hypoxia/.test(kind)||/result=failure/.test(e.detail))return 'error';if(kind.startsWith('inference'))return 'inference';if(kind.startsWith('command'))return 'command';return 'message';}
+function agentEvents(a){return data.events.filter(e=>e.agent===a.id||e.agent===`village-${a.name}`);}
+function state(a){
+ const events=agentEvents(a), last=events.at(-1);
+ if(Date.now()-stamp(data.current.timestamp)>90000)return {label:'Messung veraltet',kind:'unknown'};
+ if(a.service!=='active')return {label:`Dienst ${a.service||'unbekannt'}`,kind:'error'};
+ if(a.ollama_error)return {label:'Ollama nicht erreichbar',kind:'error'};
+ if(!last)return {label:'Zustand unbekannt',kind:'unknown'};
+ if(category(last)==='error')return {label:labels[last.event]||'Aktionsfehler',kind:'error'};
+ if(['inference_started','command_start'].includes(last.event)){
+   if(Date.now()-stamp(last.timestamp)>3600000)return {label:'Abschluss nicht belegt',kind:'unknown'};
+   return {label:labels[last.event],kind:last.event};
+ }
+ return {label:'Zwischen Aktivitäten',kind:'waiting'};
+}
+function metrics(e){const match=String(e?.detail||'').match(/metrics=(\{.*\})/);try{return match?JSON.parse(match[1]):{};}catch{return {};}}
+function ram(s){let h=s?.host; return h?.memory_total&&num(h.memory_available)!==null ? 100*(1-h.memory_available/h.memory_total):null;}
+function gpuRows(s){return (s?.gpu?.rows||[]).map(row=>{let p=row.split(',').map(x=>x.trim());return {id:p[0],name:p[1],used:num(p[2]),total:num(p[3]),util:num(p[4]),power:num(p[5])};});}
+function gpuMean(s){const vs=gpuRows(s).map(x=>x.util).filter(x=>x!==null);return vs.length?vs.reduce((a,b)=>a+b,0)/vs.length:null;}
+function chart(id, getter, color){
+ const all=data.history.map(s=>({t:stamp(s.timestamp),v:getter(s)})); const points=all.filter(p=>p.v!==null&&Number.isFinite(p.v));
+ if(points.length<2){$(id).innerHTML='<div class="chart-empty">Zeitreihe baut sich auf · mindestens zwei Messpunkte</div>';return;}
+ const start=all[0].t,end=all.at(-1).t,width=640,height=110;
+ const xy=p=>`${((p.t-start)/(end-start||1)*width).toFixed(1)},${(height-Math.min(100,Math.max(0,p.v))/100*height).toFixed(1)}`;
+ // Separate paths when measurements are missing, or the collector was interrupted.
+ let paths=[],segment=[],previous=null;
+ for(const p of all){if(p.v===null||(previous&&p.t-previous.t>90000)){if(segment.length)paths.push(segment);segment=[];}if(p.v!==null)segment.push(p);previous=p;}if(segment.length)paths.push(segment);
+ $(id).innerHTML=`<svg viewBox="-4 -8 690 128" role="img" aria-label="${esc(id==='ram-chart'?'RAM-Belegung':'GPU-Auslastung')} in Prozent"><path d="M0 0H640 M0 55H640 M0 110H640" stroke="#293746" fill="none" stroke-dasharray="3 5"/><text x="650" y="5" fill="#9bacc0" font-size="10">100%</text><text x="650" y="113" fill="#9bacc0" font-size="10">0%</text>${paths.map(seg=>`<polyline points="${seg.map(xy).join(' ')}" stroke="${color}" stroke-width="2.5" fill="none"/>`).join('')}</svg><div class="chart-labels"><span>${esc(time(start))}</span><span>${points.length} Messpunkte · Lücken bleiben sichtbar</span><span>${esc(time(end))}</span></div>`;
+}
+function eventMarkup(e){return `<div class="event"><time>${esc(time(e.timestamp))}<br>${esc(new Date(e.timestamp).toLocaleDateString('de-DE'))}</time><span class="who">${esc(e.name||e.agent||'Village')}</span><details><summary><span class="${category(e)==='error'?'amber':''}">${esc(labels[e.event]||e.event)}</span> · ${esc(String(e.detail||'').slice(0,110))}</summary><pre>${esc(e.detail||JSON.stringify(e))}</pre></details></div>`;}
+function renderEvents(){
+ const agent=$('agent-filter').value,kind=$('kind-filter').value,q=$('search').value.toLowerCase();
+ const events=data.events.filter(e=>(!agent||e.agent===agent)&&(!kind||category(e)===kind)&&(!q||`${e.detail} ${e.name} ${e.event}`.toLowerCase().includes(q))).slice().reverse();
+ const group=$('event-group').value, size=50, groups=new Map();
+ for(const e of events){const key=group==='agent'?(e.name||e.agent||'Village'):group==='kind'?(labels[e.event]||e.event||'Unbekannt'):new Date(stamp(e.timestamp)).toLocaleDateString('de-DE');if(!groups.has(key))groups.set(key,[]);groups.get(key).push(e);}
+ const pages=[...groups.entries()], max=Math.max(1,Math.ceil(pages.length/5));eventPage=Math.min(eventPage,max-1);const visible=pages.slice(eventPage*5,eventPage*5+5);
+ $('events').innerHTML=visible.map(([key,items])=>`<section class="event-group"><h3>${esc(key)} <small>${items.length} Ereignisse</small></h3>${items.slice(0,size).map(eventMarkup).join('')}</section>`).join('')||'<p class="chart-empty">Keine Ereignisse für diese Auswahl.</p>';
+ $('event-info').textContent=`${events.length} Treffer · ${pages.length} Gruppen · Seite ${eventPage+1}/${max}. Pro Ansicht höchstens 5 Gruppen und ${size} Einträge je Gruppe.`;$('event-page-label').textContent=`Seite ${eventPage+1} / ${max}`;$('event-prev').disabled=eventPage<=0;$('event-next').disabled=eventPage>=max-1;
+}
+function renderSignals(){const q=($('signal-search')?.value||'').toLowerCase(),sorted=signals.filter(s=>!q||`${s.title} ${s.author} ${s.filename} ${s.preview}`.toLowerCase().includes(q)).slice().sort((a,b)=>{const d=stamp(a.timestamp)-stamp(b.timestamp);return $('signal-sort').value==='oldest'?d:-d;});const size=Number($('signal-size')?.value||20),max=Math.max(1,Math.ceil(sorted.length/size));signalPage=Math.min(signalPage,max-1);const visible=sorted.slice(signalPage*size,(signalPage+1)*size),groups=new Map();for(const s of visible){const key=new Date(stamp(s.timestamp)).toLocaleDateString('de-DE');if(!groups.has(key))groups.set(key,[]);groups.get(key).push(s);}$('signals').innerHTML=[...groups].map(([day,items])=>`<section class="signal-group"><h3>${esc(day)} <small>${items.length} Signale</small></h3>${items.map(s=>`<article class="signal-card"><div><strong>${esc(s.title||s.filename)}</strong><small>${esc(s.author||'unbekannt')} · ${esc(time(s.timestamp))} · ${fmt(s.size)} Bytes</small><p>${esc(s.preview||'Keine Vorschau')}</p></div><a href="/signals/${encodeURIComponent(s.filename)}">Signal lesen</a></article>`).join('')}</section>`).join('')||'<p class="chart-empty">Keine Signale für diese Auswahl.</p>';$('signal-info').textContent=`${sorted.length} Signale · Seite ${signalPage+1}/${max} · Vorschau ohne Volltextladen`;$('signal-page-label').textContent=`Seite ${signalPage+1} / ${max}`;$('signal-prev').disabled=signalPage<=0;$('signal-next').disabled=signalPage>=max-1;}
+function render(){
+ const c=data.current,agents=c.agents||[],events=data.events,stale=Date.now()-stamp(c.timestamp)>90000;
+ $('notice').hidden=!stale;$('notice').textContent='Die letzte Messung ist älter als 90 Sekunden. Zustände können inzwischen abweichen.';
+ $('connection').textContent=paused?'Anzeige pausiert':stale?'Messung veraltet':'● Live verbunden';
+ const states=agents.map(state),finished=events.filter(e=>e.event==='inference_finished'),speeds=finished.map(e=>metrics(e)).filter(m=>m.eval_duration>0&&num(m.eval_count)!==null).map(m=>m.eval_count/(m.eval_duration/1e9));
+ const kpis=[['Agent-Dienste',`${agents.filter(a=>a.service==='active').length} / ${agents.length}`,'aktiv laut letztem Snapshot'],['Inferenz angefragt',states.filter(s=>s.kind==='inference_started').length,'Abschluss noch nicht protokolliert'],['Generierung',speeds.length?`${fmt(speeds.reduce((a,b)=>a+b,0)/speeds.length,1)} tok/s`:'—',`Mittel aus ${speeds.length} Antworten im Ereignisausschnitt`],['Auffällige Ereignisse',events.filter(e=>category(e)==='error').length,'Fehler / Blockaden im Ereignisausschnitt']];
+ $('kpis').innerHTML=kpis.map(k=>`<article class="kpi"><p>${esc(k[0])}</p><div class="value">${esc(k[1])}</div><small>${esc(k[2])}</small></article>`).join('');
+ $('agents').innerHTML=agents.map(a=>{let s=state(a),ev=agentEvents(a),last=ev.at(-1);return `<button class="agent ${s.kind}" data-agent="${esc(a.id)}" aria-label="Details zu ${esc(a.name)}"><div class="agent-top"><span><span class="avatar">${esc(a.id.split('-')[0])}</span><span class="agent-name">${esc(a.name)}</span></span><small>${esc(a.role)}</small></div><p class="model" title="${esc(a.model)}">${esc(a.model)}</p><div class="agent-state ${s.kind==='error'?'amber':s.kind==='inference_started'?'cyan':s.kind==='command_start'?'violet':''}">● ${esc(s.label)}</div><div class="agent-bottom"><span>Letztes Ereignis vor ${esc(age(last?.timestamp))}</span><span>${fmt(a.context)} ctx</span></div><div class="micro" aria-label="Letzte ${Math.min(30,ev.length)} Ereignisse">${ev.slice(-30).map(e=>`<i class="${category(e)}" title="${esc(time(e.timestamp)+' '+(labels[e.event]||e.event))}"></i>`).join('')}</div></button>`;}).join('')||'<p>Noch keine Agent-Daten vorhanden.</p>';
+ $('ram-now').textContent=`${fmt(ram(c),1)} %`;$('gpu-now').textContent=`${fmt(gpuMean(c),1)} %`;chart('ram-chart',ram,'#55dccb');chart('gpu-chart',gpuMean,'#b6a0ff');
+ const host=c.host||{},old=data.history.find(s=>s.host)?.host;
+ $('habitat-sub').textContent=`${host.hostname||'Village-Host'} · ${fmt(host.cpus)} CPU-Kerne · Messwertänderungen im gewählten Zeitraum`;
+ const delta=old&&host.memory_available!=null&&old.memory_available!=null?host.memory_available-old.memory_available:null;
+ $('environment').innerHTML=`<div class="metric"><p>RAM verfügbar</p><strong>${bytes(host.memory_available)}</strong><small>von ${bytes(host.memory_total)} · Änderung ${delta===null?'—':(delta>=0?'+':'−')+bytes(Math.abs(delta))}</small></div><div class="metric"><p>Systemlast · 1 / 5 / 15 min</p><strong>${(host.load||[]).map(v=>fmt(v,2)).join(' / ')||'—'}</strong><small>Wartende / laufende Prozesse, keine CPU-Prozentzahl</small></div><div class="metric"><p>Geladene Ollama-Modelle</p><strong>${agents.reduce((n,a)=>n+(a.ollama||[]).length,0)}</strong><small>Geladen bedeutet nicht aktive Inferenz</small></div>`;
+ $('disks').innerHTML=(host.mounts||[]).map(d=>{let prev=old?.mounts?.find(m=>m.path===d.path),change=prev?d.used-prev.used:null;return `<div class="disk"><span>${esc(d.path)}<br><small>${esc(d.source)}</small></span><div class="bar" role="meter" aria-label="${esc(d.path)} belegt" aria-valuenow="${Math.round(100*d.used/d.total)}" aria-valuemin="0" aria-valuemax="100"><span style="width:${Math.min(100,100*d.used/d.total)}%"></span></div><span>${bytes(d.available)} frei / ${bytes(d.total)}<br><small>Belegung Δ ${change===null?'—':(change>=0?'+':'−')+bytes(Math.abs(change))}</small></span></div>`;}).join('')||'<p>Mount-Messungen noch nicht verfügbar.</p>';
+ $('gpus').innerHTML=gpuRows(c).map(g=>`<div class="gpu-card"><p>GPU ${esc(g.id)} · ${esc(g.name)}</p><strong>${fmt(g.util)} %</strong><p>${fmt(g.used)} / ${fmt(g.total)} MiB VRAM</p><p>${fmt(g.power,1)} W</p></div>`).join('')||'<p>Lokale GPU-Telemetrie nicht verfügbar.</p>';
+ $('lanes').innerHTML=`<table><thead><tr><th>Agent</th><th>Endpoint</th><th>Modellstatus</th><th>VRAM</th><th>Speicherzuordnung</th></tr></thead><tbody>${agents.map(a=>{let m=(a.ollama||[]).find(m=>m.name===a.model);return `<tr><td>${esc(a.name)}</td><td>${esc(a.endpoint)}</td><td>${a.ollama_error?'Nicht erreichbar':m?'Geladen':'Nicht geladen'}</td><td>${bytes(m?.size_vram)}</td><td>${m&&m.size>0&&num(m.size_vram)!==null?(m.size_vram>=m.size?'GPU-resident laut API':'CPU-Anteil laut API'):'Unbekannt'}</td></tr>`;}).join('')}</tbody></table>`;
+ const prior=$('agent-filter').value;$('agent-filter').innerHTML='<option value="">Alle Agenten</option>'+agents.map(a=>`<option value="${esc(a.id)}">${esc(a.name)}</option>`).join('');$('agent-filter').value=prior;
+ renderEvents();renderSignals();renderMap();renderOutcomes();renderServices();$('updated').textContent=`Messung: ${c.timestamp?new Date(c.timestamp).toLocaleString('de-DE'):'unbekannt'}`;
+}
+function renderOutcomes(){
+ const stats=data.outcomes||{};
+ $('outcomes').innerHTML=`<table><thead><tr><th>Agent</th><th>Exitcode-Erfolgsquote</th><th>Erfolg / Fehler</th><th>Antwort verworfen</th><th>Blockiert</th><th>Wiederholte Versuche</th></tr></thead><tbody>${data.current.agents.map(a=>{let s=stats[a.id]||{},rate=s.success_rate;return `<tr><td>${esc(a.name)}</td><td>${rate==null?'Keine abgeschlossenen Aktionen':`${fmt(rate*100,1)} % <div class="success-bar"><span class="ok" style="width:${rate*100}%"></span><span class="bad" style="width:${100-rate*100}%"></span></div>`}</td><td>${s.success||0} / ${s.failure||0}</td><td>${s.invalid||0}</td><td>${s.blocked||0}</td><td>${s.repeated_attempts||0}${s.repeats?.length?`<details><summary>Befehle anzeigen</summary>${s.repeats.map(r=>`<pre class="repeat">${r.count}× ${esc(r.command)}</pre>`).join('')}</details>`:''}</td></tr>`;}).join('')}</tbody></table>`;
+}
+function renderMap(){
+ const c=data.current,h=c.host||{},r=c.resources||{},stale=Date.now()-stamp(c.timestamp)>90000;
+ const busy=(r.processes||[]).filter(p=>p.cpu_percent>0.1),ramUse=(r.processes||[]).some(p=>p.rss>0);
+ const nodes=[{id:'cpu',x:240,y:205,w:180,h:70,title:`CPU · ${h.cpus||'?'} Kerne`,sub:`Load ${fmt(h.load?.[0],2)}`,active:busy.length>0},{id:'ram',x:480,y:215,w:150,h:55,title:'Arbeitsspeicher',sub:`${fmt(ram(c),1)} % belegt`,active:ramUse},{id:'storage',x:40,y:215,w:150,h:55,title:'Speicher /mnt',sub:`${(h.mounts||[]).length} Mounts gemessen`,active:false}];
+ const agents=c.agents||[];
+ const spacing=640/Math.max(agents.length,1);
+ agents.forEach((a,i)=>nodes.push({id:`agent:${a.id}`,x:15+i*spacing,y:42,w:spacing-8,h:64,title:a.name.length>9?a.name.slice(0,8)+'…':a.name,sub:a.endpoint?.split(':').at(-1)||'Ollama',active:!stale&&state(a).kind==='inference_started',remote:true}));
+ gpuRows(c).forEach((g,i)=>{const uuid=r.gpu_ids?.[g.id],procs=(r.gpu_processes||[]).filter(p=>p.gpu_uuid===uuid);nodes.push({id:`gpu:${g.id}`,x:35+i*155,y:355,w:140,h:65,title:`M10 · GPU ${g.id}`,sub:`${fmt(g.util)} % · ${procs.length} Prozesse`,active:g.util>0||procs.length>0});});
+ let lines='';for(const n of nodes){if(n.id==='cpu')continue;const x=n.x+n.w/2,y=n.y+n.h/2;lines+=`<path class="map-edge ${!stale&&n.active?'active':''} ${n.remote?'remote':''}" d="M330 240 L${x} ${y}"/>`;}
+ $('habitat-map').innerHTML=`<svg viewBox="0 0 680 470" role="group" aria-label="Interaktive Hardwarekarte"><text x="20" y="24" fill="#9bacc0" font-size="10" letter-spacing="2">ENTFERNTE OLLAMA-ENDPUNKTE · ${agents.length} AGENTEN</text>${lines}<text x="25" y="175" fill="#9bacc0" font-size="11">${esc(h.hostname||'Village-Host')} · LOKALER LEBENSRAUM</text>${nodes.map(n=>`<g class="map-node ${!stale&&n.active?'active':''} ${n.remote&&n.active&&!stale?'remote':''}" data-node="${esc(n.id)}" role="button" tabindex="0" aria-label="${esc(n.title+' · '+n.sub)}"><rect x="${n.x}" y="${n.y}" width="${n.w}" height="${n.h}" rx="9"/><text x="${n.x+n.w/2}" y="${n.y+25}" text-anchor="middle">${esc(n.title)}</text><text class="sub" x="${n.x+n.w/2}" y="${n.y+44}" text-anchor="middle">${esc(n.sub)}</text></g>`).join('')}<text x="25" y="449" fill="#9bacc0" font-size="10">Speicheraktivität wird nicht aus freier Kapazität abgeleitet · Komponenten für Details auswählen</text></svg>`;
+ if(mapSelection)inspectNode(mapSelection);
+}
+function inspectNode(id){
+ mapSelection=id;const c=data.current,r=c.resources||{},inventory=c.hardware||[];
+ let title='',intro='',procs=[],items=[];
+ if(id.startsWith('agent:')){const a=c.agents.find(a=>a.id===id.slice(6));if(!a)return;title=a.name;intro=`${state(a).label}. Die Verbindung stellt den konfigurierten Endpoint dar; keine gemessene Datenrate.`;items=[['Modell',a.model],['Endpoint',a.endpoint],['Unix-Zuordnung',`village-${a.name}`],['Kontext',a.context]];procs=(r.processes||[]).filter(p=>p.agent===a.id);}
+ else if(id.startsWith('gpu:')){const gid=id.slice(4),uuid=r.gpu_ids?.[gid];title=`Lokale GPU ${gid}`;intro='Prozesse aus nvidia-smi; Initiator über Unix-UID/SubUID zugeordnet.';procs=(r.gpu_processes||[]).filter(p=>p.gpu_uuid===uuid);items=[['UUID',uuid||'Nicht verfügbar'],...inventory.filter(x=>x.class==='display').map(x=>[x.businfo||'GPU',x.product||x.description])];}
+ else if(id==='cpu'){title='CPU & Agent-Prozesse';intro='CPU-Prozent je Prozess beziehen sich auf einen Kern und die letzten beiden Messungen.';items=inventory.filter(x=>x.class==='processor').map(x=>[x.id,x.product||x.description]);procs=[...(r.processes||[])].sort((a,b)=>(b.cpu_percent||0)-(a.cpu_percent||0));}
+ else if(id==='ram'){title='Arbeitsspeicher';intro='RSS je Prozess kann geteilte Speicherseiten enthalten. Summen sind daher keine exakte Gesamtbelegung.';items=inventory.filter(x=>x.class==='memory'&&x.size).map(x=>[x.description,bytes(x.size)]);procs=[...(r.processes||[])].sort((a,b)=>b.rss-a.rss);}
+ else {title='Laufwerke & Mounts';intro='Kapazität und Belegungsänderung sind messbar. Welcher Agent einzelne Dateien geschrieben hat, wird derzeit nicht erfasst.';items=(c.host?.mounts||[]).map(x=>[x.path,`${x.source} · ${bytes(x.available)} frei`]);items.push(...inventory.filter(x=>x.class==='disk').map(x=>[x.logicalname||x.id,x.product||x.description]));}
+ $('map-inspector').innerHTML=`<h3>${esc(title)}</h3><p>${esc(intro)}</p><dl>${items.map(([k,v])=>`<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}</dl>${procs.length?`<h3>${procs.length} zugeordnete Prozesse</h3>`:''}${procs.slice(0,30).map(p=>`<div class="process-row"><b>${esc(p.name)}</b> · PID ${p.pid}<br>${esc(p.agent||'Initiator unbekannt')}<br>${p.rss!==undefined?`RSS ${bytes(p.rss)} · CPU ${fmt(p.cpu_percent,1)} %`:`VRAM ${esc(p.memory_mib)} MiB`}</div>`).join('')}${id.startsWith('gpu:')&&!procs.length?'<p>Keine GPU-Prozesse in dieser Messung.</p>':''}`;
+}
+function renderServices(){
+ const r=data.current.resources||{},containers=r.containers||[];
+ $('service-map').innerHTML=containers.length?containers.map(c=>`<article class="container-card"><h3>${esc(c.id.slice(0,12))}</h3><p>Initiator: ${esc(c.agent)}</p><p>Prozesse: ${c.pids.map(esc).join(', ')}</p><p>Quelle: ${esc(c.source)}</p></article>`).join(''):'<p class="chart-empty">Keine laufenden libpod-Container in den Prozessdaten belegt.</p>';
+ if(containers.length){
+   const visible=containers.slice(0,18),owners=[...new Set(visible.map(c=>c.agent))];
+   const height=Math.max(220,visible.length*66+40),pos=new Map(visible.map((c,i)=>[c.id,55+i*66]));
+   let graph=`<svg viewBox="0 0 820 ${height}" role="img" aria-label="Containerkarte: gestrichelt Besitzzuordnung, grün beobachtete TCP-Verbindungen">`;
+   visible.forEach(c=>{let y=pos.get(c.id),oy=40+owners.indexOf(c.agent)*66;graph+=`<path d="M200 ${oy+20} C280 ${oy+20} 280 ${y} 340 ${y}" stroke="#52697e" stroke-dasharray="4 5" fill="none"/><rect x="340" y="${y-20}" width="210" height="42" rx="8" fill="#122631" stroke="#55dccb"/><text x="355" y="${y+5}" fill="#e6edf5" font-size="13">${esc(c.id.slice(0,12))} · ${c.pids.length} Prozesse</text>`;});
+   owners.forEach((a,i)=>{let y=40+i*66;graph+=`<rect x="20" y="${y}" width="180" height="42" rx="8" fill="#182731" stroke="#52697e"/><text x="32" y="${y+26}" fill="#e6edf5" font-size="13">${esc(a)}</text>`;});
+   (r.service_links||[]).forEach(e=>{if(pos.has(e.from)&&pos.has(e.to))graph+=`<path d="M550 ${pos.get(e.from)} C760 ${pos.get(e.from)} 760 ${pos.get(e.to)} 550 ${pos.get(e.to)}" stroke="#55dccb" stroke-width="2" fill="none"/>`;});
+   $('service-map').insertAdjacentHTML('afterbegin',`<div class="habitat-map">${graph}</svg></div><p class="hint">Gestrichelt: Besitzzuordnung · Grün: beobachtete TCP-Verbindung · maximal 18 Container in der Karte</p>`);
+ }
+ if(r.service_links?.length){$('service-map').innerHTML+='<h3>Beobachtete TCP-Verbindungen</h3>'+r.service_links.map(e=>`<p>${esc(e.from.slice(0,12))} ↔ ${esc(e.to.slice(0,12))}</p>`).join('');}
+ const first=data.history.find(s=>s.containers!=null);$('service-scope').textContent=(r.scope||'Prozesszuordnung noch nicht verfügbar.')+` Aktuell ${containers.length} Container; zu Beginn des dargestellten Verlaufs ${first?.containers??'unbekannt'}. Container in eigenen Netzwerknamespaces können Verbindungen haben, die hier nicht sichtbar sind.`;
+}
+function showAgent(id){selected=id;const a=data.current.agents.find(a=>a.id===id);if(!a)return;$('detail-title').textContent=a.name;const s=state(a);$('detail-body').innerHTML=`<dl><dt>Zustand</dt><dd>${esc(s.label)}</dd><dt>Modell</dt><dd>${esc(a.model)}</dd><dt>Rolle</dt><dd>${esc(a.role)}</dd><dt>Kontext</dt><dd>${fmt(a.context)} Tokens (Kapazität, keine gemessene Belegung)</dd><dt>Endpoint</dt><dd>${esc(a.endpoint)}</dd></dl><h3>Letzte Ereignisse</h3>${agentEvents(a).slice(-25).reverse().map(eventMarkup).join('')}`;$('detail').showModal();}
+async function refresh(){clearTimeout(timer);if(paused||document.hidden){timer=setTimeout(refresh,15000);return;}try{const res=await fetch(`/api/observatory?hours=${$('range').value}`,{cache:'no-store',signal:AbortSignal.timeout(12000)});if(!res.ok)throw Error(`HTTP ${res.status}`);data=await res.json();data.events.sort((a,b)=>stamp(a.timestamp)-stamp(b.timestamp));render();}catch(e){$('connection').textContent='Verbindung unterbrochen';$('notice').hidden=false;$('notice').textContent=`Daten konnten nicht aktualisiert werden (${e.message}). Die letzte Anzeige bleibt erhalten.`;}finally{timer=setTimeout(refresh,15000);}}
+$('theme').value=localStorage.getItem('ai-village-theme')||'system';$('color').value=localStorage.getItem('ai-village-color')||'calm';function applyTheme(){const t=$('theme').value,c=$('color').value;if(t==='system'){document.documentElement.removeAttribute('data-theme');}else document.documentElement.dataset.theme=t;document.documentElement.dataset.color=c;localStorage.setItem('ai-village-theme',t);localStorage.setItem('ai-village-color',c);}applyTheme();$('theme').onchange=applyTheme;$('color').onchange=applyTheme;
+$('agents').addEventListener('click',e=>{const b=e.target.closest('[data-agent]');if(b)showAgent(b.dataset.agent);});
+$('close-detail').onclick=()=>$('detail').close();
+$('pause').onclick=()=>{paused=!paused;document.body.classList.toggle('paused',paused);$('pause').textContent=paused?'Live fortsetzen':'Live pausieren';$('pause').setAttribute('aria-pressed',String(paused));$('connection').textContent=paused?'Anzeige pausiert':'Verbinde …';if(!paused)refresh();};
+$('range').onchange=()=>{if(paused){paused=false;$('pause').textContent='Live pausieren';$('pause').setAttribute('aria-pressed','false');}refresh();};
+for(const id of ['agent-filter','kind-filter','search','event-group'])$(id).addEventListener('input',()=>{eventPage=0;if(data)renderEvents();});$('event-prev').onclick=()=>{eventPage--;renderEvents();};$('event-next').onclick=()=>{eventPage++;renderEvents();};for(const id of ['signal-search','signal-sort','signal-size'])$(id).addEventListener('input',()=>{signalPage=0;renderSignals();});$('signal-prev').onclick=()=>{signalPage--;renderSignals();};$('signal-next').onclick=()=>{signalPage++;renderSignals();};
+document.addEventListener('visibilitychange',()=>{if(!document.hidden&&!paused)refresh();});
+$('habitat-map').addEventListener('click',e=>{const n=e.target.closest('[data-node]');if(n)inspectNode(n.dataset.node);});
+$('habitat-map').addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){const n=e.target.closest('[data-node]');if(n){e.preventDefault();inspectNode(n.dataset.node);}}});
+async function loadSignals(){try{const r=await fetch('/api/signals',{cache:'no-store',signal:AbortSignal.timeout(8000)});if(r.ok){signals=await r.json();renderSignals();}}catch(e){if($('signal-info'))$('signal-info').textContent='Signale konnten nicht geladen werden.';}}loadSignals();refresh();

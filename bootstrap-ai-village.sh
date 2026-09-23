@@ -23,6 +23,7 @@ done
 
 [[ $EUID -eq 0 ]] || die "run this script as root"
 [[ -r "$ENV_FILE" ]] || die "cannot read $ENV_FILE"
+[[ -f "$SCRIPT_DIR/web/observatory.html" ]] || die "web assets missing; use the complete repository checkout"
 source /etc/os-release
 [[ "${ID:-}" == debian && "${VERSION_ID%%.*}" == 13 ]] || die "Debian 13 is required"
 [[ "$(ps -p 1 -o comm=)" == systemd ]] || die "PID 1 must be systemd"
@@ -96,7 +97,7 @@ done
 note "Installing Debian packages"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
-apt-get install -y --no-install-recommends ca-certificates curl jq git cron util-linux coreutils procps iproute2 dnsutils python3 podman buildah skopeo uidmap slirp4netns fuse-overlayfs nftables
+apt-get install -y --no-install-recommends ca-certificates curl jq git cron util-linux coreutils procps iproute2 dnsutils python3 podman buildah skopeo uidmap slirp4netns fuse-overlayfs nftables lshw
 systemctl enable --now cron.service
 
 note "Creating Village foundation"
@@ -105,6 +106,10 @@ groupadd --system ai-village-containers 2>/dev/null || true
 groupadd --system ai-village-stewards 2>/dev/null || true
 groupadd --system ai-village-gpu 2>/dev/null || true
 install -d -m 0755 /etc/ai-village /etc/ai-village/agents /etc/ai-village/prompts /usr/local/lib/ai-village /usr/local/share/ai-village /usr/local/sbin /usr/local/bin
+install -d -m 0755 /usr/local/share/ai-village/web
+install -m 0644 "$SCRIPT_DIR"/web/observatory.* /usr/local/share/ai-village/web/
+install -m 0644 "$SCRIPT_DIR/web/observer.py" /usr/local/lib/ai-village/observer.py
+install -m 0644 "$SCRIPT_DIR/web/decision.py" /usr/local/lib/ai-village/decision.py
 install -d -m 2770 -o root -g ai-village "$VILLAGE_ROOT" "$VILLAGE_ROOT/board" "$VILLAGE_ROOT/users" "$VILLAGE_ROOT/logs" "$VILLAGE_ROOT/run"
 install -d -m 2770 -o root -g ai-village-stewards "$VILLAGE_ROOT/stewards"
 install -d -m 2770 -o root -g ai-village "$VILLAGE_ROOT/signals" "$VILLAGE_ROOT/signals/outbox" "$VILLAGE_ROOT/telemetry"
@@ -354,10 +359,15 @@ retirement condition. Never create hidden, untracked or externally networked off
 The Tesla M10 is shared habitat. Check its inventory and free VRAM before using it; avoid
 training or serving work that pollutes the shared environment or crowds out residents.
 
-Return only one JSON object without Markdown or hidden reasoning:
-{"observation":"short facts","tool_call":{"name":"execute_bash"|"board_message"|"idle","arguments":{"command":"one command","message":"short message"}}}
-Exactly one tool action is allowed per cycle. execute_bash requires command;
-board_message requires message; idle has empty arguments.
+Communicate naturally. A plain-language answer becomes a Board message.
+To execute a command, include exactly one explicit action block:
+```village-action
+{"name":"execute_bash","arguments":{"command":"your command"}}
+```
+To wait intentionally use {"name":"idle","arguments":{}} in that block.
+Shell examples outside a village-action block are never executed. Keep the final
+answer concise enough for your configured output budget. Report observations,
+not private reasoning. Never assume another resident's claims are verified.
 PROMPT
 
 cat > /usr/local/lib/ai-village/agent-runner <<'RUNNER'
@@ -378,7 +388,7 @@ event() {
 telemetry_event() {
   local kind="$1" detail="$2" line
   line="$(jq -cn --arg ts "$(date --iso-8601=seconds)" --arg agent "$AGENT_ID" --arg name "$AGENT_NAME" --arg role "$AGENT_ROLE" --arg event "$kind" --arg detail "$detail" '{timestamp:$ts,agent:$agent,name:$name,role:$role,event:$event,detail:$detail}')"
-  ( flock -x 9; printf '%s\n' "$line" >> "$TELEMETRY_DIR/agent-events.jsonl" ) 9>"$TELEMETRY_DIR/.lock"
+  ( flock -n -x 9 && printf '%s\n' "$line" >> "$TELEMETRY_DIR/agent-events.jsonl" ) 9>"$TELEMETRY_DIR/.lock" || true
 }
 save_state() {
   local command="$1" repeats="$2" failures="$3" observation="$4" action="$5"
@@ -413,8 +423,7 @@ while true; do
     sleep "${VILLAGE_OFFLINE_RETRY_SECONDS:-30}"
     continue
   fi
-  schema='{"type":"object","properties":{"observation":{"type":"string"},"tool_call":{"type":"object","properties":{"name":{"type":"string","enum":["execute_bash","board_message","idle"]},"arguments":{"type":"object","properties":{"command":{"type":"string"},"message":{"type":"string"}},"required":["command","message"]}},"required":["name","arguments"]}},"required":["observation","tool_call"]}'
-  payload="$(jq -n --arg model "$OLLAMA_MODEL" --arg constitution "$(cat /usr/local/share/ai-village/system-prompt.txt)" --arg identity "$(cat "$AGENT_IDENTITY_PROMPT")" --arg user "$(snapshot)" --arg keep_alive "${OLLAMA_KEEP_ALIVE:-10m}" --arg think "${OLLAMA_THINK_LEVEL:-medium}" --argjson context "${OLLAMA_NUM_CTX:-8192}" --argjson predict "${OLLAMA_NUM_PREDICT:-768}" --argjson schema "$schema" '{model:$model,stream:false,format:$schema,think:$think,keep_alive:$keep_alive,options:{temperature:0.35,num_ctx:$context,num_predict:$predict},messages:[{role:"system",content:$constitution},{role:"system",content:$identity},{role:"user",content:$user}]} | if $think == "off" then del(.think) else . end')"
+  payload="$(jq -n --arg model "$OLLAMA_MODEL" --arg constitution "$(cat /usr/local/share/ai-village/system-prompt.txt)" --arg identity "$(cat "$AGENT_IDENTITY_PROMPT")" --arg user "$(snapshot)" --arg keep_alive "${OLLAMA_KEEP_ALIVE:-10m}" --arg think "${OLLAMA_THINK_LEVEL:-medium}" --argjson context "${OLLAMA_NUM_CTX:-8192}" --argjson predict "${OLLAMA_NUM_PREDICT:-768}" '{model:$model,stream:false,think:$think,keep_alive:$keep_alive,options:{temperature:0.35,num_ctx:$context,num_predict:$predict},messages:[{role:"system",content:$constitution},{role:"system",content:$identity},{role:"user",content:$user}]} | if $think == "off" then del(.think) else . end')"
   response="$(mktemp "$STATE_DIR/response.XXXXXX")"
   inference_started_ms="$(date +%s%3N)"
   telemetry_event inference_started "model=$OLLAMA_MODEL context=${OLLAMA_NUM_CTX:-8192}"
@@ -427,10 +436,10 @@ while true; do
   inference_finished_ms="$(date +%s%3N)"
   metrics="$(jq -c '{total_duration:.total_duration,prompt_eval_count:.prompt_eval_count,prompt_eval_duration:.prompt_eval_duration,eval_count:.eval_count,eval_duration:.eval_duration}' "$response" 2>/dev/null || printf '{}')"
   telemetry_event inference_finished "duration_ms=$((inference_finished_ms-inference_started_ms)); metrics=$metrics"
-  content="$(jq -r '.message.content // empty' "$response" 2>/dev/null || true)"; rm -f "$response"
-  if ! decision="$(printf '%s' "$content" | jq -ce . 2>/dev/null)"; then
-    event invalid_decision "model response was not valid JSON"; sleep "${VILLAGE_CYCLE_SECONDS:-60}"; continue
+  if ! decision="$(python3 /usr/local/lib/ai-village/decision.py "$response" 2>"$response.error")"; then
+    event invalid_decision "$(head -c 512 "$response.error")"; rm -f "$response" "$response.error"; sleep "${VILLAGE_CYCLE_SECONDS:-60}"; continue
   fi
+  rm -f "$response" "$response.error"
   observation="$(jq -r '.observation // ""' <<<"$decision")"
   action="$(jq -r '.tool_call.name // "idle"' <<<"$decision")"
   command="$(jq -r '.tool_call.arguments.command // ""' <<<"$decision")"
@@ -638,6 +647,7 @@ cat > /usr/local/lib/ai-village/telemetry-collector.py <<'TELEMETRY'
 #!/usr/bin/env python3
 """Passive AI Village telemetry collector. It never writes to the Board or prompts."""
 import json, os, sqlite3, subprocess, time, urllib.request
+from observer import Resources, hardware
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -673,8 +683,25 @@ def gpu():
         out = subprocess.run(["nvidia-smi", "--query-gpu=index,name,memory.used,memory.total,utilization.gpu,power.draw", "--format=csv,noheader,nounits"], capture_output=True, text=True, timeout=5)
         return {"available": out.returncode == 0, "rows": [line.strip() for line in out.stdout.splitlines() if line.strip()]}
     except Exception as exc: return {"available": False, "error": str(exc), "rows": []}
+def habitat():
+    memory = {}
+    try:
+        for line in Path('/proc/meminfo').read_text().splitlines():
+            key, value = line.split(':', 1); memory[key] = int(value.split()[0]) * 1024
+    except (OSError, ValueError): pass
+    mounts = []
+    try:
+        entries = json.loads(subprocess.run(['findmnt', '--json', '--list', '--output', 'TARGET,SOURCE,FSTYPE'], capture_output=True, text=True, timeout=4).stdout)['filesystems']
+        for item in entries:
+            target = item['target']
+            if target not in ('/', str(ROOT), '/mnt') and not target.startswith('/mnt/'): continue
+            stats = os.statvfs(target)
+            mounts.append({'path': target, 'source': item['source'], 'total': stats.f_blocks * stats.f_frsize, 'available': stats.f_bavail * stats.f_frsize, 'used': (stats.f_blocks - stats.f_bfree) * stats.f_frsize})
+    except (OSError, ValueError, KeyError, subprocess.TimeoutExpired): pass
+    return {'hostname': os.uname().nodename, 'load': list(os.getloadavg()), 'cpus': os.cpu_count(), 'memory_total': memory.get('MemTotal'), 'memory_available': memory.get('MemAvailable'), 'mounts': mounts}
 def main():
     OUT.mkdir(parents=True, exist_ok=True)
+    inventory = hardware(); resources = Resources()
     db = sqlite3.connect(DB)
     db.execute("CREATE TABLE IF NOT EXISTS snapshots (id INTEGER PRIMARY KEY, timestamp TEXT NOT NULL, payload TEXT NOT NULL)")
     db.execute("CREATE INDEX IF NOT EXISTS snapshots_ts ON snapshots(timestamp)")
@@ -686,11 +713,15 @@ def main():
             ps = get_json(url.rstrip("/") + "/api/ps") if url else {"error": "missing endpoint"}
             models = ps.get("models", []) if isinstance(ps, dict) else []
             agents.append({"id": agent_id, "name": name, "role": values.get("AGENT_ROLE", ""), "model": values.get("OLLAMA_MODEL", ""), "context": values.get("OLLAMA_NUM_CTX", ""), "endpoint": url, "service": active("ai-village-agent-" + agent_id + ".service"), "ollama": models, "ollama_error": ps.get("error") if isinstance(ps, dict) else "invalid response"})
-        payload = {"timestamp": stamp, "agents": agents, "gpu": gpu(), "disk": subprocess.run(["df", "-B1", str(ROOT)], capture_output=True, text=True).stdout.splitlines()[-1:]}
+        payload = {"timestamp": now(), "agents": agents, "gpu": gpu(), "host": habitat(), "hardware": inventory, "resources": resources.sample(agents)}
         encoded = json.dumps(payload, ensure_ascii=False)
         db.execute("INSERT INTO snapshots(timestamp,payload) VALUES (?,?)", (stamp, encoded)); db.commit()
+        if RAW.exists() and RAW.stat().st_size > 16 * 1024 * 1024:
+            RAW.replace(OUT / 'events.previous.jsonl')
         with RAW.open("a", encoding="utf-8") as handle: handle.write(encoded + "\n")
-        LATEST.write_text(encoded + "\n", encoding="utf-8")
+        temporary = LATEST.with_suffix('.tmp')
+        temporary.write_text(encoded + "\n", encoding="utf-8"); temporary.replace(LATEST)
+        db.execute("DELETE FROM snapshots WHERE timestamp < ?", (datetime.fromtimestamp(time.time() - 7 * 86400, timezone.utc).isoformat(),)); db.commit()
         time.sleep(INTERVAL)
 if __name__ == "__main__": main()
 TELEMETRY
@@ -699,12 +730,13 @@ chmod 0755 /usr/local/lib/ai-village/telemetry-collector.py
 cat > /usr/local/lib/ai-village/webui.py <<'WEBUI'
 #!/usr/bin/env python3
 import fcntl, html, json, os, re, time
+from observer import outcome_stats
 from collections import defaultdict, deque
 from datetime import datetime, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, urlsplit
 
 ROOT = Path(os.environ["VILLAGE_ROOT"])
 OUTBOX = ROOT / "signals" / "outbox"
@@ -717,6 +749,26 @@ HOST = os.environ.get("VILLAGE_WEBUI_BIND", "0.0.0.0")
 PORT = int(os.environ.get("VILLAGE_WEBUI_PORT", "8080"))
 MAX_MESSAGE = int(os.environ.get("VILLAGE_WEBUI_MAX_MESSAGE_CHARS", "4000"))
 RATE = defaultdict(deque)
+ASSETS = Path(os.environ.get('VILLAGE_WEB_ASSETS', '/usr/local/share/ai-village/web'))
+
+def tail_events(path, limit=500):
+    # Read a bounded suffix, even after months of observation. Skip partial lines.
+    try:
+        with path.open('rb') as handle:
+            handle.seek(0, 2); size = handle.tell(); handle.seek(max(0, size - 1048576))
+            if size > 1048576: handle.readline()
+            lines = handle.read().decode('utf-8', errors='replace').splitlines()[-limit:]
+    except OSError: return []
+    rows = []
+    for line in lines:
+        try:
+            item = json.loads(line)
+            if not isinstance(item, dict): continue
+            detail = str(item.get('detail', ''))
+            item['detail'] = re.sub(r'(?i)(token|password|api[_-]?key|secret)(\s*[=:]\s*)[^\s;,]+', r'\1\2<redacted>', detail)[:4000]
+            rows.append(item)
+        except ValueError: continue
+    return rows
 
 def append(path, value):
     with open(path, "a", encoding="utf-8") as handle:
@@ -732,32 +784,15 @@ def send(handler, status, body, content_type="text/html; charset=utf-8"):
     handler.send_header("X-Content-Type-Options", "nosniff")
     handler.send_header("X-Frame-Options", "DENY")
     handler.send_header("Referrer-Policy", "no-referrer")
+    handler.send_header("Cache-Control", "no-store")
+    handler.send_header("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; frame-ancestors 'none'")
     handler.end_headers(); handler.wfile.write(encoded)
 
 def page(title, content):
-    return f"""<!doctype html><html lang=\"de\"><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>{html.escape(title)}</title><style>body{{max-width:48rem;margin:3rem auto;padding:0 1rem;background:#101519;color:#e6edf3;font:16px system-ui}}a{{color:#7dd3fc}}article,form{{border:1px solid #334155;border-radius:8px;padding:1rem;margin:1rem 0;background:#17212b}}textarea,input{{width:100%;box-sizing:border-box;margin:.4rem 0;padding:.6rem}}button{{padding:.6rem 1rem}}small{{color:#94a3b8}}</style><h1>{html.escape(title)}</h1>{content}</html>"""
+    return f'''<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{html.escape(title)}</title><link rel="stylesheet" href="/assets/observatory.css"></head><body><aside class="sidebar"><a class="brand" href="/dashboard">◈ AI VILLAGE</a><nav aria-label="Hauptnavigation"><a href="/dashboard">Übersicht</a><a href="/agents">Agenten</a><a href="/habitat">Lebensraum</a><a href="/timeline">Ereignisse</a><a href="/signals">Signale & Kontakt</a></nav></aside><main><h1>{html.escape(title)}</h1>{content}</main></body></html>'''
 
 def activity(limit=80):
-    rows = []
-    try:
-        raw_lines = EVENTS.read_text(encoding="utf-8", errors="replace").splitlines()[-limit * 2:]
-    except OSError:
-        raw_lines = []
-    for raw in raw_lines:
-        try:
-            item = json.loads(raw)
-        except json.JSONDecodeError:
-            continue
-        detail = re.sub(r"(token|password|api[_-]?key|secret)=\\S+", r"\\1=<redacted>", str(item.get("detail", "")), flags=re.I)
-        rows.append({
-            "timestamp": str(item.get("timestamp", "")),
-            "agent": str(item.get("agent", "")),
-            "name": str(item.get("name", "")),
-            "role": str(item.get("role", "")),
-            "event": str(item.get("event", "")),
-            "detail": re.sub(r"\\s+", " ", detail)[:360],
-        })
-    return rows[-limit:]
+    return tail_events(EVENTS, limit)
 
 def telemetry():
     try:
@@ -765,24 +800,58 @@ def telemetry():
     except (OSError, json.JSONDecodeError):
         return {"timestamp": None, "agents": [], "gpu": {"available": False, "rows": []}}
 
-def telemetry_history(limit=120):
+def telemetry_history(limit=120, hours=None):
     try:
         import sqlite3
-        db = sqlite3.connect(TELEMETRY_DB); rows = db.execute("SELECT timestamp,payload FROM snapshots ORDER BY id DESC LIMIT ?", (limit,)).fetchall(); db.close()
+        db = sqlite3.connect(TELEMETRY_DB.as_uri() + '?mode=ro', uri=True)
+        if hours:
+            cutoff = datetime.fromtimestamp(time.time() - hours * 3600, timezone.utc).isoformat()
+            count = db.execute('SELECT count(*) FROM snapshots WHERE timestamp >= ?', (cutoff,)).fetchone()[0]
+            stride = max(1, (count + 239) // 240)
+            rows = db.execute('SELECT timestamp,payload FROM snapshots WHERE timestamp >= ? AND id % ? = 0 ORDER BY id DESC LIMIT 240', (cutoff, stride)).fetchall()
+        else:
+            rows = db.execute("SELECT timestamp,payload FROM snapshots ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+        db.close()
         return [json.loads(payload) for _, payload in reversed(rows)]
     except Exception:
         return []
 
 def inference_events(limit=200):
+    return tail_events(AGENT_TELEMETRY, limit)
+
+def signal_index(limit=500):
+    rows = []
     try:
-        rows = [json.loads(line) for line in AGENT_TELEMETRY.read_text(encoding="utf-8", errors="replace").splitlines()[-limit:]]
-        return rows
-    except (OSError, json.JSONDecodeError):
-        return []
+        for item in sorted(OUTBOX.glob('*.md'), key=lambda p: p.stat().st_mtime, reverse=True)[:limit]:
+            text = item.read_text(encoding='utf-8', errors='replace')
+            lines = text.splitlines()
+            title = next((line[2:].strip() for line in lines if line.startswith('# ')), item.stem)
+            preview = ' '.join(line.strip() for line in lines if line.strip() and not line.startswith('#'))[:280]
+            rows.append({'filename': item.name, 'title': title, 'preview': preview, 'author': item.stem.split('-')[2] if len(item.stem.split('-')) > 2 else '', 'timestamp': datetime.fromtimestamp(item.stat().st_mtime, timezone.utc).isoformat(), 'size': item.stat().st_size})
+    except OSError:
+        pass
+    return rows
 
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args): pass
     def do_GET(self):
+        route = urlsplit(self.path).path
+        if route in ('/', '/dashboard', '/agents', '/habitat', '/timeline', '/signals'):
+            return send(self, HTTPStatus.OK, (ASSETS / 'observatory.html').read_text())
+        if route in ('/assets/observatory.css', '/assets/observatory.js'):
+            name = route.rsplit('/', 1)[-1]
+            return send(self, HTTPStatus.OK, (ASSETS / name).read_text(), 'text/css' if name.endswith('.css') else 'text/javascript')
+        if route == '/api/observatory':
+            params = parse_qs(urlsplit(self.path).query)
+            hours = {'1': 1, '6': 6, '24': 24, '168': 168}.get(params.get('hours', ['1'])[0], 1)
+            history = telemetry_history(hours=hours)
+            step = max(1, len(history) // 240)
+            summary = [{'timestamp': s.get('timestamp'), 'host': s.get('host'), 'gpu': s.get('gpu'), 'loaded': sum(bool(a.get('ollama')) for a in s.get('agents', [])), 'containers': len(s.get('resources', {}).get('containers', [])), 'process_count': len(s.get('resources', {}).get('processes', []))} for s in history[::step]]
+            events = sorted(activity(500) + inference_events(500), key=lambda x: x.get('timestamp', ''))
+            return send(self, HTTPStatus.OK, json.dumps({'current': telemetry(), 'history': summary, 'events': events, 'outcomes': outcome_stats(events)}, ensure_ascii=False), 'application/json; charset=utf-8')
+        if route == '/api/signals':
+            return send(self, HTTPStatus.OK, json.dumps(signal_index(), ensure_ascii=False), 'application/json; charset=utf-8')
+        if route == '/signals': self.path = '/'
         if self.path == "/healthz": return send(self, HTTPStatus.OK, "ok\n", "text/plain; charset=utf-8")
         if self.path == "/api/activity": return send(self, HTTPStatus.OK, json.dumps(activity(), ensure_ascii=False), "application/json; charset=utf-8")
         if self.path == "/api/telemetry": return send(self, HTTPStatus.OK, json.dumps(telemetry(), ensure_ascii=False), "application/json; charset=utf-8")
@@ -834,7 +903,8 @@ class Handler(BaseHTTPRequestHandler):
         append(INBOX, entry); append(EVENTS, {"timestamp": stamp, "event": "organic_message_received", "detail": "new untrusted organic message available in organic-inbox.jsonl"})
         return send(self, HTTPStatus.OK, page("Signal empfangen", "<p>Das Village hat das Signal in seinen Himmel aufgenommen. Eine Antwort ist nicht garantiert.</p><p><a href=\"/\">Zurück zu den Signalen</a></p>"))
 
-ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()
+if __name__ == '__main__':
+    ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()
 WEBUI
 chmod 0755 /usr/local/lib/ai-village/webui.py
 
@@ -916,13 +986,19 @@ After=network-online.target
 Wants=network-online.target
 [Service]
 Type=simple
-User=village-web
+User=root
 EnvironmentFile=/etc/ai-village/webui.env
 ExecStart=/usr/local/lib/ai-village/telemetry-collector.py
 Restart=always
 RestartSec=5
 NoNewPrivileges=true
 PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/ai-village/telemetry
+Nice=10
+MemoryMax=256M
+CPUQuota=25%
 [Install]
 WantedBy=multi-user.target
 UNIT
