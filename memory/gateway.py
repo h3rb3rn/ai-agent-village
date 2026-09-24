@@ -58,12 +58,19 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header('Content-Length', str(len(body))); self.send_header('Cache-Control', 'no-store')
         self.send_header('X-Content-Type-Options', 'nosniff'); self.end_headers(); self.wfile.write(body)
     def do_GET(self):
-        if urlsplit(self.path).path == '/healthz': return self.send_json(200, {'ok': True, 'backend': 'sqlite-authoritative'})
-        if not auth(self): return self.send_json(401, {'error': 'unauthorized'})
-        if urlsplit(self.path).path == '/v1/memories':
+        route = urlsplit(self.path).path
+        if route == '/healthz': return self.send_json(200, {'ok': True, 'backend': 'sqlite-authoritative'})
+        # The gateway binds to loopback; the passive telemetry collector may read
+        # aggregate counts locally without receiving an agent credential. Memory
+        # contents and search remain authenticated.
+        local_stats = route == '/v1/stats' and self.client_address[0] in ('127.0.0.1', '::1')
+        if local_stats:
+            pass
+        elif not auth(self): return self.send_json(401, {'error': 'unauthorized'})
+        if route == '/v1/memories':
             conn = db(); rows = conn.execute('SELECT * FROM memories ORDER BY created_at DESC LIMIT ?', (MAX_RESULTS,)).fetchall(); conn.close()
             return self.send_json(200, {'items': [result(r) for r in rows]})
-        if urlsplit(self.path).path == '/v1/stats':
+        if route == '/v1/stats':
             conn = db(); rows = conn.execute('SELECT agent, count(*) AS memories, coalesce(sum(length(content)),0) AS chars, max(created_at) AS last_at FROM memories GROUP BY agent ORDER BY agent').fetchall(); conn.close()
             return self.send_json(200, {'agents': [dict(r) for r in rows], 'total': sum(r['memories'] for r in rows), 'chars': sum(r['chars'] for r in rows)})
         return self.send_json(404, {'error': 'not found'})
