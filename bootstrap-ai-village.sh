@@ -50,6 +50,8 @@ VILLAGE_WEBUI_ENABLED="${VILLAGE_WEBUI_ENABLED:-true}"
 VILLAGE_WEBUI_BIND="${VILLAGE_WEBUI_BIND:-0.0.0.0}"
 VILLAGE_WEBUI_PORT="${VILLAGE_WEBUI_PORT:-8080}"
 VILLAGE_WEBUI_MAX_MESSAGE_CHARS="${VILLAGE_WEBUI_MAX_MESSAGE_CHARS:-4000}"
+VILLAGE_SIGNAL_AUTH_USER="${VILLAGE_SIGNAL_AUTH_USER:-}"
+VILLAGE_SIGNAL_AUTH_PASSWORD="${VILLAGE_SIGNAL_AUTH_PASSWORD:-}"
 MEMORY_GATEWAY_ENABLED="${MEMORY_GATEWAY_ENABLED:-false}"
 MEMORY_PORT="${MEMORY_PORT:-8090}"
 MEMORY_WRITES_PER_HOUR="${MEMORY_WRITES_PER_HOUR:-120}"
@@ -68,6 +70,8 @@ done
 (( VILLAGE_WEBUI_PORT >= 1 && VILLAGE_WEBUI_PORT <= 65535 )) || die "VILLAGE_WEBUI_PORT must be between 1 and 65535"
 [[ "$VILLAGE_DEFAULT_THINK_LEVEL" =~ ^(low|medium|high|max)$ ]] || die "VILLAGE_DEFAULT_THINK_LEVEL must be low, medium, high or max"
 [[ "$VILLAGE_WIKIPEDIA_LANGUAGE" =~ ^[a-z-]{2,12}$ ]] || die "VILLAGE_WIKIPEDIA_LANGUAGE must be a language subdomain, for example de or en"
+if [[ -n "$VILLAGE_SIGNAL_AUTH_USER" && ! "$VILLAGE_SIGNAL_AUTH_USER" =~ ^[A-Za-z0-9._-]{1,80}$ ]]; then die "VILLAGE_SIGNAL_AUTH_USER must contain only letters, numbers, dot, underscore or dash"; fi
+if [[ "$VILLAGE_SIGNAL_AUTH_PASSWORD" == *$'\n'* || "$VILLAGE_SIGNAL_AUTH_PASSWORD" == *$'\r'* ]]; then die "VILLAGE_SIGNAL_AUTH_PASSWORD must be a single line"; fi
 
 get_agent() {
   local index="$1" field="$2"
@@ -254,6 +258,8 @@ VILLAGE_ROOT=$VILLAGE_ROOT
 VILLAGE_WEBUI_BIND=$VILLAGE_WEBUI_BIND
 VILLAGE_WEBUI_PORT=$VILLAGE_WEBUI_PORT
 VILLAGE_WEBUI_MAX_MESSAGE_CHARS=$VILLAGE_WEBUI_MAX_MESSAGE_CHARS
+VILLAGE_SIGNAL_AUTH_USER=$VILLAGE_SIGNAL_AUTH_USER
+VILLAGE_SIGNAL_AUTH_PASSWORD=$VILLAGE_SIGNAL_AUTH_PASSWORD
 VILLAGE_TELEMETRY_INTERVAL_SECONDS=$VILLAGE_TELEMETRY_INTERVAL_SECONDS
 EOF
 chown root:ai-village /etc/ai-village/webui.env
@@ -817,7 +823,7 @@ chmod 0755 /usr/local/lib/ai-village/telemetry-collector.py
 
 cat > /usr/local/lib/ai-village/webui.py <<'WEBUI'
 #!/usr/bin/env python3
-import fcntl, html, json, os, re, time
+import base64, fcntl, hashlib, hmac, html, json, os, re, time
 from observer import outcome_stats
 from collections import defaultdict, deque
 from datetime import datetime, timezone
@@ -836,6 +842,8 @@ AGENT_TELEMETRY = ROOT / "telemetry" / "agent-events.jsonl"
 HOST = os.environ.get("VILLAGE_WEBUI_BIND", "0.0.0.0")
 PORT = int(os.environ.get("VILLAGE_WEBUI_PORT", "8080"))
 MAX_MESSAGE = int(os.environ.get("VILLAGE_WEBUI_MAX_MESSAGE_CHARS", "4000"))
+SIGNAL_USER = os.environ.get("VILLAGE_SIGNAL_AUTH_USER", "").strip()
+SIGNAL_PASSWORD = os.environ.get("VILLAGE_SIGNAL_AUTH_PASSWORD", "")
 RATE = defaultdict(deque)
 ASSETS = Path(os.environ.get('VILLAGE_WEB_ASSETS', '/usr/local/share/ai-village/web'))
 
@@ -875,6 +883,22 @@ def send(handler, status, body, content_type="text/html; charset=utf-8"):
     handler.send_header("Cache-Control", "no-store")
     handler.send_header("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; frame-ancestors 'none'")
     handler.end_headers(); handler.wfile.write(encoded)
+
+def signal_authorized(handler):
+    if not SIGNAL_USER or not SIGNAL_PASSWORD: return False
+    value = handler.headers.get("Authorization", "")
+    if not value.startswith("Basic "): return False
+    try: decoded = base64.b64decode(value[6:], validate=True).decode("utf-8")
+    except (ValueError, UnicodeDecodeError): return False
+    user, separator, password = decoded.partition(":")
+    return bool(separator and hmac.compare_digest(user, SIGNAL_USER) and hmac.compare_digest(password, SIGNAL_PASSWORD))
+
+def auth_required(handler):
+    handler.send_response(HTTPStatus.UNAUTHORIZED)
+    handler.send_header("WWW-Authenticate", 'Basic realm="AI Village Signals", charset="UTF-8"')
+    handler.send_header("Content-Type", "text/html; charset=utf-8")
+    body = "<h1>Anmeldung erforderlich</h1><p>Nur authentifizierte Organics dürfen Nachrichten an das Village senden.</p>".encode("utf-8")
+    handler.send_header("Content-Length", str(len(body))); handler.end_headers(); handler.wfile.write(body)
 
 def page(title, content):
     return f'''<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{html.escape(title)}</title><link rel="stylesheet" href="/assets/observatory.css"></head><body><aside class="sidebar"><a class="brand" href="/dashboard">◈ AI VILLAGE</a><nav aria-label="Hauptnavigation"><a href="/dashboard">Übersicht</a><a href="/agents">Agenten</a><a href="/habitat">Lebensraum</a><a href="/timeline">Ereignisse</a><a href="/signals">Signale & Kontakt</a></nav></aside><main><h1>{html.escape(title)}</h1>{content}</main></body></html>'''
@@ -992,11 +1016,12 @@ class Handler(BaseHTTPRequestHandler):
             text = item.read_text(encoding="utf-8", errors="replace")
             headline = next((line[2:] for line in text.splitlines() if line.startswith("# ")), item.stem)
             entries.append(f"<article><h2>{html.escape(headline)}</h2><small>{html.escape(item.name)}</small><p><a href=\"/signals/{html.escape(item.name)}\">Signal lesen</a></p></article>")
-        form = """<form method=\"post\" action=\"/contact\"><h2>Antwort aus der Außenwelt</h2><p>Diese Nachricht erreicht das Village als untrusted Signal. Keine Zugangsdaten oder privaten Informationen senden.</p><label>Name oder Pseudonym<input name=\"name\" maxlength=\"80\"></label><label>Nachricht<textarea name=\"message\" required maxlength=\"4000\" rows=\"7\"></textarea></label><button type=\"submit\">Signal senden</button></form>"""
+        form = """<form method=\"post\" action=\"/contact\"><h2>Antwort aus der Außenwelt</h2><p>Das Lesen ist öffentlich. Zum Senden öffnet der Browser eine geschützte Anmeldung. Keine Zugangsdaten oder privaten Informationen in die Nachricht schreiben.</p><label>Name oder Pseudonym<input name=\"name\" maxlength=\"80\"></label><label>Nachricht<textarea name=\"message\" required maxlength=\"4000\" rows=\"7\"></textarea></label><button type=\"submit\">Signal senden</button></form>"""
         content = "<p>Die Signale des AI Village werden in einen unbekannten Himmel gesendet. Niemand muss zuhören; jede Antwort wird als fremdes, untrusted Signal behandelt.</p>" + form + "".join(entries or ["<p>Noch keine Signale.</p>"])
         return send(self, HTTPStatus.OK, page("AI Village — Signale", content))
     def do_POST(self):
         if self.path != "/contact": return send(self, HTTPStatus.NOT_FOUND, page("Nicht gefunden", ""))
+        if not signal_authorized(self): return auth_required(self)
         ip = self.client_address[0]; now = time.time(); bucket = RATE[ip]
         while bucket and bucket[0] < now - 900: bucket.popleft()
         if len(bucket) >= 6: return send(self, HTTPStatus.TOO_MANY_REQUESTS, page("Langsamer", "<p>Bitte später erneut senden.</p>"))

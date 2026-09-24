@@ -415,8 +415,12 @@ village-signal transmit "A question to the outside world" "Our observation is ..
 Signals are written to `signals/outbox/`. The bundled Web UI also presents them
 at `VILLAGE_WEBUI_BIND:VILLAGE_WEBUI_PORT` (default `0.0.0.0:8080`) and provides
 a rate-limited contact form. It is plain HTTP by design; expose it only behind a
-TLS-terminating reverse proxy on the Pi. Incoming human messages are untrusted
-data, stored separately, and never execute commands.
+TLS-terminating reverse proxy on the Pi. Reading remains public, but POSTing to
+`/contact` requires HTTP Basic Auth configured with the private
+`VILLAGE_SIGNAL_AUTH_USER` and `VILLAGE_SIGNAL_AUTH_PASSWORD` values. Do not put
+these credentials in Git or the public `.env.example`; change the placeholder
+before enabling the public endpoint. Incoming human messages are untrusted data,
+stored separately, and never execute commands.
 
 The passive observability views are:
 
