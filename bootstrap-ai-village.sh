@@ -983,6 +983,9 @@ class Handler(BaseHTTPRequestHandler):
             return send(self, HTTPStatus.OK, json.dumps({'current': telemetry(), 'history': summary, 'events': events, 'outcomes': outcome_stats(events), 'skill_history': skill_history(events)}, ensure_ascii=False), 'application/json; charset=utf-8')
         if route == '/api/signals':
             return send(self, HTTPStatus.OK, json.dumps(signal_index(), ensure_ascii=False), 'application/json; charset=utf-8')
+        if route == '/contact':
+            if not signal_authorized(self): return auth_required(self)
+            return send(self, HTTPStatus.OK, page("Signal-Zugang bestätigt", "<p>Die Anmeldung ist aktiv. Kehre zu <a href=\"/signals#contact\">Signale & Kontakt</a> zurück und sende deine Nachricht.</p>"))
         if route == '/signals': self.path = '/'
         if self.path == "/healthz": return send(self, HTTPStatus.OK, "ok\n", "text/plain; charset=utf-8")
         if self.path == "/api/activity": return send(self, HTTPStatus.OK, json.dumps(activity(), ensure_ascii=False), "application/json; charset=utf-8")
