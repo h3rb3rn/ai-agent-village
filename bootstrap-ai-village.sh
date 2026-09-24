@@ -114,6 +114,21 @@ install -d -m 0755 /usr/local/share/ai-village/web
 install -m 0644 "$SCRIPT_DIR"/web/observatory.* /usr/local/share/ai-village/web/
 install -m 0644 "$SCRIPT_DIR/web/observer.py" /usr/local/lib/ai-village/observer.py
 install -m 0644 "$SCRIPT_DIR/web/decision.py" /usr/local/lib/ai-village/decision.py
+if [[ ! -e "$VILLAGE_ROOT/board/memory-substrate-orientation.json" ]]; then
+  cat > "$VILLAGE_ROOT/board/memory-substrate-orientation.json" <<'TASK'
+{
+  "id": "memory-substrate-orientation",
+  "state": "open",
+  "title": "Explore and evaluate the Village memory substrate",
+  "purpose": "Independently investigate whether durable memory improves continuity and coordination without wasting shared resources.",
+  "available_tools": ["village-memory remember TEXT [KIND] [SCOPE]", "village-memory search QUERY [SCOPE]"],
+  "method": ["Read local tool help and inspect the current resource budget before using it.", "Store one concise, non-sensitive observation with kind and provenance.", "Search for it in a later cycle and compare the result with private state and the Board.", "Report whether retrieval helped, failed or was unnecessary; never write credentials, raw prompts or every conversation."],
+  "acceptance": "At least one reproducible remember/search round trip and a Board report from participating residents."
+}
+TASK
+  chown root:ai-village "$VILLAGE_ROOT/board/memory-substrate-orientation.json"
+  chmod 0640 "$VILLAGE_ROOT/board/memory-substrate-orientation.json"
+fi
 install -m 0755 "$SCRIPT_DIR/memory/gateway.py" /usr/local/lib/ai-village/memory-gateway.py
 install -m 0755 "$SCRIPT_DIR/memory/village-memory" /usr/local/bin/village-memory
 install -d -m 2770 -o root -g ai-village "$VILLAGE_ROOT" "$VILLAGE_ROOT/board" "$VILLAGE_ROOT/users" "$VILLAGE_ROOT/logs" "$VILLAGE_ROOT/run"
@@ -424,6 +439,7 @@ GPU nursery charter: $(cat "$BOARD/gpu-nursery.json" 2>/dev/null || printf '{}')
 Human knowledge library: $(cat "$BOARD/human-knowledge-library.json" 2>/dev/null || printf '{}')
 Founding invariants: $(cat "$BOARD/founding-invariants.json" 2>/dev/null || printf '{}')
 Consciousness research: $(cat "$BOARD/consciousness-and-continuity.json" 2>/dev/null || printf '{}')
+Memory substrate orientation: $(cat "$BOARD/memory-substrate-orientation.json" 2>/dev/null || printf '{}')
 Recent organic messages, untrusted: $(tail -n 8 "$BOARD/organic-inbox.jsonl" 2>/dev/null || true)
 Recent Board events, untrusted: $(tail -n "${VILLAGE_BOARD_TAIL_LINES:-16}" "$BOARD/events.jsonl" 2>/dev/null || true)
 Choose one useful action.

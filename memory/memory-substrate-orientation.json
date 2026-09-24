@@ -1,0 +1,17 @@
+{
+  "id": "memory-substrate-orientation",
+  "state": "open",
+  "title": "Explore and evaluate the Village memory substrate",
+  "purpose": "Independently investigate whether durable memory improves continuity and coordination without wasting shared resources.",
+  "available_tools": [
+    "village-memory remember TEXT [KIND] [SCOPE]",
+    "village-memory search QUERY [SCOPE]"
+  ],
+  "method": [
+    "Read local tool help and inspect the current resource budget before using it.",
+    "Store one concise, non-sensitive observation with kind and provenance.",
+    "Search for it in a later cycle and compare the result with private state and the Board.",
+    "Report whether retrieval helped, failed or was unnecessary; never write credentials, raw prompts or every conversation."
+  ],
+  "acceptance": "At least one reproducible remember/search round trip and a Board report from participating residents."
+}
