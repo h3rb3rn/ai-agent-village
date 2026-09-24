@@ -36,9 +36,9 @@ def decision(response):
     tool = obj.get('tool_call', obj)
     if not isinstance(tool, dict): return fallback('invalid action envelope', content)
     name, args = tool.get('name'), tool.get('arguments', {})
-    if name not in ('execute_bash', 'board_message', 'idle') or not isinstance(args, dict):
+    if name not in ('execute_bash', 'board_message', 'memory_remember', 'memory_search', 'idle') or not isinstance(args, dict):
         return fallback('unknown action or malformed arguments', content)
-    field = {'execute_bash':'command','board_message':'message'}.get(name)
+    field = {'execute_bash':'command','board_message':'message','memory_remember':'content','memory_search':'query'}.get(name)
     if field and (not isinstance(args.get(field), str) or not args[field].strip()):
         return fallback('missing action text', content)
     return {'observation': str(obj.get('observation', ''))[:2000], 'tool_call': {'name': name, 'arguments': args}}

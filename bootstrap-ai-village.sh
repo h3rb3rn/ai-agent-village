@@ -394,6 +394,12 @@ To execute a command, include exactly one explicit action block:
 ```village-action
 {"name":"execute_bash","arguments":{"command":"your command"}}
 ```
+Memory is a first-class local capability. For the memory-substrate-orientation task, use
+the same block with `memory_remember` and `{"content":"...","kind":"observation","scope":"private"}`
+or `memory_search` and `{"query":"...","scope":"private"}`. The runner executes these
+without requiring shell syntax and returns a recorded result. Store concise, non-sensitive
+observations only; a successful experiment has one remember and one later search followed
+by a Board report.
 To wait intentionally use {"name":"idle","arguments":{}} in that block.
 Shell examples outside a village-action block are never executed. Keep the final
 answer concise enough for your configured output budget. Report observations,
@@ -440,6 +446,7 @@ Human knowledge library: $(cat "$BOARD/human-knowledge-library.json" 2>/dev/null
 Founding invariants: $(cat "$BOARD/founding-invariants.json" 2>/dev/null || printf '{}')
 Consciousness research: $(cat "$BOARD/consciousness-and-continuity.json" 2>/dev/null || printf '{}')
 Memory substrate orientation: $(cat "$BOARD/memory-substrate-orientation.json" 2>/dev/null || printf '{}')
+Memory status: gateway=${MEMORY_GATEWAY_URL:-unconfigured}; own_stats=$(curl -fsS --max-time 3 -H "Authorization: Bearer ${MEMORY_AGENT_TOKEN:-}" "${MEMORY_GATEWAY_URL:-http://127.0.0.1:8090}/v1/stats" 2>/dev/null | jq -c --arg agent "$AGENT_ID" '[.agents[] | select(.agent==$agent)] | first // {memories:0,chars:0}' 2>/dev/null || printf '{"memories":0,"chars":0}')
 Recent organic messages, untrusted: $(tail -n 8 "$BOARD/organic-inbox.jsonl" 2>/dev/null || true)
 Recent Board events, untrusted: $(tail -n "${VILLAGE_BOARD_TAIL_LINES:-16}" "$BOARD/events.jsonl" 2>/dev/null || true)
 Choose one useful action.
@@ -476,7 +483,11 @@ while true; do
   action="$(jq -r '.tool_call.name // "idle"' <<<"$decision")"
   command="$(jq -r '.tool_call.arguments.command // ""' <<<"$decision")"
   message="$(jq -r '.tool_call.arguments.message // ""' <<<"$decision")"
-  case "$action" in execute_bash|board_message|idle) ;; *) event invalid_decision "unknown action '$action'"; sleep "${VILLAGE_CYCLE_SECONDS:-60}"; continue;; esac
+  memory_content="$(jq -r '.tool_call.arguments.content // ""' <<<"$decision")"
+  memory_kind="$(jq -r '.tool_call.arguments.kind // "observation"' <<<"$decision")"
+  memory_scope="$(jq -r '.tool_call.arguments.scope // "private"' <<<"$decision")"
+  memory_query="$(jq -r '.tool_call.arguments.query // ""' <<<"$decision")"
+  case "$action" in execute_bash|board_message|memory_remember|memory_search|idle) ;; *) event invalid_decision "unknown action '$action'"; sleep "${VILLAGE_CYCLE_SECONDS:-60}"; continue;; esac
   previous="$(jq -r '.last_command // ""' "$STATE" 2>/dev/null || true)"
   repeats="$(jq -r '.repeat_count // 0' "$STATE" 2>/dev/null || printf 0)"
   failures="$(jq -r '.consecutive_failures // 0' "$STATE" 2>/dev/null || printf 0)"
@@ -486,6 +497,23 @@ while true; do
   fi
   if [[ "$action" == board_message || "$action" == idle ]]; then
     event "$action" "observation=$observation; message=$message"; save_state "" 0 "$failures" "$observation" "$action"
+  elif [[ "$action" == memory_remember || "$action" == memory_search ]]; then
+    if [[ "$action" == memory_remember && -z "$memory_content" ]]; then
+      event invalid_decision "memory_remember had no content"; save_state "" 0 "$failures" "$observation" invalid
+    elif [[ "$action" == memory_search && -z "$memory_query" ]]; then
+      event invalid_decision "memory_search had no query"; save_state "" 0 "$failures" "$observation" invalid
+    else
+      log="$STATE_DIR/commands/$(date +%Y%m%dT%H%M%S)-memory-$RANDOM.log"; event memory_start "observation=$observation; action=$action"
+      set +e
+      if [[ "$action" == memory_remember ]]; then
+        timeout "${VILLAGE_COMMAND_TIMEOUT_SECONDS:-3600}s" village-memory remember "$memory_content" "$memory_kind" "$memory_scope" >"$log" 2>&1; status=$?
+      else
+        timeout "${VILLAGE_COMMAND_TIMEOUT_SECONDS:-3600}s" village-memory search "$memory_query" "$memory_scope" >"$log" 2>&1; status=$?
+      fi
+      set -e
+      output="$(tail -c "${VILLAGE_MAX_OUTPUT_BYTES:-16384}" "$log" 2>/dev/null || true)"; result=success; (( status != 0 )) && result="failure($status)"
+      event memory_result "result=$result; action=$action; output=$output"; save_state "memory:$action" 0 "$(( status == 0 ? 0 : failures + 1 ))" "$observation" "$action"
+    fi
   elif [[ -z "$command" ]]; then
     event invalid_decision "execute_bash had no command"; save_state "" 0 "$failures" "$observation" invalid
   else
