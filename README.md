@@ -28,25 +28,24 @@ control host. Local `nvidia-smi` describes the GPUs on `N06-M10`, while Ollama
 
 The reference model and role assignment is:
 
-| Agent | Port | Model | Role | Context | Thinking |
-|---|---:|---|---|---:|---|
-| `king` | 11434 | `hf.co/meta-models/Muse-Glimmer-30B-GGUF:Q4_K_M` | `king` | 28672 | off |
-| `explorer` | 11435 | `qwen3.5:4b` | `resident` | 106496 | medium |
-| `librarian` | 11436 | `granite4.2:3b` | `steward` | 49152 | low |
-| `artisan` | 11437 | `mistral:7b` | `builder` | 20480 | off |
-| `interpreter` | 11438 | `gemma3:4b` | `resident` | 131072 | off |
-| `operator` | 11439 | `nemotron-3-nano:4b` | `builder` | 131072 | high |
-| `methodologist` | 11440 | `olmo-3:7b` | `steward` | 8192 | high |
-| `logician` | 11441 | `phi4-mini-reasoning:3.8b` | `resident` | 30720 | medium |
-| `chronicler` | 11442 | `llama3.2:3b` | `steward` | 43008 | off |
+| Agent | Port | Model | Role | Context | Predict | Thinking | Keep-alive |
+|---|---:|---|---|---:|---:|---|---|
+| `king` | 11434 | `hf.co/Jiunsong/supergemma4-26b-uncensored-gguf-v2:Q4_K_M` | `king` | 90112 | 6144 | off | 24h |
+| `explorer` | 11435 | `qwen3.5:4b` | `resident` | 106496 | 8192 | medium | default |
+| `librarian` | 11436 | `granite4.2:3b` | `steward` | 49152 | 4096 | low | default |
+| `artisan` | 11437 | `mistral:7b` | `builder` | 20480 | 4096 | off | default |
+| `interpreter` | 11438 | `gemma3:4b` | `resident` | 131072 | 8192 | off | default |
+| `operator` | 11439 | `nemotron-3-nano:4b` | `builder` | 131072 | 12288 | high | default |
+| `methodologist` | 11440 | `olmo-3:7b` | `steward` | 8192 | 2048 | high | default |
+| `logician` | 11441 | `phi4-mini-reasoning:3.8b` | `resident` | 30720 | 8192 | off | default |
+| `chronicler` | 11442 | `llama3.2:3b` | `steward` | 43008 | 4096 | off | default |
 
 The reference deployment uses Ollama's `think` parameter independently per
-lane. The three models without Ollama thinking support (`mistral:7b`,
-`gemma3:4b` and `llama3.2:3b`) use `THINK_LEVEL=off`; sending `think=medium`
-to those lanes returns HTTP 400. `granite4.2:3b` uses `low`, while the
-reasoning-capable `phi4-mini-reasoning:3.8b` uses `medium`. Explicit context
-values in the host's private `.env` are preserved by the bootstrap and are
-passed as `OLLAMA_NUM_CTX` to each endpoint.
+lane. The current Ollama 0.34.1 endpoints reject thinking for the imported
+SuperGemma4 and Phi-4 GGUF variants, so King and Logician intentionally use
+`THINK_LEVEL=off` even though their upstream model families describe reasoning
+or thinking support. Explicit context, prediction and keep-alive values in the
+host's private `.env` are authoritative and are passed to each endpoint.
 
 ### Roles and agent identities
 
@@ -294,10 +293,12 @@ pattern:
 
 ```dotenv
 OLLAMA_AGENT_1_URL=http://192.168.155.222:11434
-OLLAMA_AGENT_1_MODEL=hf.co/meta-models/Muse-Glimmer-30B-GGUF:Q4_K_M
+OLLAMA_AGENT_1_MODEL=hf.co/Jiunsong/supergemma4-26b-uncensored-gguf-v2:Q4_K_M
 OLLAMA_AGENT_1_ROLE=king
-OLLAMA_AGENT_1_NUM_CTX=28672
+OLLAMA_AGENT_1_NUM_CTX=90112
+OLLAMA_AGENT_1_NUM_PREDICT=6144
 OLLAMA_AGENT_1_THINK_LEVEL=off
+OLLAMA_AGENT_1_KEEP_ALIVE=24h
 
 OLLAMA_AGENT_2_URL=http://192.168.155.222:11435
 OLLAMA_AGENT_2_MODEL=qwen3.5:4b
@@ -305,7 +306,7 @@ OLLAMA_AGENT_2_ROLE=resident
 OLLAMA_AGENT_2_NUM_CTX=106496
 OLLAMA_AGENT_2_THINK_LEVEL=medium
 
-# Repeat URL, MODEL, ROLE, NUM_CTX and THINK_LEVEL for agents 3 through 9.
+# Repeat URL, MODEL, ROLE, NUM_CTX, NUM_PREDICT, THINK_LEVEL and KEEP_ALIVE for agents 3 through 9.
 ```
 
 Keep the production `.env` private (`0600`). The model names, endpoint ports,
