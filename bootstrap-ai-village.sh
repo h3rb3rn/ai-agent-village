@@ -900,7 +900,7 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args): pass
     def do_GET(self):
         route = urlsplit(self.path).path
-        if route in ('/', '/dashboard', '/agents', '/habitat', '/timeline', '/signals'):
+        if route in ('/', '/dashboard', '/agents', '/habitat', '/board', '/timeline', '/signals'):
             return send(self, HTTPStatus.OK, (ASSETS / 'observatory.html').read_text())
         if route in ('/assets/observatory.css', '/assets/observatory.js'):
             name = route.rsplit('/', 1)[-1]
