@@ -3,6 +3,7 @@
 import json
 import math
 import os
+import sqlite3
 import tempfile
 import threading
 import time
@@ -29,6 +30,34 @@ class MemoryGatewayTests(unittest.TestCase):
         self.server = gateway.ThreadingHTTPServer(("127.0.0.1", 0), gateway.Handler)
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
         self.port = self.server.server_address[1]
+
+    def test_legacy_schema_is_migrated_without_losing_rows(self):
+        """An older database is upgraded in place when the gateway opens it."""
+        self.server.shutdown()
+        self.server.server_close()
+        legacy = gateway.DB
+        legacy.parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(legacy)
+        conn.execute(
+            """CREATE TABLE memories (
+                id TEXT PRIMARY KEY, created_at TEXT NOT NULL, agent TEXT NOT NULL,
+                scope TEXT NOT NULL, kind TEXT NOT NULL, content TEXT NOT NULL,
+                source_event TEXT, confidence REAL, expires_at TEXT, metadata TEXT NOT NULL
+            )"""
+        )
+        conn.execute(
+            "INSERT INTO memories VALUES (?,?,?,?,?,?,?,?,?,?)",
+            ("legacy-1", "2026-01-01T00:00:00Z", "01-king", "private", "note", "kept", None, 0.8, None, "{}"),
+        )
+        conn.commit()
+        conn.close()
+
+        migrated = gateway.db()
+        columns = {row[1] for row in migrated.execute("PRAGMA table_info(memories)")}
+        row = migrated.execute("SELECT content, created_at, updated_at FROM memories WHERE id='legacy-1'").fetchone()
+        self.assertTrue({"updated_at", "idempotency_key"}.issubset(columns))
+        self.assertEqual(("kept", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"), tuple(row))
+        migrated.close()
 
     def tearDown(self):
         self.server.shutdown()

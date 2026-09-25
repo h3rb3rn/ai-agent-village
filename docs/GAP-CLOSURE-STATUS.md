@@ -26,6 +26,7 @@ Pro Paket Nachweis unter `docs/evidence/Pxx.md` anlegen, sobald tatsächlich dar
 | P09 | Inbox und Ack | P08 | LOCAL_VERIFIED | [docs/evidence/P09.md](evidence/P09.md) |
 | P10 | Arbeitsfortschritt | P08, P09 | LOCAL_VERIFIED | [docs/evidence/P10.md](evidence/P10.md) |
 | P10.1 | Dynamische Rollen und plurale Teams | P08–P10 | LOCAL_VERIFIED | [docs/evidence/P10.1.md](evidence/P10.1.md) |
+| P14.1 | Rückwärtskompatible Memory-Schema-Migration | P14 | LOCAL_VERIFIED | [docs/evidence/P14.1.md](evidence/P14.1.md) |
 | P11 | Recovery und Kontext | P06, P09, P10 | LOCAL_VERIFIED | [docs/evidence/P11.md](evidence/P11.md) |
 | P12 | Ereignisse und Werkzeugjobs | P06–P11 | LOCAL_VERIFIED | [docs/evidence/P12.md](evidence/P12.md) |
 | P13 | Artefaktverifikation | P10, P12 | LOCAL_VERIFIED | [docs/evidence/P13.md](evidence/P13.md) |

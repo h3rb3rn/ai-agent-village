@@ -411,6 +411,22 @@ geänderte Datei nach Prüfung, fremder Owner und gültiges reproduzierbares Min
 Limits/UTF-8/Confidence, gleichzeitige Writes, doppelte Requests, alte Tokens und
 Quota-Rennen. **Rollback:** überprüftes privates Backup; keine neue anonyme Freigabe.
 
+### P14.1 – Rückwärtskompatible Memory-Schema-Migration
+
+**Abhängigkeiten:** P14. **Dateien:** `memory/gateway.py`, Memory-Tests,
+Migrationsnachweis.
+
+`CREATE TABLE IF NOT EXISTS` ist keine Migration. Der Gateway muss ältere SQLite-
+Datenbanken deshalb additiv auf das aktuelle Schema heben: fehlende Spalten wie
+`updated_at` und `idempotency_key` werden vor der Index-Erzeugung erkannt, ergänzt
+und aus vorhandenen Primärdaten rückwärts befüllt. Die Migration darf keine
+Memory-Einträge löschen und muss nach einem unterbrochenen Lauf erneut sicher
+ausführbar sein.
+
+**Abnahme:** Ein Test mit dem historischen P14-Schema startet den Gateway, behält
+den Legacy-Eintrag und erzeugt die benötigten Spalten. Ein Host-Smoke-Test bestätigt
+anschließend Dienststatus und Anzahl der primären Einträge.
+
 ### P15 – Dauerhafte Projektionswarteschlange
 
 **Abhängigkeiten:** P14. **Dateien:** Gateway, neue Memory-Projektionsmodule.

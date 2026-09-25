@@ -111,6 +111,25 @@ def now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def migrate_memories_schema(conn: sqlite3.Connection) -> None:
+    """Upgrade pre-P15 stores without discarding authoritative memory rows.
+
+    ``CREATE TABLE IF NOT EXISTS`` does not evolve an existing SQLite table. The
+    original schema could therefore survive an upgrade without the columns used
+    by the current gateway, causing startup to fail while creating an index.
+    This additive, idempotent migration is safe to run on every startup.
+    """
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(memories)").fetchall()}
+    if "updated_at" not in columns:
+        conn.execute("ALTER TABLE memories ADD COLUMN updated_at TEXT")
+    if "idempotency_key" not in columns:
+        conn.execute("ALTER TABLE memories ADD COLUMN idempotency_key TEXT")
+    conn.execute(
+        "UPDATE memories SET updated_at = created_at "
+        "WHERE updated_at IS NULL OR updated_at = ''"
+    )
+
+
 def db() -> sqlite3.Connection:
     """Open or initialize authoritative memory SQLite database with secure permissions."""
     db_dir = DB.parent
@@ -143,6 +162,7 @@ def db() -> sqlite3.Connection:
         )
         """
     )
+    migrate_memories_schema(conn)
     conn.execute("CREATE INDEX IF NOT EXISTS memories_agent_time ON memories(agent, created_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS memories_scope ON memories(scope)")
     conn.execute("CREATE INDEX IF NOT EXISTS memories_expires ON memories(expires_at)")
