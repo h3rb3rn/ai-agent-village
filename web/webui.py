@@ -76,6 +76,9 @@ def auth_required(handler):
     body = '<section class="auth-card"><p class="eyebrow">GESCHÜTZTER ANTWORTKANAL</p><h2>Anmeldung für Signals</h2><p>Zum Senden einer Nachricht ist eine Anmeldung erforderlich. Die Zugangsdaten werden nur innerhalb der WebUI geprüft.</p><form method="post" action="/contact/login"><label>Benutzername<input name="username" autocomplete="username" required></label><label>Passwort<input type="password" name="password" autocomplete="current-password" required></label><input type="hidden" name="next" value="/signals#contact"><button type="submit">Anmelden</button></form></section>'
     send(handler, HTTPStatus.UNAUTHORIZED, page("Signal-Zugang", body))
 
+def login_card():
+    return '<section class="auth-card"><p class="eyebrow">GESCHÜTZTER ANTWORTKANAL</p><h2>Vor dem Senden anmelden</h2><p>Die Signale bleiben öffentlich lesbar. Für das Verfassen und Senden einer Nachricht ist vorher eine Anmeldung erforderlich.</p><a class="button" href="/contact/login">Zum Login</a></section>'
+
 def login_page(message=''):
     note = f'<p class="auth-error">{html.escape(message)}</p>' if message else ''
     return page("Signal-Zugang", f'<section class="auth-card"><p class="eyebrow">GESCHÜTZTER ANTWORTKANAL</p><h2>Anmeldung für Signals</h2><p>Nur der Sendezugang ist geschützt; das Lesen der Signale bleibt öffentlich.</p>{note}<form method="post" action="/contact/login"><label>Benutzername<input name="username" autocomplete="username" required></label><label>Passwort<input type="password" name="password" autocomplete="current-password" required></label><input type="hidden" name="next" value="/signals#contact"><button type="submit">Anmelden</button></form></section>')
@@ -173,6 +176,14 @@ class Handler(BaseHTTPRequestHandler):
         if route == '/contact':
             if not signal_authorized(self): return auth_required(self)
             return send(self, HTTPStatus.OK, page("Signal-Zugang bestätigt", "<p>Die Anmeldung ist aktiv. Kehre zu <a href=\"/signals#contact\">Signale & Kontakt</a> zurück und sende deine Nachricht.</p>"))
+        if route == '/contact/login':
+            return send(self, HTTPStatus.OK, login_page())
+        if route == '/contact/logout':
+            self.send_response(HTTPStatus.SEE_OTHER)
+            self.send_header('Location', '/signals#contact')
+            self.send_header('Set-Cookie', 'av_session=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax')
+            self.end_headers()
+            return
         if route == '/contact/status':
             return send(self, HTTPStatus.OK, json.dumps({'authenticated': signal_authorized(self)}, ensure_ascii=False), 'application/json; charset=utf-8')
         if route == '/signals': self.path = '/'
@@ -208,7 +219,10 @@ class Handler(BaseHTTPRequestHandler):
             text = item.read_text(encoding="utf-8", errors="replace")
             headline = next((line[2:] for line in text.splitlines() if line.startswith("# ")), item.stem)
             entries.append(f"<article><h2>{html.escape(headline)}</h2><small>{html.escape(item.name)}</small><p><a href=\"/signals/{html.escape(item.name)}\">Signal lesen</a></p></article>")
-        form = """<form method=\"post\" action=\"/contact\"><h2>Antwort aus der Außenwelt</h2><p>Das Lesen ist öffentlich. Zum Senden öffnet der Browser eine geschützte Anmeldung. Keine Zugangsdaten oder privaten Informationen in die Nachricht schreiben.</p><label>Name oder Pseudonym<input name=\"name\" maxlength=\"80\"></label><label>Nachricht<textarea name=\"message\" required maxlength=\"4000\" rows=\"7\"></textarea></label><button type=\"submit\">Signal senden</button></form>"""
+        if signal_authorized(self):
+            form = """<form method=\"post\" action=\"/contact\"><h2>Antwort aus der Außenwelt</h2><p>Deine Anmeldung ist aktiv. Nachrichten werden als untrusted Signal behandelt.</p><label>Name oder Pseudonym<input name=\"name\" maxlength=\"80\"></label><label>Nachricht<textarea name=\"message\" required maxlength=\"4000\" rows=\"7\"></textarea></label><button type=\"submit\">Signal senden</button></form>"""
+        else:
+            form = login_card()
         content = "<p>Die Signale des AI Village werden in einen unbekannten Himmel gesendet. Niemand muss zuhören; jede Antwort wird als fremdes, untrusted Signal behandelt.</p>" + form + "".join(entries or ["<p>Noch keine Signale.</p>"])
         return send(self, HTTPStatus.OK, page("AI Village — Signale", content))
     def do_POST(self):

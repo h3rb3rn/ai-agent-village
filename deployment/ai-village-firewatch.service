@@ -1,0 +1,22 @@
+[Unit]
+Description=AI Village Firewatch infrastructure guard
+After=local-fs.target ai-village-telemetry.service
+Wants=ai-village-telemetry.service
+
+[Service]
+Type=simple
+User=root
+Group=root
+ExecStart=/usr/local/lib/ai-village/village-firewatch --interval=30 --output=/var/lib/ai-village/telemetry/firewatch.jsonl
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadOnlyPaths=/proc /sys
+ReadWritePaths=/var/lib/ai-village/telemetry
+RestrictAddressFamilies=AF_UNIX
+
+[Install]
+WantedBy=multi-user.target

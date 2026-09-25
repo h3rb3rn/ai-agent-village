@@ -118,6 +118,9 @@ install -d -m 0755 /usr/local/share/ai-village/web
 install -m 0644 "$SCRIPT_DIR"/web/observatory.* /usr/local/share/ai-village/web/
 install -m 0644 "$SCRIPT_DIR/web/observer.py" /usr/local/lib/ai-village/observer.py
 install -m 0644 "$SCRIPT_DIR/web/decision.py" /usr/local/lib/ai-village/decision.py
+install -d -m 0755 /usr/local/lib/ai-village/village
+install -m 0644 "$SCRIPT_DIR/village/firewatch.py" /usr/local/lib/ai-village/village/firewatch.py
+install -m 0755 "$SCRIPT_DIR/scripts/village-firewatch" /usr/local/lib/ai-village/village-firewatch
 if [[ ! -e "$VILLAGE_ROOT/board/memory-substrate-orientation.json" ]]; then
   cat > "$VILLAGE_ROOT/board/memory-substrate-orientation.json" <<'TASK'
 {
@@ -941,6 +944,29 @@ CPUQuota=25%
 WantedBy=multi-user.target
 UNIT
 
+cat > /etc/systemd/system/ai-village-firewatch.service <<'UNIT'
+[Unit]
+Description=AI Village Firewatch infrastructure guard
+After=local-fs.target ai-village-telemetry.service
+Wants=ai-village-telemetry.service
+[Service]
+Type=simple
+User=root
+Group=root
+ExecStart=/usr/local/lib/ai-village/village-firewatch --interval=30 --output=/var/lib/ai-village/telemetry/firewatch.jsonl
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadOnlyPaths=/proc /sys
+ReadWritePaths=/var/lib/ai-village/telemetry
+RestrictAddressFamilies=AF_UNIX
+[Install]
+WantedBy=multi-user.target
+UNIT
+
 cat > /etc/cron.d/ai-village-resume <<'CRON'
 @reboot root /usr/local/sbin/village-resume --source=cron
 CRON
@@ -1109,11 +1135,12 @@ WantedBy=timers.target
 UNIT
 
 systemctl daemon-reload
-systemctl enable ai-village-authority.service ai-village-bootstrap.service ai-village-webui.service ai-village-telemetry.service ai-village-memory-gateway.service
+systemctl enable ai-village-authority.service ai-village-bootstrap.service ai-village-webui.service ai-village-telemetry.service ai-village-memory-gateway.service ai-village-firewatch.service
 for index in "${AGENT_INDEXES[@]}"; do systemctl enable "ai-village-agent-$(printf '%02d-%s' "$index" "$(get_agent "$index" NAME)").service"; done
 if is_true "$VILLAGE_AUTO_UPDATE"; then systemctl enable --now ai-village-update.timer; else systemctl disable --now ai-village-update.timer >/dev/null 2>&1 || true; fi
 if is_true "$VILLAGE_WEBUI_ENABLED"; then systemctl restart ai-village-webui.service; else systemctl disable --now ai-village-webui.service >/dev/null 2>&1 || true; fi
 if is_true "$MEMORY_GATEWAY_ENABLED"; then systemctl restart ai-village-memory-gateway.service; else systemctl disable --now ai-village-memory-gateway.service >/dev/null 2>&1 || true; fi
 systemctl restart ai-village-telemetry.service
+systemctl restart ai-village-firewatch.service
 systemctl start ai-village-bootstrap.service
 note "Village awake. Board: tail -f $VILLAGE_ROOT/board/events.jsonl"

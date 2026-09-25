@@ -39,6 +39,7 @@ from village.inference import (
 from village.artifacts import ArtifactStore
 from village.jobs import JobManager
 from village.teams import TeamStore
+from village.research import ResearchBroker
 from village.lifecycle import InferenceState, InferenceTracker, classify_error
 from village.security import redact_text, sanitize_tool_env
 
@@ -170,6 +171,7 @@ class Resident:
         self.tasks = Tasks(self.board)
         # P10.1/P25.1: project roles are plural, time-bounded team mandates.
         self.teams = TeamStore(self.board / 'coordination.sqlite3')
+        self.research = ResearchBroker()
         # P12: SQLite-backed manager for persistent background tool jobs with crash reconciliation
         self.jobs = JobManager(self.home / 'jobs.sqlite3')
         reconciled_jobs = self.jobs.reconcile_stale_jobs(self.id)
@@ -311,6 +313,7 @@ class Resident:
                    'task_operation':'create(title,success_criterion,goal?,next_step?), claim(task_id), progress(task_id,last_finding?,next_step?,blockers?), complete(task_id,evidence), yield(task_id,evidence)',
                    'team_operation':'create(project,goal,role,coordination_mode?), join(team_id,role_variant?), leave(team_id), create_subtask(team_id,title,criterion), claim_subtask(subtask_id), complete_subtask(subtask_id,evidence), propose_role(team_id,role,rationale), vote_role(proposal_id,choice)',
                    'memory_remember':'content, kind, scope(private/shared)', 'memory_search':'query, scope(private/shared)',
+                   'research_request':'source(wikipedia|github|dockerhub), query, limit?; read-only, no clone/pull/deploy',
                    'idle':'intentional rest'},
             private_work_directory=str(self.home), groups=os.getgroups())
         if own_project and own_project.get('blockers'):
@@ -551,6 +554,10 @@ class Resident:
                 result=self.memory('/v1/memories' if name=='memory_remember' else '/v1/search',value)
                 self.event('memory_result',f'result=success; action={name}; id={result.get("id", "")}; matches={len(result.get("items",[]))}')
                 self.feedback(name,json.dumps(result),True)
+            elif name == 'research_request':
+                result = self.research.search(args.get('source'), args.get('query'), args.get('limit', 5))
+                self.event('research_result', json.dumps({k: result.get(k) for k in ('source', 'query', 'sha256', 'results')}, ensure_ascii=False))
+                self.feedback(name, json.dumps(result, ensure_ascii=False), True)
             else:
                 self.feedback('idle','Intentional rest; next turn may resume your own project.',True)
                 self.event('idle','intentional rest')
