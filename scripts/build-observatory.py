@@ -10,12 +10,13 @@ args = parser.parse_args()
 root = Path(__file__).resolve().parents[1]
 args.destination.mkdir(parents=True, exist_ok=True)
 source = (root / 'bootstrap-ai-village.sh').read_text()
-for marker, name in [('WEBUI', 'webui.py'), ('TELEMETRY', 'telemetry-collector.py'), ('RUNNER', 'agent-runner'), ('PROMPT', 'system-prompt.txt')]:
+for marker, name in [('WEBUI', 'webui.py'), ('TELEMETRY', 'telemetry-collector.py'), ('RUNNER', 'agent-runner')]:
     code = source.split("<<'"+marker+"'\n", 1)[1].split('\n'+marker+'\n', 1)[0]
     if name.endswith('.py'): compile(code, name, 'exec')
     target = args.destination / name
     target.write_text(code+'\n')
     target.chmod(0o755)
+shutil.copy2(root / 'prompts/resident-system.txt', args.destination / 'system-prompt.txt')
 for item in (root / 'web').glob('*'):
     if item.is_file(): shutil.copy2(item, args.destination / item.name)
 unit = source.split("cat > /etc/systemd/system/ai-village-telemetry.service <<'UNIT'\n", 1)[1].split('\nUNIT', 1)[0]

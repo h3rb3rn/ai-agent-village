@@ -1,16 +1,17 @@
 services:
   chromadb:
-    image: ${CHROMA_IMAGE:-docker.io/chromadb/chroma:latest}
+    image: ${CHROMA_IMAGE:-docker.io/chromadb/chroma:0.5.20}
     restart: unless-stopped
     environment:
       IS_PERSISTENT: "TRUE"
       ANONYMIZED_TELEMETRY: "FALSE"
+      CHROMA_TELEMETRY: "FALSE"
     volumes:
       - ${VILLAGE_MEMORY_ROOT:-/var/lib/ai-village/memory}/chroma:/data
     ports:
       - "127.0.0.1:8000:8000"
   neo4j:
-    image: ${NEO4J_IMAGE:-docker.io/library/neo4j:community}
+    image: ${NEO4J_IMAGE:-docker.io/library/neo4j:5.24-community}
     restart: unless-stopped
     environment:
       NEO4J_AUTH: ${NEO4J_AUTH:?set NEO4J_AUTH in a private env file}

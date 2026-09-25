@@ -1,0 +1,96 @@
+{
+  "control": {
+    "paused": "Simulation is paused.",
+    "resumed": "Simulation resumed.",
+    "status_running": "AI Village status: active",
+    "status_paused": "AI Village status: paused",
+    "drain_completed": "Village drained: all active tasks completed.",
+    "drain_timeout": "Drain timed out: some active tasks did not finish.",
+    "aborted": "Simulation aborted immediately."
+  },
+  "security": {
+    "redacted": "<redacted>",
+    "permission_error": "Credential file has insecure permissions: must not be group or world accessible.",
+    "env_sanitized": "Subprocess environment successfully sanitized of sensitive tokens."
+  },
+  "inference": {
+    "unsupported_provider": "Unsupported inference provider.",
+    "request_failed": "Inference request failed.",
+    "openai_vram_notice": "Server-side VRAM management is not applicable for OpenAI-compatible inference."
+  },
+  "lifecycle": {
+    "reconciled": "Incomplete inference requests transitioned to unknown.",
+    "action_discarded": "Action discarded due to stale generation or duplicate execution."
+  },
+  "coordinator": {
+    "task_created": "Task created successfully.",
+    "task_claimed": "Task claimed successfully.",
+    "task_completed": "Task completed.",
+    "task_yielded": "Task yielded.",
+    "task_already_claimed": "Task already claimed; contact owner.",
+    "task_limit_exceeded": "64 open projects already exist; join or finish one.",
+    "task_progress_recorded": "Task progress recorded.",
+    "task_stale_revision": "Stale task revision.",
+    "task_lease_renewed": "Task lease renewed idempotently."
+  },
+  "inbox": {
+    "message_delivered": "Message delivered into prompt context.",
+    "message_acknowledged": "Message acknowledged.",
+    "unacknowledged_pending": "Unacknowledged messages pending."
+  },
+  "jobs": {
+    "job_started": "Background job started.",
+    "job_already_running": "Active tool job is already running; wait or cancel it before starting another.",
+    "job_cancelled": "Job cancelled.",
+    "paused_blocked": "Execution blocked: simulation is paused."
+  },
+  "artifacts": {
+    "registered": "Artifact registered successfully.",
+    "claimed_success": "Artifact claimed success.",
+    "verified": "Artifact peer verification completed.",
+    "adopted": "Artifact adopted by peer.",
+    "self_verification_rejected": "Author cannot peer-verify their own artifact.",
+    "tamper_detected": "Artifact tampering or file modification detected."
+  },
+  "memory": {
+    "unauthorized": "Unauthorized: valid memory authentication token required.",
+    "quota_exceeded": "Agent memory write quota exceeded.",
+    "access_denied": "Access denied to private memory.",
+    "memory_expired": "Memory has expired.",
+    "invalid_payload": "Invalid memory payload or validation failure.",
+    "backup_success": "Memory database backed up successfully."
+  },
+  "projection": {
+    "event_recorded": "Outbox projection event recorded.",
+    "projected": "Outbox events projected to sinks successfully.",
+    "rebuild_completed": "Full projection index rebuild completed.",
+    "sink_offline": "Projection sink offline; retry scheduled with exponential backoff."
+  },
+  "chroma": {
+    "semantic_search_success": "Chroma semantic search completed successfully.",
+    "fallback_to_lexical": "Chroma unavailable; fell back to SQLite lexical search.",
+    "namespace_isolated": "Memory namespace strictly scoped to authorized collections."
+  },
+  "neo4j": {
+    "graph_projected": "Memory graph projection updated successfully.",
+    "provenance_success": "Graph provenance retrieved.",
+    "fallback_to_sqlite": "Neo4j unavailable; fell back to SQLite provenance."
+  },
+  "authority": {
+    "grant_success": "Capability granted successfully.",
+    "revoke_success": "Capability revoked successfully.",
+    "request_submitted": "Capability request submitted.",
+    "request_decided": "Capability request decided.",
+    "pause_restart_skipped": "Service restart skipped: simulation is paused by operator.",
+    "gpu_handles_revoked": "Active GPU device handles terminated for agent."
+  },
+  "containers": {
+    "audit_completed": "Host resource and namespace audit completed.",
+    "storage_verified": "Storage layout verified; existing files preserved.",
+    "sandbox_started": "Rootless container sandbox started.",
+    "mount_forbidden": "Mount path outside authorized storage boundaries rejected.",
+    "pull_blocked": "Remote image pull blocked by pull-never policy.",
+    "compute_verified": "GPU compute calculation verified inside container.",
+    "compute_failed": "GPU compute verification failed."
+  }
+}

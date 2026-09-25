@@ -4,6 +4,8 @@ set -Eeuo pipefail
 HOST="${OLLAMA_HOST:-192.168.155.222}"
 PORT=''; MODEL=''; CONTEXT=''; UNLOAD_PORT=''; KEEP_ALIVE='10m'
 TIMEOUT=900; CONNECT_TIMEOUT=10; JSON_OUTPUT=false
+TOKEN="${OLLAMA_API_KEY:-${API_TOKEN:-}}"
+PROVIDER="${VILLAGE_INFERENCE_PROVIDER:-ollama}"
 
 usage() {
   cat <<'EOF'
@@ -12,7 +14,7 @@ Usage:
   ollama-vram-loader.sh --unload-port PORT [options]
 
 Load one model with an explicit num_ctx, or unload every model on one port.
-Options: --host HOST --keep-alive VALUE --timeout SEC --connect-timeout SEC --json
+Options: --host HOST --token TOKEN --provider PROVIDER --keep-alive VALUE --timeout SEC --connect-timeout SEC --json
 Examples:
   ./ollama-vram-loader.sh --port 11434 --model qwen3.5:4b --ctx 65536
   ./ollama-vram-loader.sh --unload-port 11434
@@ -33,6 +35,8 @@ while (($#)); do
     --keep-alive) (($# > 1)) || die '--keep-alive requires a value'; KEEP_ALIVE=$2; shift 2 ;;
     --timeout) (($# > 1)) || die '--timeout requires a value'; TIMEOUT=$2; shift 2 ;;
     --connect-timeout) (($# > 1)) || die '--connect-timeout requires a value'; CONNECT_TIMEOUT=$2; shift 2 ;;
+    --token) (($# > 1)) || die '--token requires a value'; TOKEN=$2; shift 2 ;;
+    --provider) (($# > 1)) || die '--provider requires a value'; PROVIDER=$2; shift 2 ;;
     --json) JSON_OUTPUT=true; shift ;;
     -h|--help) usage; exit 0 ;;
     *) die "unknown argument: $1" ;;
@@ -53,8 +57,19 @@ else
   positive "$CONTEXT" || die '--ctx must be a positive integer'
   ACTION=load
 fi
+if [[ "$PROVIDER" == "openai" ]]; then
+  printf 'Notice: Provider is OpenAI-compatible (%s). Server-side VRAM management/unloading is not applicable for cloud/remote inference.\n' "$PROVIDER"
+  exit 0
+fi
+
 BASE="http://${HOST}:${PORT}"
-request() { curl --fail-with-body --silent --show-error --connect-timeout "$CONNECT_TIMEOUT" --max-time "$TIMEOUT" "$@"; }
+request() {
+  local auth_args=()
+  if [[ -n "$TOKEN" ]]; then
+    auth_args=(-H "Authorization: Bearer $TOKEN")
+  fi
+  curl --fail-with-body --silent --show-error --connect-timeout "$CONNECT_TIMEOUT" --max-time "$TIMEOUT" "${auth_args[@]}" "$@"
+}
 ps_json() { request "$BASE/api/ps"; }
 
 unload_all() {

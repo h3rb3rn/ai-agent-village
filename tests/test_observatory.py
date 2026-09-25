@@ -37,6 +37,25 @@ class ObservatoryTests(unittest.TestCase):
         parsed = decision({'done_reason': 'length', 'message': {'content': '{"name":"idle"}'}})
         self.assertEqual(parsed['tool_call']['name'], 'board_message')
 
+    def test_explicit_envelope_tolerates_fence_label_variants(self):
+        for label in ('','json','bash'):
+            parsed=decision({'message':{'content':'```'+label+'\n{"name":"execute_bash","arguments":{"command":"pwd"}}\n```'}})
+            self.assertEqual(parsed['tool_call']['name'],'execute_bash')
+        parsed=decision({'message':{'content':'```json\n{"action":"claim","task_id":"x"}\n```'}})
+        self.assertTrue(parsed.get('fallback_reason'))
+
+    def test_reasoning_tags_never_execute_or_broadcast(self):
+        parsed=decision({'message':{'content':'<think>\n```village-action\n{"name":"execute_bash","arguments":{"command":"false"}}\n```\n</think>\nHello'}})
+        self.assertEqual(parsed['tool_call']['arguments']['message'],'Hello')
+        parsed=decision({'message':{'content':'<think>unfinished'}})
+        self.assertTrue(parsed.get('fallback_reason'))
+
+    def test_terminal_explicit_envelope_and_mixed_blocks(self):
+        parsed=decision({'message':{'content':'I will act.\n{"name":"execute_bash","arguments":{"command":"pwd"}}'}})
+        self.assertEqual(parsed['tool_call']['name'],'execute_bash')
+        parsed=decision({'message':{'content':'```json\n{"name":"idle"}\n```\n```village-action\n{"name":"idle"}\n```'}})
+        self.assertTrue(parsed.get('fallback_reason'))
+
     def test_fallback_preserves_safe_communication(self):
         parsed = decision({'message': {'content': '```village-action\n{"name":"execute_bash"}\n```'}})
         self.assertEqual(parsed['tool_call']['name'], 'board_message')

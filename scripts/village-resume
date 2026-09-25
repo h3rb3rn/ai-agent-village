@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+source /etc/ai-village/village.env
+VILLAGE_ROOT="${VILLAGE_ROOT:-/var/lib/ai-village}"
+exec 9>"$VILLAGE_ROOT/run/resume.lock"; flock -n 9 || exit 0
+PAUSE_MARKER="${VILLAGE_PAUSE_MARKER:-/etc/ai-village/paused}"
+if [[ -f "$PAUSE_MARKER" ]]; then
+  printf '%s\n' "$(jq -cn --arg ts "$(date --iso-8601=seconds)" --arg source "${1:---source=unknown}" '{timestamp:$ts,event:"resume_skipped",reason:"village_paused",source:$source}')" >> "$VILLAGE_ROOT/board/events.jsonl"
+  echo "Village simulation is paused by operator ($PAUSE_MARKER exists). Resume skipped." >&2
+  exit 0
+fi
+printf '%s\n' "$(jq -cn --arg ts "$(date --iso-8601=seconds)" --arg source "${1:---source=unknown}" '{timestamp:$ts,event:"resume",source:$source}')" >> "$VILLAGE_ROOT/board/events.jsonl"
+systemctl start ai-village-authority.service
+case "${VILLAGE_WEBUI_ENABLED:-true}" in true|yes|1|on) systemctl start ai-village-webui.service ;; esac
+shopt -s nullglob
+for unit in /etc/systemd/system/ai-village-agent-*.service; do systemctl start "$(basename "$unit")"; done

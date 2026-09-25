@@ -1,0 +1,96 @@
+{
+  "control": {
+    "paused": "Simulation ist pausiert.",
+    "resumed": "Simulation fortgesetzt.",
+    "status_running": "AI Village Status: aktiv",
+    "status_paused": "AI Village Status: pausiert",
+    "drain_completed": "Village entleert: alle aktiven Aufgaben abgeschlossen.",
+    "drain_timeout": "Drain-Zeitlimit überschritten: einige aktive Aufgaben wurden nicht beendet.",
+    "aborted": "Simulation sofort abgebrochen."
+  },
+  "security": {
+    "redacted": "<redacted>",
+    "permission_error": "Anmeldeinformationsdatei hat unsichere Berechtigungen: darf nicht gruppen- oder weltlesbar sein.",
+    "env_sanitized": "Subprozess-Umgebung erfolgreich von sensiblen Tokens bereinigt."
+  },
+  "inference": {
+    "unsupported_provider": "Nicht unterstützter Inferenz-Provider.",
+    "request_failed": "Inferenz-Anfrage fehlgeschlagen.",
+    "openai_vram_notice": "Server-seitige VRAM-Verwaltung ist für OpenAI-kompatible Inferenz nicht anwendbar."
+  },
+  "lifecycle": {
+    "reconciled": "Unvollständige Inferenz-Anfragen wurden in den Status 'unknown' überführt.",
+    "action_discarded": "Aktion verworfen wegen veralteter Generation oder doppelter Ausführung."
+  },
+  "coordinator": {
+    "task_created": "Aufgabe erfolgreich erstellt.",
+    "task_claimed": "Aufgabe erfolgreich beansprucht.",
+    "task_completed": "Aufgabe abgeschlossen.",
+    "task_yielded": "Aufgabe abgegeben.",
+    "task_already_claimed": "Aufgabe bereits vergeben; Kontaktiere den Eigentümer.",
+    "task_limit_exceeded": "64 offene Projekte existieren bereits; tritt einem bei oder schließe eines ab.",
+    "task_progress_recorded": "Aufgabenfortschritt erfasst.",
+    "task_stale_revision": "Veraltete Aufgabenrevision.",
+    "task_lease_renewed": "Aufgaben-Lease idempotent erneuert."
+  },
+  "inbox": {
+    "message_delivered": "Nachricht in den Prompt-Kontext übergeben.",
+    "message_acknowledged": "Nachricht bestätigt.",
+    "unacknowledged_pending": "Unbestätigte Nachrichten ausstehend."
+  },
+  "jobs": {
+    "job_started": "Hintergrundjob gestartet.",
+    "job_already_running": "Aktiver Werkzeugjob läuft bereits; warten oder abbrechen vor dem Start eines weiteren.",
+    "job_cancelled": "Job abgebrochen.",
+    "paused_blocked": "Ausführung blockiert: Simulation ist pausiert."
+  },
+  "artifacts": {
+    "registered": "Artefakt erfolgreich registriert.",
+    "claimed_success": "Artefakt-Erfolg beansprucht.",
+    "verified": "Unabhängige Peer-Verifikation des Artefakts abgeschlossen.",
+    "adopted": "Artefakt von Peer übernommen.",
+    "self_verification_rejected": "Autor kann das eigene Artefakt nicht peer-verifizieren.",
+    "tamper_detected": "Manipulation oder Dateiänderung am Artefakt erkannt."
+  },
+  "memory": {
+    "unauthorized": "Nicht autorisiert: Gültiges Memory-Authentifizierungstoken erforderlich.",
+    "quota_exceeded": "Speicherkontingent für Agenten überschritten.",
+    "access_denied": "Zugriff auf private Erinnerung verweigert.",
+    "memory_expired": "Erinnerung ist abgelaufen.",
+    "invalid_payload": "Ungültige Nutzlast oder Validierungsfehler.",
+    "backup_success": "Gedächtnisdatenbank erfolgreich gesichert."
+  },
+  "projection": {
+    "event_recorded": "Outbox-Projektionsereignis aufgezeichnet.",
+    "projected": "Outbox-Ereignisse erfolgreich auf Sinks projiziert.",
+    "rebuild_completed": "Vollständiger Rebuild des Projektionsindex abgeschlossen.",
+    "sink_offline": "Projektions-Sink offline; Wiederholung mit exponentiellem Backoff eingeplant."
+  },
+  "chroma": {
+    "semantic_search_success": "Chroma semantische Suche erfolgreich abgeschlossen.",
+    "fallback_to_lexical": "Chroma nicht verfügbar; Rückfall auf lexikalische SQLite-Suche erfolgt.",
+    "namespace_isolated": "Speicher-Namensraum strikt auf autorisierte Collections beschränkt."
+  },
+  "neo4j": {
+    "graph_projected": "Speicher-Graph-Projektion erfolgreich aktualisiert.",
+    "provenance_success": "Graph-Provenienz erfolgreich abgerufen.",
+    "fallback_to_sqlite": "Neo4j nicht verfügbar; Rückfall auf SQLite-Provenienz erfolgt."
+  },
+  "authority": {
+    "grant_success": "Fähigkeit erfolgreich erteilt.",
+    "revoke_success": "Fähigkeit erfolgreich entzogen.",
+    "request_submitted": "Fähigkeitsanfrage eingereicht.",
+    "request_decided": "Fähigkeitsanfrage entschieden.",
+    "pause_restart_skipped": "Dienst-Neustart übersprungen: Simulation ist durch Betreiber pausiert.",
+    "gpu_handles_revoked": "Aktive GPU-Geräte-Handles für Agenten beendet."
+  },
+  "containers": {
+    "audit_completed": "Host-Ressourcen- und Namensraum-Audit abgeschlossen.",
+    "storage_verified": "Speicher-Layout verifiziert; bestehende Dateien erhalten.",
+    "sandbox_started": "Rootless Container-Sandbox gestartet.",
+    "mount_forbidden": "Mount-Pfad außerhalb autorisierter Speichergrenzen abgewiesen.",
+    "pull_blocked": "Remote-Image-Download durch Pull-Never-Richtlinie blockiert.",
+    "compute_verified": "GPU-Rechenoperation im Container erfolgreich verifiziert.",
+    "compute_failed": "GPU-Berechnungsverifikation fehlgeschlagen."
+  }
+}
