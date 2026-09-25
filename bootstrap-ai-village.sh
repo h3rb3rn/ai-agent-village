@@ -121,6 +121,8 @@ install -m 0644 "$SCRIPT_DIR/web/decision.py" /usr/local/lib/ai-village/decision
 install -d -m 0755 /usr/local/lib/ai-village/village
 install -m 0644 "$SCRIPT_DIR/village/firewatch.py" /usr/local/lib/ai-village/village/firewatch.py
 install -m 0755 "$SCRIPT_DIR/scripts/village-firewatch" /usr/local/lib/ai-village/village-firewatch
+install -m 0644 "$SCRIPT_DIR/village/meetings.py" /usr/local/lib/ai-village/village/meetings.py
+install -m 0755 "$SCRIPT_DIR/scripts/meeting-scheduler.py" /usr/local/lib/ai-village/meeting-scheduler.py
 if [[ ! -e "$VILLAGE_ROOT/board/memory-substrate-orientation.json" ]]; then
   cat > "$VILLAGE_ROOT/board/memory-substrate-orientation.json" <<'TASK'
 {
@@ -972,6 +974,27 @@ RestrictAddressFamilies=AF_UNIX
 WantedBy=multi-user.target
 UNIT
 
+cat > /etc/systemd/system/ai-village-meeting-scheduler.service <<'UNIT'
+[Unit]
+Description=AI Village standup and jour fixe scheduler
+After=ai-village-memory-gateway.service
+[Service]
+Type=simple
+User=root
+Group=ai-village
+Environment=VILLAGE_ROOT=/var/lib/ai-village
+Environment=VILLAGE_MEETING_INTERVAL_SECONDS=21600
+ExecStart=/usr/bin/python3 /usr/local/lib/ai-village/meeting-scheduler.py
+Restart=always
+RestartSec=10
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/ai-village/board
+[Install]
+WantedBy=multi-user.target
+UNIT
+
 cat > /etc/cron.d/ai-village-resume <<'CRON'
 @reboot root /usr/local/sbin/village-resume --source=cron
 CRON
@@ -1140,7 +1163,7 @@ WantedBy=timers.target
 UNIT
 
 systemctl daemon-reload
-systemctl enable ai-village-authority.service ai-village-bootstrap.service ai-village-webui.service ai-village-telemetry.service ai-village-memory-gateway.service ai-village-memory-projection.service ai-village-firewatch.service
+systemctl enable ai-village-authority.service ai-village-bootstrap.service ai-village-webui.service ai-village-telemetry.service ai-village-memory-gateway.service ai-village-memory-projection.service ai-village-firewatch.service ai-village-meeting-scheduler.service
 for index in "${AGENT_INDEXES[@]}"; do systemctl enable "ai-village-agent-$(printf '%02d-%s' "$index" "$(get_agent "$index" NAME)").service"; done
 if is_true "$VILLAGE_AUTO_UPDATE"; then systemctl enable --now ai-village-update.timer; else systemctl disable --now ai-village-update.timer >/dev/null 2>&1 || true; fi
 if is_true "$VILLAGE_WEBUI_ENABLED"; then systemctl restart ai-village-webui.service; else systemctl disable --now ai-village-webui.service >/dev/null 2>&1 || true; fi
@@ -1148,5 +1171,6 @@ if is_true "$MEMORY_GATEWAY_ENABLED"; then systemctl restart ai-village-memory-g
 if is_true "$MEMORY_GATEWAY_ENABLED"; then systemctl restart ai-village-memory-projection.service; else systemctl disable --now ai-village-memory-projection.service >/dev/null 2>&1 || true; fi
 systemctl restart ai-village-telemetry.service
 systemctl restart ai-village-firewatch.service
+systemctl restart ai-village-meeting-scheduler.service
 systemctl start ai-village-bootstrap.service
 note "Village awake. Board: tail -f $VILLAGE_ROOT/board/events.jsonl"

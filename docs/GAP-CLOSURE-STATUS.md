@@ -37,7 +37,7 @@ Pro Paket Nachweis unter `docs/evidence/Pxx.md` anlegen, sobald tatsächlich dar
 | P18 | Fähigkeiten und Authority | P01, P08 | LOCAL_VERIFIED | [docs/evidence/P18.md](evidence/P18.md) |
 | P19 | Podman, Storage, M10 | P02, P18, Host-Freigabe | LOCAL_VERIFIED | [docs/evidence/P19.md](evidence/P19.md) |
 | P20 | Öffentlicher Kontakt | P00, P02, P05 | TODO | – |
-| P21 | Beobachtung und Historie | P06, P08, P13, P15 | PARTIAL / LOCAL_VERIFIED | [Firewatch](evidence/P21-firewatch.md), [Research Broker](evidence/P21-research.md) · Historien-/Dashboard-Anteil offen |
+| P21 | Beobachtung und Historie | P06, P08, P13, P15 | PARTIAL / LOCAL_VERIFIED | [Firewatch](evidence/P21-firewatch.md), [Research Broker](evidence/P21-research.md), [Meetings](evidence/P21-meetings.md) · Historien-/Dashboard-Anteil offen |
 | P22 | Dashboard-Integration | P09–P10, P13, P16–P17, P20–P21 | TODO | – |
 | P23 | Neuinstallation und Integration | P01–P22 lokal geprüft | TODO | – |
 | P24 | Update, Reboot und Restore | P01, P07, P18, P23 | TODO | – |

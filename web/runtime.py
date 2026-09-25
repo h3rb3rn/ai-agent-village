@@ -40,6 +40,7 @@ from village.artifacts import ArtifactStore
 from village.jobs import JobManager
 from village.teams import TeamStore
 from village.research import ResearchBroker
+from village.meetings import MeetingStore
 from village.lifecycle import InferenceState, InferenceTracker, classify_error
 from village.security import redact_text, sanitize_tool_env
 
@@ -172,6 +173,7 @@ class Resident:
         # P10.1/P25.1: project roles are plural, time-bounded team mandates.
         self.teams = TeamStore(self.board / 'coordination.sqlite3')
         self.research = ResearchBroker()
+        self.meetings = MeetingStore(self.board / 'coordination.sqlite3')
         # P12: SQLite-backed manager for persistent background tool jobs with crash reconciliation
         self.jobs = JobManager(self.home / 'jobs.sqlite3')
         reconciled_jobs = self.jobs.reconcile_stale_jobs(self.id)
@@ -301,6 +303,7 @@ class Resident:
             last_action_feedback=self.state.get('last_result'), own_recent_results=own,
             own_active_task=own_project, active_background_job=active_job_info,
             teams=active_teams,
+            active_meetings=self.meetings.active(),
             artifacts=recent_artifacts,
             untrusted_direct_messages=addressed[-12:], untrusted_peer_messages=chosen[:9],
             projects=projects[-32:], recent_organic_messages_untrusted=organic[-3:],
@@ -314,6 +317,7 @@ class Resident:
                    'team_operation':'create(project,goal,role,coordination_mode?), join(team_id,role_variant?), leave(team_id), create_subtask(team_id,title,criterion), claim_subtask(subtask_id), complete_subtask(subtask_id,evidence), propose_role(team_id,role,rationale), vote_role(proposal_id,choice)',
                    'memory_remember':'content, kind, scope(private/shared)', 'memory_search':'query, scope(private/shared)',
                    'research_request':'source(wikipedia|github|dockerhub), query, limit?; read-only, no clone/pull/deploy',
+                   'meeting_operation':'report(meeting_id, achieved, evidence, next_step, blockers) or close(meeting_id)',
                    'idle':'intentional rest'},
             private_work_directory=str(self.home), groups=os.getgroups())
         if own_project and own_project.get('blockers'):
@@ -558,6 +562,15 @@ class Resident:
                 result = self.research.search(args.get('source'), args.get('query'), args.get('limit', 5))
                 self.event('research_result', json.dumps({k: result.get(k) for k in ('source', 'query', 'sha256', 'results')}, ensure_ascii=False))
                 self.feedback(name, json.dumps(result, ensure_ascii=False), True)
+            elif name == 'meeting_operation':
+                op = args.get('operation') or args.get('action')
+                if op == 'report':
+                    result = self.meetings.report(args['meeting_id'], self.id, args.get('achieved',''), args.get('evidence',''), args.get('next_step',''), args.get('blockers',''))
+                elif op == 'close':
+                    result = self.meetings.close(args['meeting_id'])
+                else:
+                    raise ValueError('meeting_operation requires report or close')
+                self.event('meeting_result', json.dumps(result, ensure_ascii=False)); self.feedback(name, json.dumps(result, ensure_ascii=False), True)
             else:
                 self.feedback('idle','Intentional rest; next turn may resume your own project.',True)
                 self.event('idle','intentional rest')

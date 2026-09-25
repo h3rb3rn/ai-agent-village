@@ -1,0 +1,18 @@
+[Unit]
+Description=AI Village standup and jour fixe scheduler
+After=ai-village-memory-gateway.service
+[Service]
+Type=simple
+User=root
+Group=ai-village
+Environment=VILLAGE_ROOT=/var/lib/ai-village
+Environment=VILLAGE_MEETING_INTERVAL_SECONDS=21600
+ExecStart=/usr/bin/python3 /usr/local/lib/ai-village/meeting-scheduler.py
+Restart=always
+RestartSec=10
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/ai-village/board
+[Install]
+WantedBy=multi-user.target

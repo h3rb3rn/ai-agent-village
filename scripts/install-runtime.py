@@ -71,7 +71,7 @@ def main():
     # runtime with an older, incomplete import tree.
     for module in ('__init__.py', 'artifacts.py', 'authority.py', 'config.py',
                    'containers.py', 'control.py', 'coordinator.py', 'inference.py',
-                   'firewatch.py', 'jobs.py', 'lifecycle.py', 'research.py', 'security.py', 'teams.py'):
+                   'firewatch.py', 'jobs.py', 'lifecycle.py', 'meetings.py', 'research.py', 'security.py', 'teams.py'):
         targets[Path('/usr/local/lib/ai-village/village') / module] = source / 'village' / module
     if not args.provision_only:
         for target,src in targets.items():
