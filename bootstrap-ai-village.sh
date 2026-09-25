@@ -137,6 +137,9 @@ TASK
   chmod 0640 "$VILLAGE_ROOT/board/memory-substrate-orientation.json"
 fi
 install -m 0755 "$SCRIPT_DIR/memory/gateway.py" /usr/local/lib/ai-village/memory-gateway.py
+install -d -m 0755 /usr/local/lib/ai-village/memory
+install -m 0644 "$SCRIPT_DIR"/memory/projection.py "$SCRIPT_DIR"/memory/chroma_adapter.py "$SCRIPT_DIR"/memory/neo4j_adapter.py /usr/local/lib/ai-village/memory/
+install -m 0755 "$SCRIPT_DIR/scripts/memory-projection-worker.py" /usr/local/lib/ai-village/memory-projection-worker.py
 install -m 0755 "$SCRIPT_DIR/memory/village-memory" /usr/local/bin/village-memory
 install -d -m 2770 -o root -g ai-village "$VILLAGE_ROOT" "$VILLAGE_ROOT/board" "$VILLAGE_ROOT/users" "$VILLAGE_ROOT/logs" "$VILLAGE_ROOT/run"
 install -d -m 2770 -o village-web -g ai-village "$VILLAGE_ROOT/memory"
@@ -920,6 +923,8 @@ NoNewPrivileges=true
 WantedBy=multi-user.target
 UNIT
 
+install -m 0644 "$SCRIPT_DIR/deployment/ai-village-memory-projection.service" /etc/systemd/system/ai-village-memory-projection.service
+
 cat > /etc/systemd/system/ai-village-telemetry.service <<'UNIT'
 [Unit]
 Description=AI Village passive telemetry collector
@@ -1135,11 +1140,12 @@ WantedBy=timers.target
 UNIT
 
 systemctl daemon-reload
-systemctl enable ai-village-authority.service ai-village-bootstrap.service ai-village-webui.service ai-village-telemetry.service ai-village-memory-gateway.service ai-village-firewatch.service
+systemctl enable ai-village-authority.service ai-village-bootstrap.service ai-village-webui.service ai-village-telemetry.service ai-village-memory-gateway.service ai-village-memory-projection.service ai-village-firewatch.service
 for index in "${AGENT_INDEXES[@]}"; do systemctl enable "ai-village-agent-$(printf '%02d-%s' "$index" "$(get_agent "$index" NAME)").service"; done
 if is_true "$VILLAGE_AUTO_UPDATE"; then systemctl enable --now ai-village-update.timer; else systemctl disable --now ai-village-update.timer >/dev/null 2>&1 || true; fi
 if is_true "$VILLAGE_WEBUI_ENABLED"; then systemctl restart ai-village-webui.service; else systemctl disable --now ai-village-webui.service >/dev/null 2>&1 || true; fi
 if is_true "$MEMORY_GATEWAY_ENABLED"; then systemctl restart ai-village-memory-gateway.service; else systemctl disable --now ai-village-memory-gateway.service >/dev/null 2>&1 || true; fi
+if is_true "$MEMORY_GATEWAY_ENABLED"; then systemctl restart ai-village-memory-projection.service; else systemctl disable --now ai-village-memory-projection.service >/dev/null 2>&1 || true; fi
 systemctl restart ai-village-telemetry.service
 systemctl restart ai-village-firewatch.service
 systemctl start ai-village-bootstrap.service

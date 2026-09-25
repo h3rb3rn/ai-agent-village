@@ -1,0 +1,28 @@
+[Unit]
+Description=AI Village SQLite memory projection worker
+After=network-online.target ai-village-memory-gateway.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=village-web
+Group=ai-village
+WorkingDirectory=/tmp
+Environment=PYTHONPATH=/usr/local/lib/ai-village
+Environment=MEMORY_DB=/var/lib/ai-village/memory/memory.sqlite3
+Environment=CHROMA_HOST=127.0.0.1
+Environment=CHROMA_PORT=8000
+Environment=NEO4J_URL=http://127.0.0.1:7474
+Environment=HOME=/mnt/ssd-data/ai-village-memory/cache-home
+Environment=XDG_CACHE_HOME=/mnt/ssd-data/ai-village-memory/cache-home/.cache
+EnvironmentFile=/etc/ai-village/memory.env
+ExecStart=/opt/ai-agent-village/.venv/bin/python /usr/local/lib/ai-village/memory-projection-worker.py --db=/var/lib/ai-village/memory/memory.sqlite3
+Restart=always
+RestartSec=10
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/ai-village/memory
+
+[Install]
+WantedBy=multi-user.target
