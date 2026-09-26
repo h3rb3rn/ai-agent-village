@@ -40,6 +40,10 @@ class MeetingStore:
             c.row_factory=sqlite3.Row
             return [dict(r) for r in c.execute("SELECT * FROM meetings WHERE status='open' ORDER BY scheduled_for").fetchall()]
 
+    def has_report(self, meeting_id, agent_id):
+        with sqlite3.connect(self.db_path, timeout=30) as c:
+            return c.execute("SELECT 1 FROM meeting_reports WHERE meeting_id=? AND agent_id=?", (meeting_id, agent_id)).fetchone() is not None
+
     def report(self, meeting_id, agent_id, achieved='', evidence='', next_step='', blockers=''):
         if not self.get(meeting_id): raise ValueError('meeting not found')
         with sqlite3.connect(self.db_path, timeout=30) as c:

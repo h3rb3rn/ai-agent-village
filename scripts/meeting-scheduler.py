@@ -14,6 +14,14 @@ INTERVAL=float(os.environ.get('VILLAGE_MEETING_INTERVAL_SECONDS','21600'))
 def main():
     meetings=MeetingStore(DB); board=CoordinationStore(DB, ROOT/'board')
     while True:
+        # Meetings are bounded; stale agendas must not block residents forever.
+        from datetime import datetime, timezone
+        for old in meetings.active():
+            try:
+                age=(datetime.now(timezone.utc)-datetime.fromisoformat(old['created_at'])).total_seconds()
+                if age > 4*3600: meetings.close(old['id'])
+            except (KeyError, ValueError):
+                meetings.close(old['id'])
         stamp=datetime.now(timezone.utc).strftime('%Y%m%dT%H%MZ')
         kind='daily_standup' if datetime.now(timezone.utc).hour % 24 == 8 else 'jour_fixe'
         mid=f'meeting_{kind}_{datetime.now(timezone.utc).strftime("%Y%m%d%H")}'

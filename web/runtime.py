@@ -377,6 +377,17 @@ class Resident:
             self.feedback(name, 'Execution blocked: simulation is paused ("pausiert startet nichts").', False)
             return False
 
+        # Open meetings are a bounded social checkpoint, not an invitation to
+        # flood the Board. Each resident must submit one evidence-based report
+        # before taking another non-idle action; after that the meeting is not
+        # consulted again for this agent.
+        if name not in ('meeting_operation', 'idle'):
+            pending = next((m for m in self.meetings.active() if not self.meetings.has_report(m['id'], self.id)), None)
+            if pending:
+                self.feedback(name, f"Meeting report required before other work: {pending['id']}. Submit one meeting_operation report with achieved, evidence, next_step and blockers.", False)
+                self.event('meeting_required', f"meeting_id={pending['id']}")
+                return False
+
         norm_name = name
         norm_args = dict(args)
         if name in ('execute_bash', 'start_job') and 'command' in norm_args:
