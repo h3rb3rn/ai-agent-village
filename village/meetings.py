@@ -38,7 +38,9 @@ class MeetingStore:
     def active(self):
         with sqlite3.connect(self.db_path) as c:
             c.row_factory=sqlite3.Row
-            return [dict(r) for r in c.execute("SELECT * FROM meetings WHERE status='open' ORDER BY scheduled_for").fetchall()]
+            # Newest open agenda is authoritative when a scheduler restart or
+            # delayed worker briefly leaves overlapping meetings behind.
+            return [dict(r) for r in c.execute("SELECT * FROM meetings WHERE status='open' ORDER BY scheduled_for DESC, created_at DESC").fetchall()]
 
     def has_report(self, meeting_id, agent_id):
         with sqlite3.connect(self.db_path, timeout=30) as c:
