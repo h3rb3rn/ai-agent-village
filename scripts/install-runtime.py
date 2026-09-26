@@ -16,9 +16,12 @@ import secrets
 import shlex
 import shutil
 import subprocess
+import sys
 import tempfile
 from datetime import datetime, timezone
 
+# Import the release package from the checkout being installed, whatever the cwd is.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from village.release import RELEASE_FILES, compute_sha256, get_git_revision
 
 
