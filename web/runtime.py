@@ -452,7 +452,6 @@ class Resident:
                 public_text = text.replace('village-action', '[unexecuted proposal]')
                 if hasattr(self.tasks, 'store'):
                     self.tasks.store.post_inbox_message(source='board', sender=self.id, content=public_text[:4000])
-                self.event('board_message', f'to=ALL; reply_to=; message={public_text[:4000]}')
             return
         self.state['invalid_streak'] = 0
         if not self.guard(name, args):
@@ -525,7 +524,6 @@ class Resident:
                 if reply_to == 'discussion_target':
                     reply_to = self.state.get('discussion_target_id') or ''
                 message = f'to={recipient}; reply_to={str(reply_to)[:120]}; message={args["message"][:4000]}'
-                self.event(name,message)
                 if hasattr(self.tasks, 'store'):
                     self.tasks.store.post_inbox_message(
                         source='direct' if recipient != 'ALL' else 'board',

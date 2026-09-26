@@ -50,6 +50,8 @@ class TestInboxAndAck(unittest.TestCase):
             content="Broadcast to all",
             recipient=None,
         )
+        events = (self.board / 'events.jsonl').read_text().splitlines()
+        self.assertTrue(any('board_message' in line for line in events))
 
         unacked = self.store.fetch_unacknowledged_messages(self.agent_id)
         unacked_ids = [m["id"] for m in unacked]

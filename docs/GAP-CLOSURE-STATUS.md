@@ -23,7 +23,7 @@ Pro Paket Nachweis unter `docs/evidence/Pxx.md` anlegen, sobald tatsächlich dar
 | P06 | Inferenz-Lebenszyklus | P02, P04 | PARTIAL / LOCAL_VERIFIED | [docs/evidence/P06.md](evidence/P06.md), [P06.1](evidence/P06.1.md) |
 | P07 | Drain und Abbruch | P01, P05, P06, Proxy-Baseline | PARTIAL / LOCAL_VERIFIED | [docs/evidence/P07.md](evidence/P07.md), [P07.1](evidence/P07.1.md) |
 | P08 | Koordinationsspeicher | P02, P06 | LOCAL_VERIFIED | [docs/evidence/P08.md](evidence/P08.md) |
-| P09 | Inbox und Ack | P08 | LOCAL_VERIFIED | [docs/evidence/P09.md](evidence/P09.md) |
+| P09 | Inbox und Ack | P08 | PARTIAL / LOCAL_VERIFIED | [docs/evidence/P09.md](evidence/P09.md), [P09.1](evidence/P09.1.md) |
 | P10 | Arbeitsfortschritt | P08, P09 | LOCAL_VERIFIED | [docs/evidence/P10.md](evidence/P10.md) |
 | P10.1 | Dynamische Rollen und plurale Teams | P08–P10 | LOCAL_VERIFIED | [docs/evidence/P10.1.md](evidence/P10.1.md) |
 | P14.1 | Rückwärtskompatible Memory-Schema-Migration | P14 | HOST_VERIFIED | [docs/evidence/P14.1.md](evidence/P14.1.md) |

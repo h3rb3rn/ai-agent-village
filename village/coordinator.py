@@ -678,6 +678,23 @@ class CoordinationStore:
             )
             conn.commit()
 
+        # SQLite is authoritative; board/events.jsonl is its readable,
+        # append-only projection. Only public board messages are projected.
+        if source == 'board':
+            event_path = self.board_dir / 'events.jsonl'
+            detail = f"to={recipient or 'ALL'}; reply_to={reply_to or ''}; message={str(content)[:4000]}"
+            event = {
+                'schema_version': '1.0', 'event_id': mid,
+                'run_id': 'coordination', 'timestamp': ts,
+                'source': 'coordination', 'kind': 'board_message',
+                'agent': sender, 'event': 'board_message', 'detail': detail,
+            }
+            event_path.parent.mkdir(parents=True, exist_ok=True)
+            with (self.board_dir / '.lock').open('a') as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX)
+                with event_path.open('a', encoding='utf-8') as handle:
+                    handle.write(json.dumps(event, ensure_ascii=False) + '\n')
+
         return {
             "id": mid,
             "source": source,
