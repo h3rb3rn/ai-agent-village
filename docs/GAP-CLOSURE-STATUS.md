@@ -44,7 +44,7 @@ Pro Paket Nachweis unter `docs/evidence/Pxx.md` anlegen, sobald tatsächlich dar
 | P21.9 | Kontrollierter Clean-State-Reset | P21.6–P21.8 | HOST_VERIFIED | [docs/evidence/P21.9.md](evidence/P21.9.md) |
 | P21.10 | Village-Diagnose: Modell, Tool-Protokoll, Prompt und Sozialkopplung | P21.9 | HOST_VERIFIED | [docs/analysis/VILLAGE-DIAGNOSTIC-2026-09-26.md](analysis/VILLAGE-DIAGNOSTIC-2026-09-26.md) |
 | P21.11 | Runtime-Zuverlässigkeit (Wakeup, Receipts, Board-Müll, Direkt-Sichtbarkeit) | P21.10 | LOCAL_VERIFIED | [docs/evidence/P21.11.md](evidence/P21.11.md) · Host-Rollout offen |
-| P21.12 | Host-Synchronisation (Drift, fehlende Module im Installer) | P21.11 | PARTIAL / LOCAL_VERIFIED | Installer und Release-Liste repariert ([P21.13–P21.19](evidence/P21.13-P21.19.md)); Rollout offen |
+| P21.12 | Host-Synchronisation (Drift, fehlende Module im Installer) | P21.11 | PARTIAL / LOCAL_VERIFIED | Installer und Release-Liste repariert ([P21.13–P21.19](evidence/P21.13-P21.19.md)) · **Blocker 2026-09-27:** Installer-Schutzprüfung: Host-`.env` `OLLAMA_AGENT_1_THINK_LEVEL=` (leer) ≠ installiertes King-Env `medium`. Betreiber gleicht `.env` an, danach Rollout M1 |
 | P21.13 | Strukturierte Einzelaktion (Ollama `format`) | P21.11 | LOCAL_VERIFIED | [P21.13–P21.19](evidence/P21.13-P21.19.md) · Canary/Host offen |
 | P21.14 | Prompt- und Kontextdiät | P21.13 | LOCAL_VERIFIED | [P21.13–P21.19](evidence/P21.13-P21.19.md) · Host offen |
 | P21.15 | Rollen-Neuzuschnitt (Aktionssätze, Rollenbeschreibung) | P21.14 | LOCAL_VERIFIED | [P21.13–P21.19](evidence/P21.13-P21.19.md) · Host offen |
