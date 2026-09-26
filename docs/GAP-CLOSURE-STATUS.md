@@ -42,6 +42,16 @@ Pro Paket Nachweis unter `docs/evidence/Pxx.md` anlegen, sobald tatsächlich dar
 | P21.7 | Runtime-/Action-Vertrag synchronisieren | P06, P09, P12, P21.6 | HOST_VERIFIED | [docs/evidence/P21.7.md](evidence/P21.7.md) |
 | P21.8 | Named-Peer-Konsultation | P21.6, P21.7 | HOST_VERIFIED | [docs/evidence/P21.8.md](evidence/P21.8.md) |
 | P21.9 | Kontrollierter Clean-State-Reset | P21.6–P21.8 | HOST_VERIFIED | [docs/evidence/P21.9.md](evidence/P21.9.md) |
+| P21.10 | Village-Diagnose: Modell, Tool-Protokoll, Prompt und Sozialkopplung | P21.9 | HOST_VERIFIED | [docs/analysis/VILLAGE-DIAGNOSTIC-2026-09-26.md](analysis/VILLAGE-DIAGNOSTIC-2026-09-26.md) |
+| P21.11 | Runtime-Zuverlässigkeit (Wakeup, Receipts, Board-Müll, Direkt-Sichtbarkeit) | P21.10 | LOCAL_VERIFIED | [docs/evidence/P21.11.md](evidence/P21.11.md) · Host-Rollout offen |
+| P21.12 | Host-Synchronisation (Drift, fehlende Module im Installer) | P21.11 | PARTIAL / LOCAL_VERIFIED | Installer und Release-Liste repariert ([P21.13–P21.19](evidence/P21.13-P21.19.md)); Rollout offen |
+| P21.13 | Strukturierte Einzelaktion (Ollama `format`) | P21.11 | LOCAL_VERIFIED | [P21.13–P21.19](evidence/P21.13-P21.19.md) · Canary/Host offen |
+| P21.14 | Prompt- und Kontextdiät | P21.13 | LOCAL_VERIFIED | [P21.13–P21.19](evidence/P21.13-P21.19.md) · Host offen |
+| P21.15 | Rollen-Neuzuschnitt (Aktionssätze, Rollenbeschreibung) | P21.14 | LOCAL_VERIFIED | [P21.13–P21.19](evidence/P21.13-P21.19.md) · Host offen |
+| P21.16 | Peer-Paarung durch die Runtime | P21.15 | LOCAL_VERIFIED | [P21.13–P21.19](evidence/P21.13-P21.19.md) · Host offen |
+| P21.17 | Aufgabenvorlagen (Versuchsarm, standardmäßig aus) | P21.16 | LOCAL_VERIFIED | [P21.13–P21.19](evidence/P21.13-P21.19.md) · Betreiberentscheid offen |
+| P21.18 | Laufzeit-Beobachtungen ins Gedächtnis | P21.16 | LOCAL_VERIFIED | [P21.13–P21.19](evidence/P21.13-P21.19.md) · Host offen |
+| P21.19 | Read-only-Metriken | P21.11 | LOCAL_VERIFIED | [P21.13–P21.19](evidence/P21.13-P21.19.md) · [Runbook](ROLLOUT-QUALITY-RECOVERY.md) |
 | P22 | Dashboard-Integration | P09–P10, P13, P16–P17, P20–P21 | PARTIAL / LOCAL_VERIFIED | [P22.1](evidence/P22.1.md), [P22.2](evidence/P22.2.md), [P22.3](evidence/P22.3.md) · Host-/Browser-Abnahme offen |
 | P22.4 | Responsives Gedächtnis-Substrat | P22 | HOST_VERIFIED | [docs/evidence/P22.4.md](evidence/P22.4.md) |
 | P23 | Neuinstallation und Integration | P01–P22 lokal geprüft | PARTIAL / LOCAL_VERIFIED | [P23.1](evidence/P23.1.md) · Frische Debian-VM-Abnahme offen |
