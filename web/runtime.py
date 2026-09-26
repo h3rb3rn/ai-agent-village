@@ -253,6 +253,7 @@ class Resident:
             key = x.get('agent')
             if key not in seen:
                 chosen.append(x); seen.add(key)
+        discussion_target = next((x for x in chosen if x.get('agent') not in (None, self.id)), None)
         self.pending_cursor = max((event_time(x) for x in events), default=cutoff)
         own = [x for x in events if x.get('agent') == self.id and x.get('event') in ('command_result', 'memory_result', 'task_result')][-3:]
         projects = read_json(self.tasks.path, [])
@@ -306,6 +307,7 @@ class Resident:
             active_meetings=self.meetings.active(),
             artifacts=recent_artifacts,
             untrusted_direct_messages=addressed[-12:], untrusted_peer_messages=chosen[:9],
+            discussion_target=discussion_target,
             projects=projects[-32:], recent_organic_messages_untrusted=organic[-3:],
             tools={'execute_bash':'command in your home; stdout and exit status returned next turn',
                    'start_job':'command, timeout_seconds? -> launch long-running background job with persistent ID (max 1 mutating job)',
