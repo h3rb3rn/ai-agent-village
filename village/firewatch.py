@@ -10,6 +10,7 @@ import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Callable
+from village.events import append_event
 
 
 @dataclass(frozen=True)
@@ -81,9 +82,10 @@ def append_alerts(observation: dict, path: Path) -> int:
     if not alerts:
         return 0
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as handle:
-        for alert in alerts:
-            handle.write(json.dumps({"source": "firewatch", **observation, "alert": alert}, ensure_ascii=False) + "\n")
+    for alert in alerts:
+        append_event(path, source='firewatch', kind='firewatch_alert',
+                     detail=alert.get('message'), observation=observation,
+                     alert=alert)
     return len(alerts)
 
 
@@ -91,4 +93,3 @@ def run(interval: float = 30.0, output: Path = Path("/var/lib/ai-village/telemet
     while True:
         append_alerts(observe(), output)
         time.sleep(max(1.0, interval))
-

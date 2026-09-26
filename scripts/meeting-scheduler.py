@@ -6,6 +6,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from village.coordinator import CoordinationStore
 from village.meetings import MeetingStore
+from village.events import append_event
 
 ROOT=Path(os.environ.get('VILLAGE_ROOT','/var/lib/ai-village'))
 DB=ROOT/'board'/'coordination.sqlite3'
@@ -28,5 +29,7 @@ def main():
         if not meetings.get(mid):
             m=meetings.schedule(kind, 'Progress, evidence, next step, blockers; no new project without a concrete criterion.', datetime.now(timezone.utc).isoformat(), 'rotating-council', mid)
             board.post_inbox_message('board','village-council',f'Meeting {kind} {mid} is open. Report achieved work, evidence, next step and blockers with meeting_operation; do not create status-only Board posts.',None,None,msg_id=f'{mid}_agenda')
+            append_event(ROOT/'board'/'events.jsonl', source='village-council', kind='meeting_opened',
+                         detail=m['agenda'], meeting_id=mid, meeting_kind=kind)
         time.sleep(max(60,INTERVAL))
 if __name__=='__main__': main()

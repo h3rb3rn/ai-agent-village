@@ -53,6 +53,7 @@ RELEASE_FILES = [
     ("village/research.py", "lib/village/research.py", 0o644),
     ("village/firewatch.py", "lib/village/firewatch.py", 0o644),
     ("village/teams.py", "lib/village/teams.py", 0o644),
+    ("village/events.py", "lib/village/events.py", 0o644),
     ("village/__init__.py", "lib/village/__init__.py", 0o644),
     ("village/authority.py", "lib/authority.py", 0o750),
     # Scripts & runners
