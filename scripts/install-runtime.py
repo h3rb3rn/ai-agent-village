@@ -19,6 +19,8 @@ import subprocess
 import tempfile
 from datetime import datetime, timezone
 
+from village.release import RELEASE_FILES, compute_sha256, get_git_revision
+
 
 def read_env(path):
     values = {}
@@ -34,6 +36,21 @@ def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def validate_release_sources(source):
+    """Fail closed when the checkout is missing a manifest-declared source."""
+    missing = []
+    hashes = {}
+    for relative, _, _ in RELEASE_FILES:
+        path = source / relative
+        if not path.is_file():
+            missing.append(relative)
+            continue
+        hashes[relative] = compute_sha256(path)
+    if missing:
+        raise ValueError('release source manifest incomplete: ' + ', '.join(missing))
+    return hashes
+
+
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--env',type=Path,default=Path('/opt/ai-agent-village/.env'))
@@ -44,6 +61,10 @@ def main():
     args=parser.parse_args()
     if not args.dry_run and os.geteuid()!=0: parser.error('must run as root')
     source=args.source.resolve()
+    try:
+        release_hashes = validate_release_sources(source)
+    except ValueError as exc:
+        parser.error(str(exc))
     config=read_env(args.env); env_hash=digest(args.env)
     agent_files=sorted(Path('/etc/ai-village/agents').glob('*.env'))
     agents=[read_env(p) for p in agent_files]
@@ -63,15 +84,17 @@ def main():
     if any(Path(a['VILLAGE_ROOT'])!=root for a in agents): parser.error('multiple roots not supported')
     targets={
         Path('/usr/local/lib/ai-village/runtime.py'):source/'web/runtime.py',
+        Path('/usr/local/lib/ai-village/event_history.py'):source/'web/event_history.py',
         Path('/usr/local/lib/ai-village/decision.py'):source/'web/decision.py',
         Path('/usr/local/lib/ai-village/memory-gateway.py'):source/'memory/gateway.py',
+        Path('/usr/local/lib/ai-village/append-event.py'):source/'scripts/append-event.py',
         Path('/usr/local/share/ai-village/system-prompt.txt'):source/'prompts/resident-system.txt'}
     # Runtime imports are installed as a self-contained package.  Keeping these
     # modules in the targeted release prevents a live host from running a newer
     # runtime with an older, incomplete import tree.
     for module in ('__init__.py', 'artifacts.py', 'authority.py', 'config.py',
                    'containers.py', 'control.py', 'coordinator.py', 'inference.py',
-                   'jobs.py', 'lifecycle.py', 'security.py', 'teams.py'):
+                   'events.py', 'event_retention.py', 'firewatch.py', 'jobs.py', 'lifecycle.py', 'meetings.py', 'research.py', 'research_protocol.py', 'interventions.py', 'research_tasks.py', 'rollout.py', 'lineage.py', 'recovery.py', 'security.py', 'teams.py'):
         targets[Path('/usr/local/lib/ai-village/village') / module] = source / 'village' / module
     if not args.provision_only:
         for target,src in targets.items():
@@ -156,7 +179,7 @@ def main():
         status='rolled-back'
         raise
     finally:
-        manifest=dict(timestamp=stamp,status=locals().get('status','failed'),source_hashes={str(v.relative_to(source)):digest(v) for v in targets.values() if v.exists()},env_sha256=env_hash,active_before=active,files=saved)
+        manifest=dict(timestamp=stamp,status=locals().get('status','failed'),source_revision=get_git_revision(source),release_source_hashes=release_hashes,source_hashes={str(v.relative_to(source)):digest(v) for v in targets.values() if v.exists()},env_sha256=env_hash,active_before=active,files=saved)
         (backup/'manifest.json').write_text(json.dumps(manifest,indent=2))
         print('Runtime backup/intervention manifest:',backup)
     print('Host .env unchanged; no dashboard files or model parameters rewritten.')

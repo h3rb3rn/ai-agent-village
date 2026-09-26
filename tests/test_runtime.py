@@ -9,6 +9,7 @@ from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'web'))
 from runtime import Resident,Tasks,resource_snapshot,tail,event_time
 from decision import decision
+from village.collaboration import CooperationCheckpoint
 
 
 class RuntimeTests(unittest.TestCase):
@@ -55,6 +56,21 @@ class RuntimeTests(unittest.TestCase):
         self.agent.execute(decision({'message':{'content':'{"name":'}}))
         self.assertEqual(tail(self.root/'board/events.jsonl')[0]['event'],'invalid_decision')
         self.assertEqual(self.agent.state['invalid_streak'],1)
+
+    def test_natural_language_fallback_is_board_observation(self):
+        self.agent.execute(decision({'message':{'content':'I inspected the habitat and found no reusable artifact yet.'}}))
+        events=tail(self.root/'board/events.jsonl')
+        self.assertTrue(any(e.get('event') == 'board_message' for e in events))
+
+    def test_consult_checkpoint_rejects_broadcast(self):
+        self.agent.current_collaboration_checkpoint = CooperationCheckpoint(
+            'consult', 'board_message', 'ask the named peer', peer_id='02-b'
+        )
+        self.agent.execute({'tool_call': {'name': 'board_message', 'arguments': {'recipient': 'ALL', 'message': 'broadcast'}}})
+        events = tail(self.root / 'board/events.jsonl')
+        self.assertEqual(self.agent.state['last_result']['ok'], False)
+        self.assertIn('Named peer consultation required', self.agent.state['last_result']['result'])
+        self.assertTrue(any(e.get('event') == 'collaboration_gate' for e in events))
 
     def test_resource_snapshot_is_locale_independent(self):
         with patch.dict(os.environ,{'LANG':'de_DE.UTF-8'}):

@@ -16,14 +16,14 @@ Pro Paket Nachweis unter `docs/evidence/Pxx.md` anlegen, sobald tatsächlich dar
 |---|---|---|---|---|
 | P00 | Baseline und Übergabe | – | LOCAL_VERIFIED | [docs/evidence/P00.md](evidence/P00.md) |
 | P01 | Persistente Pause | P00 | HOST_VERIFIED | [docs/evidence/P01.md](evidence/P01.md) |
-| P02 | Quellen und Release | P00, P01 | LOCAL_VERIFIED | [docs/evidence/P02.md](evidence/P02.md) |
+| P02 | Quellen und Release | P00, P01 | PARTIAL / LOCAL_VERIFIED | [docs/evidence/P02.md](evidence/P02.md), [P02.1](evidence/P02.1.md), [P02.2](evidence/P02.2.md), [P02.3](evidence/P02.3.md), [P02.4](evidence/P02.4.md), [P02.5](evidence/P02.5.md) |
 | P03 | Konfigurationsvertrag | P02 | LOCAL_VERIFIED | [docs/evidence/P03.md](evidence/P03.md) |
 | P04 | Provideradapter | P03 | LOCAL_VERIFIED | [docs/evidence/P04.md](evidence/P04.md) |
 | P05 | Secrets auf allen Aufrufwegen | P04 | LOCAL_VERIFIED | [docs/evidence/P05.md](evidence/P05.md) |
-| P06 | Inferenz-Lebenszyklus | P02, P04 | LOCAL_VERIFIED | [docs/evidence/P06.md](evidence/P06.md) |
-| P07 | Drain und Abbruch | P01, P05, P06, Proxy-Baseline | LOCAL_VERIFIED | [docs/evidence/P07.md](evidence/P07.md) |
+| P06 | Inferenz-Lebenszyklus | P02, P04 | PARTIAL / LOCAL_VERIFIED | [docs/evidence/P06.md](evidence/P06.md), [P06.1](evidence/P06.1.md), [P06.2](evidence/P06.2.md), [P06.3](evidence/P06.3.md) |
+| P07 | Drain und Abbruch | P01, P05, P06, Proxy-Baseline | PARTIAL / LOCAL_VERIFIED | [docs/evidence/P07.md](evidence/P07.md), [P07.1](evidence/P07.1.md) |
 | P08 | Koordinationsspeicher | P02, P06 | LOCAL_VERIFIED | [docs/evidence/P08.md](evidence/P08.md) |
-| P09 | Inbox und Ack | P08 | LOCAL_VERIFIED | [docs/evidence/P09.md](evidence/P09.md) |
+| P09 | Inbox und Ack | P08 | PARTIAL / LOCAL_VERIFIED | [docs/evidence/P09.md](evidence/P09.md), [P09.1](evidence/P09.1.md) |
 | P10 | Arbeitsfortschritt | P08, P09 | LOCAL_VERIFIED | [docs/evidence/P10.md](evidence/P10.md) |
 | P10.1 | Dynamische Rollen und plurale Teams | P08–P10 | LOCAL_VERIFIED | [docs/evidence/P10.1.md](evidence/P10.1.md) |
 | P14.1 | Rückwärtskompatible Memory-Schema-Migration | P14 | HOST_VERIFIED | [docs/evidence/P14.1.md](evidence/P14.1.md) |
@@ -32,18 +32,23 @@ Pro Paket Nachweis unter `docs/evidence/Pxx.md` anlegen, sobald tatsächlich dar
 | P13 | Artefaktverifikation | P10, P12 | LOCAL_VERIFIED | [docs/evidence/P13.md](evidence/P13.md) |
 | P14 | Memory-Sicherheit | P03, P05, P08 | LOCAL_VERIFIED | [docs/evidence/P14.md](evidence/P14.md) |
 | P15 | Projektionswarteschlange | P14 | LOCAL_VERIFIED | [docs/evidence/P15.md](evidence/P15.md) |
-| P16 | ChromaDB | P15, gepinnte Version/Embeddings | LOCAL_VERIFIED | [docs/evidence/P16.md](evidence/P16.md) |
-| P17 | Neo4j | P15, gepinnte Version | LOCAL_VERIFIED | [docs/evidence/P17.md](evidence/P17.md) |
+| P16 | ChromaDB | P15, gepinnte Version/Embeddings | LOCAL_VERIFIED / HOST_VERIFIED (P16.1) | [docs/evidence/P16.md](evidence/P16.md), [P16.1](evidence/P16.1.md) |
+| P17 | Neo4j | P15, gepinnte Version | LOCAL_VERIFIED / HOST_VERIFIED (P17.1) | [docs/evidence/P17.md](evidence/P17.md), [P17.1](evidence/P17.1.md) |
 | P18 | Fähigkeiten und Authority | P01, P08 | LOCAL_VERIFIED | [docs/evidence/P18.md](evidence/P18.md) |
 | P19 | Podman, Storage, M10 | P02, P18, Host-Freigabe | LOCAL_VERIFIED | [docs/evidence/P19.md](evidence/P19.md) |
-| P20 | Öffentlicher Kontakt | P00, P02, P05 | TODO | – |
-| P21 | Beobachtung und Historie | P06, P08, P13, P15 | TODO | – |
-| P22 | Dashboard-Integration | P09–P10, P13, P16–P17, P20–P21 | TODO | – |
-| P23 | Neuinstallation und Integration | P01–P22 lokal geprüft | TODO | – |
-| P24 | Update, Reboot und Restore | P01, P07, P18, P23 | TODO | – |
-| P25 | Forschungsprotokoll | P13, P21 | TODO | – |
-| P26 | Gestufter Live-Rollout | P01–P25, explizite Startfreigabe | TODO | – |
-| P27 | Nachkommenpipeline | P13, P19, P24–P26, Budget | TODO | Bedingte Erweiterung |
+| P20 | Öffentlicher Kontakt | P00, P02, P05 | PARTIAL / LOCAL_VERIFIED | [P20.1](evidence/P20.1.md) · Host-Abnahme offen |
+| P21 | Beobachtung und Historie | P06, P08, P13, P15 | PARTIAL / LOCAL_VERIFIED | [Firewatch](evidence/P21-firewatch.md), [Research Broker](evidence/P21-research.md), [Meetings](evidence/P21-meetings.md), [P21.2](evidence/P21.2.md), [P21.3](evidence/P21.3.md), [P21.4](evidence/P21.4.md), [P21.5](evidence/P21.5.md) · Host-Abnahme/Lastmessung offen |
+| P21.6 | Forschungs- und Kooperations-Checkpoints | P09, P10, P14, P21 | HOST_VERIFIED | [docs/evidence/P21.6.md](evidence/P21.6.md) |
+| P21.7 | Runtime-/Action-Vertrag synchronisieren | P06, P09, P12, P21.6 | HOST_VERIFIED | [docs/evidence/P21.7.md](evidence/P21.7.md) |
+| P21.8 | Named-Peer-Konsultation | P21.6, P21.7 | HOST_VERIFIED | [docs/evidence/P21.8.md](evidence/P21.8.md) |
+| P21.9 | Kontrollierter Clean-State-Reset | P21.6–P21.8 | HOST_VERIFIED | [docs/evidence/P21.9.md](evidence/P21.9.md) |
+| P22 | Dashboard-Integration | P09–P10, P13, P16–P17, P20–P21 | PARTIAL / LOCAL_VERIFIED | [P22.1](evidence/P22.1.md), [P22.2](evidence/P22.2.md), [P22.3](evidence/P22.3.md) · Host-/Browser-Abnahme offen |
+| P22.4 | Responsives Gedächtnis-Substrat | P22 | HOST_VERIFIED | [docs/evidence/P22.4.md](evidence/P22.4.md) |
+| P23 | Neuinstallation und Integration | P01–P22 lokal geprüft | PARTIAL / LOCAL_VERIFIED | [P23.1](evidence/P23.1.md) · Frische Debian-VM-Abnahme offen |
+| P24 | Update, Reboot und Restore | P01, P07, P18, P23 | PARTIAL / HOST_VERIFIED | [P24.1](evidence/P24.1.md), [P24.2](evidence/P24.2.md), [P24.3](evidence/P24.3.md), [P24.4](evidence/P24.4.md) · Running-Reboot/Restore offen |
+| P25 | Forschungsprotokoll | P13, P21 | PARTIAL / LOCAL_VERIFIED | [P25.1](evidence/P25.1.md), [P25.2](evidence/P25.2.md), [P25.3](evidence/P25.3.md), [RESEARCH-PROTOCOL.md](RESEARCH-PROTOCOL.md) · Experimentdefinition offen |
+| P26 | Gestufter Live-Rollout | P01–P25, explizite Startfreigabe | PARTIAL / LOCAL_VERIFIED | [P26.1](evidence/P26.1.md), [P26.2](evidence/P26.2.md), [P26.3](evidence/P26.3.md) · Canary-Start und Host-Abnahme offen |
+| P27 | Nachkommenpipeline | P13, P19, P24–P26, Budget | DEFERRED_CONDITION / LOCAL_VERIFIED | [P27.1](evidence/P27.1.md) · Training/GPU/Kindstart erst nach Gates |
 | P28 | Interkolonie-UDP | P09, P18, P20, P24–P26, zweite Kolonie | TODO | Bedingte Erweiterung |
 | P29 | Abschluss und Release | P00–P26, Status P27/P28 dokumentiert | TODO | – |
 
@@ -69,3 +74,4 @@ Pro Paket Nachweis unter `docs/evidence/Pxx.md` anlegen, sobald tatsächlich dar
 - **2026-09-25 P17 Echte Neo4j-Anbindung**: Status `LOCAL_VERIFIED`. Modul `memory/neo4j_adapter.py` (`Neo4jProjectionAdapter`) implementiert mit Standardbibliothek-HTTP-Client für Cypher Transactional API (`/db/neo4j/tx/commit`, Zero External Dependencies), typisiertem Graph-Schema (Agent, Memory, Task, Artifact) und statusbehafteten Kanten (`observed`, `claimed`, `inferred`). Vollständig parametrisierte Cypher-Queries ohne Cypher-Injection, strikte Autorisierungs- und Scope-Prüfungen bei Provenienzabfragen (`GET /v1/memories/<id>/provenance`), automatischer SQLite-Provenance-Fallback bei Offline-Status, Fehlerisolierung und Rebuild-Fähigkeit. Unittests in `tests/test_neo4j_adapter.py` (148 Tests bestanden). Nachweis unter `docs/evidence/P17.md`.
 - **2026-09-25 P18 Fähigkeiten und Autorität über den King**: Status `LOCAL_VERIFIED`. Modul `village/authority.py` (`AuthorityCore`, `run_socket_server`) refaktoriert: Trennung von feingranularen Unix-Capabilities (`containers`, `gpu`, `steward`) und Rollen (wobei `resident` stets `containers` für unprivilegiertes Rootless-Podman umfasst), strukturierte Antragsverwaltung via SQLite (`capability_requests`), SO_PEERCRED King-Authentifizierung über Unix Domain Socket, gezielte Terminierung aktiver GPU-Handles der Agenten-UID bei Revocation ohne Berührung fremder Prozesse, strikte Fehlerberichterstattung (keine Scheinerfolge) und Respektierung des Pause-Zustands (`/etc/ai-village/paused`). Unittests in `tests/test_authority.py` (157 Tests in der Gesamt-Suite bestanden). Nachweis unter `docs/evidence/P18.md`.
 - **2026-09-25 P19 Container, Datenträger und M10 experimentell benutzbar machen**: Status `LOCAL_VERIFIED`. Modul `village/containers.py` (`HostResourceAudit`, `audit_host_environment`, `StorageManager`, `PodmanSandbox`, `verify_gpu_compute`, `describe_agent_capabilities`) implementiert: Host-Hardware-, Mount- und SubUID-Inventarisierung, strikte Trennung von privatem (`/var/lib/ai-village/storage/agents/<agent>`, `0700`) und geteiltem Speicher (`/var/lib/ai-village/storage/shared`, `02770`) unter vollständigem Erhalt bestehender Daten, Abweisung von Path-Traversal und Systemmounts (`/etc`, `/proc`, `/sys`), gehärtete unprivilegierte Sandbox-Ausführung mit `--network=none`, `--read-only`, Limits und striktem Pull-Verbot (`--pull=never`), echte mathematische GPU-Rechenverifikation im Container sowie strukturierte Umgebungs- und Werkzeugbeschreibung für Agenten. Unittests in `tests/test_podman_sandbox.py` (166 Tests in der Gesamt-Suite bestanden). Nachweis unter `docs/evidence/P19.md`.
+- **2026-09-25 P21 Firewatch-Teilpaket**: Status `LOCAL_VERIFIED`. Der unabhängige, rein lesende `village.firewatch`-Guard überwacht RAM, Speicherplatz, Load und Memory-/Telemetry-Dienste und schreibt nur bei Schwellenverletzungen nach `telemetry/firewatch.jsonl`. Keine Modellaufrufe, Prozessabbrüche, Neustarts oder Netzwerkänderungen. King ist im Resident-Prompt als optionaler Koordinator beschrieben. Nachweis unter `docs/evidence/P21-firewatch.md`.

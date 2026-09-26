@@ -61,6 +61,29 @@ class ObservatoryTests(unittest.TestCase):
         self.assertEqual(parsed['tool_call']['name'], 'board_message')
         self.assertNotIn('execute_bash', parsed['tool_call']['arguments']['message'])
 
+    def test_runtime_actions_are_accepted_by_parser(self):
+        actions = [
+            ('meeting_operation', {'operation': 'report', 'meeting_id': 'm1'}),
+            ('team_operation', {'operation': 'join', 'team_id': 't1'}),
+            ('research_request', {'source': 'wikipedia', 'query': 'graph theory'}),
+            ('artifact_operation', {'operation': 'inspect', 'artifact_id': 'a1'}),
+            ('start_job', {'command': 'printf ok'}),
+        ]
+        for name, arguments in actions:
+            parsed = decision({'message': {'content': json.dumps({'name': name, 'arguments': arguments})}})
+            self.assertEqual(parsed['tool_call']['name'], name)
+            self.assertNotIn('fallback_reason', parsed)
+
+    def test_invalid_runtime_action_arguments_remain_fail_closed(self):
+        parsed = decision({'message': {'content': json.dumps({'name': 'research_request', 'arguments': {'source': 'random-web', 'query': 'x'}})}})
+        self.assertEqual(parsed['fallback_reason'], 'unsupported research source')
+
+    def test_documented_legacy_action_aliases_are_normalized(self):
+        meeting = decision({'message': {'content': json.dumps({'name': 'meeting_operation', 'arguments': {'action': 'report', 'meeting_id': 'm1'}})}})
+        self.assertEqual(meeting['tool_call']['arguments']['operation'], 'report')
+        team = decision({'message': {'content': json.dumps({'name': 'team_operation', 'arguments': {'project': 'p', 'goal': 'g', 'role': 'builder'}})}})
+        self.assertEqual(team['tool_call']['arguments']['operation'], 'create')
+
     def test_execution_and_repeats_are_distinct(self):
         events = [dict(agent='a', event='command_start', detail='observation=x; command=ls  -l; message=x'),
                   dict(agent='a', event='command_start', detail='command=ls -l; message=x'),

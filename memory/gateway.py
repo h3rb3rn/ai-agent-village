@@ -284,6 +284,23 @@ def format_memory_row(row: sqlite3.Row) -> Dict[str, Any]:
     return item
 
 
+def projection_stats(conn: sqlite3.Connection) -> Dict[str, Any]:
+    """Return authoritative outbox sequence and per-backend projection lag."""
+    conn.row_factory = sqlite3.Row
+    max_sequence = int(conn.execute("SELECT coalesce(max(sequence_id), 0) FROM memory_outbox").fetchone()[0])
+    backends = {}
+    for row in conn.execute("SELECT * FROM projection_states ORDER BY backend").fetchall():
+        last = int(row["last_sequence_id"])
+        backends[row["backend"]] = {
+            "last_sequence_id": last,
+            "lag": max(0, max_sequence - last),
+            "status": row["status"],
+            "error_count": int(row["error_count"]),
+            "last_projected_at": row["last_projected_at"],
+        }
+    return {"max_sequence_id": max_sequence, "backends": backends}
+
+
 def is_expired(expires_at: Optional[str]) -> bool:
     """Check if an expiration timestamp is in the past."""
     if not expires_at:
@@ -353,6 +370,7 @@ class Handler(BaseHTTPRequestHandler):
                         """,
                         (owner, now_str, MAX_RESULTS),
                     ).fetchall()
+                projection = projection_stats(conn)
                 conn.close()
                 return self.send_json(200, {"items": [format_memory_row(r) for r in rows]})
             except sqlite3.OperationalError as exc:
@@ -439,6 +457,7 @@ class Handler(BaseHTTPRequestHandler):
                         "agents": [dict(r) for r in rows],
                         "total": sum(r["memories"] for r in rows),
                         "chars": sum(r["chars"] for r in rows),
+                        "projection": projection,
                     },
                 )
             except sqlite3.OperationalError as exc:

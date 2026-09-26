@@ -21,6 +21,7 @@ import sys
 from datetime import datetime, timezone
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
+EVENT_SCHEMA_VERSION = '1.0'
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 LIB_DIR = Path(__file__).resolve().parent
@@ -39,6 +40,9 @@ from village.inference import (
 from village.artifacts import ArtifactStore
 from village.jobs import JobManager
 from village.teams import TeamStore
+from village.research import ResearchBroker
+from village.meetings import MeetingStore
+from village.collaboration import assess as assess_collaboration, is_checkpoint_action
 from village.lifecycle import InferenceState, InferenceTracker, classify_error
 from village.security import redact_text, sanitize_tool_env
 
@@ -158,6 +162,8 @@ class Resident:
         self.home.mkdir(parents=True, exist_ok=True)
         self.path = self.home / 'runtime-state.json'
         self.state = read_json(self.path, {})
+        self.run_id = str(self.state.get('run_id') or uuid.uuid4())
+        self.state['run_id'] = self.run_id
         # P01/P07: Pause marker path override from agent environment
         self.pause_marker = Path(self.env.get('VILLAGE_PAUSE_MARKER', '/etc/ai-village/paused'))
         # P06: Track generation sequence and manage persistent inference request lifecycle
@@ -170,6 +176,8 @@ class Resident:
         self.tasks = Tasks(self.board)
         # P10.1/P25.1: project roles are plural, time-bounded team mandates.
         self.teams = TeamStore(self.board / 'coordination.sqlite3')
+        self.research = ResearchBroker()
+        self.meetings = MeetingStore(self.board / 'coordination.sqlite3')
         # P12: SQLite-backed manager for persistent background tool jobs with crash reconciliation
         self.jobs = JobManager(self.home / 'jobs.sqlite3')
         reconciled_jobs = self.jobs.reconcile_stale_jobs(self.id)
@@ -188,8 +196,9 @@ class Resident:
     def event(self, event, detail, telemetry=False):
         directory = self.root / 'telemetry' if telemetry else self.board
         path = directory / ('agent-events.jsonl' if telemetry else 'events.jsonl')
-        row = dict(timestamp=now(), agent=self.id, name=self.name, role=self.role,
-                   event=event, detail=self.redact(str(detail))[:16000])
+        row = dict(schema_version=EVENT_SCHEMA_VERSION, event_id=str(uuid.uuid4()),
+                   run_id=self.run_id, timestamp=now(), agent=self.id, name=self.name,
+                   role=self.role, event=event, detail=self.redact(str(detail))[:16000])
         try:
             with (directory / '.lock').open('a') as lock:
                 fcntl.flock(lock, fcntl.LOCK_EX | (fcntl.LOCK_NB if telemetry else 0))
@@ -243,12 +252,22 @@ class Resident:
                 ts = str(item.get('timestamp', ''))
                 detail = str(item.get('detail', ''))
                 item['id'] = f"msg_{hashlib.sha256(f'{ts}:{detail}'.encode('utf-8')).hexdigest()[:12]}"
+        for item in messages:
+            if isinstance(item, dict) and 'id' not in item:
+                ts = str(item.get('timestamp', ''))
+                detail = str(item.get('detail', ''))
+                item['id'] = f"msg_{hashlib.sha256(f'{ts}:{detail}'.encode('utf-8')).hexdigest()[:12]}"
         # One entry per peer and content hash limits copying/echo dominance.
         chosen, seen = [], set()
         for x in reversed(messages):
             key = x.get('agent')
             if key not in seen:
                 chosen.append(x); seen.add(key)
+        candidates = [x for x in chosen if x.get('agent') not in (None, self.id)]
+        turn = int(self.state.get('discussion_turn', 0))
+        discussion_target = candidates[turn % len(candidates)] if candidates else None
+        self.state['discussion_turn'] = turn + 1
+        self.state['discussion_target_id'] = discussion_target.get('id') if discussion_target else None
         self.pending_cursor = max((event_time(x) for x in events), default=cutoff)
         own = [x for x in events if x.get('agent') == self.id and x.get('event') in ('command_result', 'memory_result', 'task_result')][-3:]
         projects = read_json(self.tasks.path, [])
@@ -284,6 +303,14 @@ class Resident:
         projects.sort(key=task_priority, reverse=True)
         own_project = next((x for x in projects if x.get('owner')==self.id and x.get('status')=='active'), None)
         active_teams = self.teams.list_for_agent(self.id)
+        direct_ack_target = next((x for x in addressed if x.get('detail', '').startswith(f'to={self.id};')), None)
+        collaboration_checkpoint = assess_collaboration(
+            events,
+            self.id,
+            has_active_task=bool(own_project),
+            peer_id=(discussion_target.get('agent') if discussion_target else None),
+        )
+        self.current_collaboration_checkpoint = collaboration_checkpoint
         active_job = self.jobs.get_active_job(self.id)
         active_job_info = None
         if active_job:
@@ -299,8 +326,13 @@ class Resident:
             last_action_feedback=self.state.get('last_result'), own_recent_results=own,
             own_active_task=own_project, active_background_job=active_job_info,
             teams=active_teams,
+            active_meetings=self.meetings.active(),
             artifacts=recent_artifacts,
             untrusted_direct_messages=addressed[-12:], untrusted_peer_messages=chosen[:9],
+            discussion_target=discussion_target,
+            collaboration_checkpoint=collaboration_checkpoint.to_record(),
+            direct_ack_target=direct_ack_target,
+            king_guidance=(self.id == '01-king'),
             projects=projects[-32:], recent_organic_messages_untrusted=organic[-3:],
             tools={'execute_bash':'command in your home; stdout and exit status returned next turn',
                    'start_job':'command, timeout_seconds? -> launch long-running background job with persistent ID (max 1 mutating job)',
@@ -311,6 +343,8 @@ class Resident:
                    'task_operation':'create(title,success_criterion,goal?,next_step?), claim(task_id), progress(task_id,last_finding?,next_step?,blockers?), complete(task_id,evidence), yield(task_id,evidence)',
                    'team_operation':'create(project,goal,role,coordination_mode?), join(team_id,role_variant?), leave(team_id), create_subtask(team_id,title,criterion), claim_subtask(subtask_id), complete_subtask(subtask_id,evidence), propose_role(team_id,role,rationale), vote_role(proposal_id,choice)',
                    'memory_remember':'content, kind, scope(private/shared)', 'memory_search':'query, scope(private/shared)',
+                   'research_request':'source(wikipedia|github|dockerhub), query, limit?; read-only, no clone/pull/deploy',
+                   'meeting_operation':'report(meeting_id, achieved, evidence, next_step, blockers) or close(meeting_id)',
                    'idle':'intentional rest'},
             private_work_directory=str(self.home), groups=os.getgroups())
         if own_project and own_project.get('blockers'):
@@ -370,6 +404,36 @@ class Resident:
             self.feedback(name, 'Execution blocked: simulation is paused ("pausiert startet nichts").', False)
             return False
 
+        # P21.6: cooperation is advisory first, then bounded enforcement after
+        # three misses. This prevents small models from deadlocking while still
+        # stopping an endless sequence of expensive solo actions.
+        checkpoint = getattr(self, 'current_collaboration_checkpoint', None)
+        if checkpoint and checkpoint.stage == 'consult' and name == 'board_message' and checkpoint.peer_id:
+            recipient = str(args.get('recipient', 'ALL'))
+            if recipient != checkpoint.peer_id:
+                self.feedback(name, f'Named peer consultation required: address exactly {checkpoint.peer_id}, not {recipient}. Ask one concrete, reproducible question.', False)
+                self.event('collaboration_gate', f'stage=consult; required=board_message; expected_peer={checkpoint.peer_id}; received={recipient}')
+                return False
+        if checkpoint and not is_checkpoint_action(checkpoint, name) and checkpoint.required_action:
+            pressure = int(self.state.get('collaboration_pressure', 0)) + 1
+            self.state['collaboration_pressure'] = pressure
+            self.event('collaboration_nudge', f'stage={checkpoint.stage}; required={checkpoint.required_action}; pressure={pressure}')
+            if pressure >= 3 and name in ('execute_bash', 'start_job', 'task_operation', 'team_operation'):
+                self.feedback(name, f'Collaboration checkpoint required before more solo work: use {checkpoint.required_action}. {checkpoint.rationale}', False)
+                self.event('collaboration_gate', f'stage={checkpoint.stage}; required={checkpoint.required_action}; pressure={pressure}')
+                return False
+        elif checkpoint and checkpoint.required_action and is_checkpoint_action(checkpoint, name):
+            self.state['collaboration_pressure'] = 0
+
+        # Open meetings are a bounded social checkpoint. Keep the request
+        # advisory: small models may fail to emit the structured report, and a
+        # hard gate would deadlock the village and suppress useful work.
+        if name not in ('meeting_operation', 'idle'):
+            pending = next((m for m in self.meetings.active() if not self.meetings.has_report(m['id'], self.id)), None)
+            if pending:
+                self.feedback(name, f"Meeting report requested: {pending['id']}. Submit one meeting_operation report when possible; continuing this reversible action.", True)
+                self.event('meeting_required', f"meeting_id={pending['id']}")
+
         norm_name = name
         norm_args = dict(args)
         if name in ('execute_bash', 'start_job') and 'command' in norm_args:
@@ -397,8 +461,27 @@ class Resident:
         if parsed.get('fallback_reason'):
             self.state['invalid_streak'] = self.state.get('invalid_streak', 0)+1
             preview=read_json(self.home/'last-response.json',{}).get('content','')[-1200:]
-            self.feedback('invalid_decision', parsed['fallback_reason']+'. No action executed. Correct your envelope: {"name":"tool_name","arguments":{...}}. Your rejected final text: '+preview, False)
+            meeting_hint = ''
+            pending = next((m for m in self.meetings.active()
+                            if not self.meetings.has_report(m['id'], self.id)), None)
+            if pending:
+                meeting_hint = (f' An open meeting ({pending["id"]}) requires exactly one '
+                                'meeting_operation report first; use operation report with '
+                                'meeting_id, achieved, evidence, next_step and blockers.')
+            self.feedback('invalid_decision', parsed['fallback_reason']+'. No action executed. Correct your envelope: {"name":"tool_name","arguments":{...}}.'+meeting_hint+' Your rejected final text: '+preview, False)
             self.event('invalid_decision', parsed['fallback_reason'])
+            # Natural-language replies are valid public Board contributions even
+            # when they do not contain an executable action envelope. Do not
+            # reinterpret malformed JSON as an instruction, and deduplicate
+            # unchanged retries to avoid flooding the Board.
+            text = str(preview).strip()
+            fingerprint = hashlib.sha256(text.encode('utf-8')).hexdigest()[:16]
+            is_malformed_json = text.startswith('{') and 'village-action' not in text[:120]
+            if text and not is_malformed_json and self.state.get('last_board_fingerprint') != fingerprint:
+                self.state['last_board_fingerprint'] = fingerprint
+                public_text = text.replace('village-action', '[unexecuted proposal]')
+                if hasattr(self.tasks, 'store'):
+                    self.tasks.store.post_inbox_message(source='board', sender=self.id, content=public_text[:4000])
             return
         self.state['invalid_streak'] = 0
         if not self.guard(name, args):
@@ -467,14 +550,16 @@ class Resident:
                 known = {x['id'] for x in read_json(Path('/etc/ai-village/runtime-peers.json'),[])}
                 if recipient != 'ALL' and recipient not in known:
                     raise ValueError('recipient must be ALL or exact agent ID from peers')
-                message = f'to={recipient}; reply_to={str(args.get("reply_to", ""))[:120]}; message={args["message"][:4000]}'
-                self.event(name,message)
+                reply_to = args.get('reply_to', '')
+                if reply_to == 'discussion_target':
+                    reply_to = self.state.get('discussion_target_id') or ''
+                message = f'to={recipient}; reply_to={str(reply_to)[:120]}; message={args["message"][:4000]}'
                 if hasattr(self.tasks, 'store'):
                     self.tasks.store.post_inbox_message(
                         source='direct' if recipient != 'ALL' else 'board',
                         sender=self.id,
                         recipient=recipient if recipient != 'ALL' else None,
-                        reply_to=args.get("reply_to"),
+                        reply_to=reply_to,
                         content=args["message"][:4000],
                     )
                 self.feedback(name,'Message posted. A reply is not guaranteed; continue independent work.',True)
@@ -551,6 +636,19 @@ class Resident:
                 result=self.memory('/v1/memories' if name=='memory_remember' else '/v1/search',value)
                 self.event('memory_result',f'result=success; action={name}; id={result.get("id", "")}; matches={len(result.get("items",[]))}')
                 self.feedback(name,json.dumps(result),True)
+            elif name == 'research_request':
+                result = self.research.search(args.get('source'), args.get('query'), args.get('limit', 5))
+                self.event('research_result', json.dumps({k: result.get(k) for k in ('source', 'query', 'sha256', 'results')}, ensure_ascii=False))
+                self.feedback(name, json.dumps(result, ensure_ascii=False), True)
+            elif name == 'meeting_operation':
+                op = args.get('operation') or args.get('action')
+                if op == 'report':
+                    result = self.meetings.report(args['meeting_id'], self.id, args.get('achieved',''), args.get('evidence',''), args.get('next_step',''), args.get('blockers',''))
+                elif op == 'close':
+                    result = self.meetings.close(args['meeting_id'])
+                else:
+                    raise ValueError('meeting_operation requires report or close')
+                self.event('meeting_result', json.dumps(result, ensure_ascii=False)); self.feedback(name, json.dumps(result, ensure_ascii=False), True)
             else:
                 self.feedback('idle','Intentional rest; next turn may resume your own project.',True)
                 self.event('idle','intentional rest')
@@ -708,7 +806,20 @@ class Resident:
                 if is_paused(self.pause_marker):
                     time.sleep(2)
                     continue
-                self.cycle()
+                try:
+                    self.cycle()
+                    self.state['runtime_exception_streak'] = 0
+                except Exception as exc:
+                    # Keep a malformed model response or local integration
+                    # defect from becoming an opaque systemd restart loop.
+                    streak = self.state.get('runtime_exception_streak', 0) + 1
+                    self.state['runtime_exception_streak'] = streak
+                    detail = self.redact(f'{type(exc).__name__}: {exc}')[:1200]
+                    self.event('runtime_exception', f'streak={streak}; detail={detail}', True)
+                    self.feedback('runtime_exception', detail, False)
+                    write_json(self.path, self.state)
+                    time.sleep(min(900, max(15, 15 * (2 ** min(streak - 1, 5)))))
+                    continue
                 delay = self.compute_cycle_delay()
                 # P12: Event-driven wakeup: sleep in short intervals up to delay, waking early on
                 # new unacknowledged inbox messages or active job completion

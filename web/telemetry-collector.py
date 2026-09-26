@@ -4,6 +4,8 @@ import json, os, sqlite3, subprocess, time, urllib.request
 from observer import Resources, hardware
 from datetime import datetime, timezone
 from pathlib import Path
+from village.events import append_event
+from village.event_retention import rotate_jsonl
 
 ROOT = Path(os.environ.get("VILLAGE_ROOT", "/var/lib/ai-village"))
 OUT = ROOT / "telemetry"
@@ -12,6 +14,8 @@ LATEST = OUT / "latest.json"
 RAW = OUT / "events.jsonl"
 AGENTS = Path("/etc/ai-village/agents")
 INTERVAL = max(5, int(os.environ.get("VILLAGE_TELEMETRY_INTERVAL_SECONDS", "15")))
+ROTATION_BYTES = max(1024, int(os.environ.get("VILLAGE_TELEMETRY_ROTATION_BYTES", str(16 * 1024 * 1024))))
+ROTATION_KEEP = max(1, int(os.environ.get("VILLAGE_TELEMETRY_ROTATION_KEEP", "3")))
 
 def now(): return datetime.now(timezone.utc).isoformat()
 def envfile(path):
@@ -119,9 +123,9 @@ def main():
         payload = {"timestamp": now(), "agents": agents, "gpu": gpu(), "host": habitat(), "hardware": inventory, "memory": memory_status(), "resources": resources.sample(agents)}
         encoded = json.dumps(payload, ensure_ascii=False)
         db.execute("INSERT INTO snapshots(timestamp,payload) VALUES (?,?)", (stamp, encoded)); db.commit()
-        if RAW.exists() and RAW.stat().st_size > 16 * 1024 * 1024:
-            RAW.replace(OUT / 'events.previous.jsonl')
-        with RAW.open("a", encoding="utf-8") as handle: handle.write(encoded + "\n")
+        rotate_jsonl(RAW, max_bytes=ROTATION_BYTES, keep=ROTATION_KEEP,
+                     counter_path=OUT / 'event-retention.json')
+        append_event(RAW, source="telemetry", kind="telemetry_snapshot", **payload)
         temporary = LATEST.with_suffix('.tmp')
         temporary.write_text(encoded + "\n", encoding="utf-8"); temporary.replace(LATEST)
         db.execute("DELETE FROM snapshots WHERE timestamp < ?", (datetime.fromtimestamp(time.time() - 7 * 86400, timezone.utc).isoformat(),)); db.commit()

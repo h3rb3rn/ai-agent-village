@@ -33,6 +33,8 @@ import uuid
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
+from village.events import append_event
+
 logger = logging.getLogger("village.authority")
 
 SOCKET_PATH = "/run/ai-village-authority.sock"
@@ -209,21 +211,9 @@ class AuthorityCore:
         board_path = self.config.get("board")
         if not board_path:
             return
-        line = (
-            json.dumps(
-                {
-                    "timestamp": utc_now(),
-                    "agent": "authority",
-                    "event": "capability_change",
-                    "detail": detail,
-                },
-                ensure_ascii=False,
-            )
-            + "\n"
-        )
         try:
-            with open(board_path, "a", encoding="utf-8") as handle:
-                handle.write(line)
+            append_event(Path(board_path), source="authority", kind="capability_change",
+                         agent="authority", event="capability_change", detail=detail)
         except OSError as exc:
             logger.warning("Failed to append authority event to board %s: %s", board_path, exc)
 

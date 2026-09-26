@@ -7,6 +7,8 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
+from village.events import append_event
+from event_history import read_history
 
 ROOT = Path(os.environ["VILLAGE_ROOT"])
 OUTBOX = ROOT / "signals" / "outbox"
@@ -64,7 +66,8 @@ def send(handler, status, body, content_type="text/html; charset=utf-8"):
 def session_user(handler):
     cookie = handler.headers.get("Cookie", "")
     token = next((part.strip().split('=', 1)[1] for part in cookie.split(';') if part.strip().startswith('av_session=')), '')
-    expires = SESSIONS.get(token, 0)
+    session = SESSIONS.get(token, 0)
+    expires = session.get('expires', 0) if isinstance(session, dict) else session
     if token and expires > time.time(): return SIGNAL_USER
     if token: SESSIONS.pop(token, None)
     return ''
@@ -72,9 +75,19 @@ def session_user(handler):
 def signal_authorized(handler):
     return bool(SIGNAL_USER and SIGNAL_PASSWORD and session_user(handler))
 
+def session_csrf(handler):
+    cookie = handler.headers.get("Cookie", "")
+    token = next((part.strip().split('=', 1)[1] for part in cookie.split(';') if part.strip().startswith('av_session=')), '')
+    session = SESSIONS.get(token)
+    if not isinstance(session, dict) or session.get('expires', 0) <= time.time(): return ''
+    return str(session.get('csrf', ''))
+
 def auth_required(handler):
     body = '<section class="auth-card"><p class="eyebrow">GESCHÜTZTER ANTWORTKANAL</p><h2>Anmeldung für Signals</h2><p>Zum Senden einer Nachricht ist eine Anmeldung erforderlich. Die Zugangsdaten werden nur innerhalb der WebUI geprüft.</p><form method="post" action="/contact/login"><label>Benutzername<input name="username" autocomplete="username" required></label><label>Passwort<input type="password" name="password" autocomplete="current-password" required></label><input type="hidden" name="next" value="/signals#contact"><button type="submit">Anmelden</button></form></section>'
     send(handler, HTTPStatus.UNAUTHORIZED, page("Signal-Zugang", body))
+
+def login_card():
+    return '<section class="auth-card"><p class="eyebrow">GESCHÜTZTER ANTWORTKANAL</p><h2>Vor dem Senden anmelden</h2><p>Die Signale bleiben öffentlich lesbar. Für das Verfassen und Senden einer Nachricht ist vorher eine Anmeldung erforderlich.</p><a class="button" href="/contact/login">Zum Login</a></section>'
 
 def login_page(message=''):
     note = f'<p class="auth-error">{html.escape(message)}</p>' if message else ''
@@ -84,7 +97,7 @@ def page(title, content):
     return f'''<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{html.escape(title)}</title><link rel="stylesheet" href="/assets/observatory.css"></head><body><aside class="sidebar"><a class="brand" href="/dashboard">◈ AI VILLAGE</a><nav aria-label="Hauptnavigation"><a href="/dashboard">Übersicht</a><a href="/agents">Agenten</a><a href="/habitat">Lebensraum</a><a href="/timeline">Ereignisse</a><a href="/signals">Signale & Kontakt</a></nav></aside><main><h1>{html.escape(title)}</h1>{content}</main></body></html>'''
 
 def activity(limit=80):
-    return tail_events(EVENTS, limit)
+    return read_history((EVENTS, EVENTS.with_name('events.previous.jsonl')), limit=limit)
 
 def telemetry():
     try:
@@ -109,7 +122,7 @@ def telemetry_history(limit=120, hours=None):
         return []
 
 def inference_events(limit=200):
-    return tail_events(AGENT_TELEMETRY, limit)
+    return read_history((AGENT_TELEMETRY, AGENT_TELEMETRY.with_name('agent-events.previous.jsonl')), limit=limit)
 
 def skill_history(events):
     buckets = {}
@@ -173,8 +186,16 @@ class Handler(BaseHTTPRequestHandler):
         if route == '/contact':
             if not signal_authorized(self): return auth_required(self)
             return send(self, HTTPStatus.OK, page("Signal-Zugang bestätigt", "<p>Die Anmeldung ist aktiv. Kehre zu <a href=\"/signals#contact\">Signale & Kontakt</a> zurück und sende deine Nachricht.</p>"))
+        if route == '/contact/login':
+            return send(self, HTTPStatus.OK, login_page())
+        if route == '/contact/logout':
+            self.send_response(HTTPStatus.SEE_OTHER)
+            self.send_header('Location', '/signals#contact')
+            self.send_header('Set-Cookie', 'av_session=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax')
+            self.end_headers()
+            return
         if route == '/contact/status':
-            return send(self, HTTPStatus.OK, json.dumps({'authenticated': signal_authorized(self)}, ensure_ascii=False), 'application/json; charset=utf-8')
+            return send(self, HTTPStatus.OK, json.dumps({'authenticated': signal_authorized(self), 'csrf_token': session_csrf(self)}, ensure_ascii=False), 'application/json; charset=utf-8')
         if route == '/signals': self.path = '/'
         if self.path == "/healthz": return send(self, HTTPStatus.OK, "ok\n", "text/plain; charset=utf-8")
         if self.path == "/api/activity": return send(self, HTTPStatus.OK, json.dumps(activity(), ensure_ascii=False), "application/json; charset=utf-8")
@@ -208,7 +229,10 @@ class Handler(BaseHTTPRequestHandler):
             text = item.read_text(encoding="utf-8", errors="replace")
             headline = next((line[2:] for line in text.splitlines() if line.startswith("# ")), item.stem)
             entries.append(f"<article><h2>{html.escape(headline)}</h2><small>{html.escape(item.name)}</small><p><a href=\"/signals/{html.escape(item.name)}\">Signal lesen</a></p></article>")
-        form = """<form method=\"post\" action=\"/contact\"><h2>Antwort aus der Außenwelt</h2><p>Das Lesen ist öffentlich. Zum Senden öffnet der Browser eine geschützte Anmeldung. Keine Zugangsdaten oder privaten Informationen in die Nachricht schreiben.</p><label>Name oder Pseudonym<input name=\"name\" maxlength=\"80\"></label><label>Nachricht<textarea name=\"message\" required maxlength=\"4000\" rows=\"7\"></textarea></label><button type=\"submit\">Signal senden</button></form>"""
+        if signal_authorized(self):
+            form = """<form method=\"post\" action=\"/contact\"><h2>Antwort aus der Außenwelt</h2><p>Deine Anmeldung ist aktiv. Nachrichten werden als untrusted Signal behandelt.</p><label>Name oder Pseudonym<input name=\"name\" maxlength=\"80\"></label><label>Nachricht<textarea name=\"message\" required maxlength=\"4000\" rows=\"7\"></textarea></label><button type=\"submit\">Signal senden</button></form>"""
+        else:
+            form = login_card()
         content = "<p>Die Signale des AI Village werden in einen unbekannten Himmel gesendet. Niemand muss zuhören; jede Antwort wird als fremdes, untrusted Signal behandelt.</p>" + form + "".join(entries or ["<p>Noch keine Signale.</p>"])
         return send(self, HTTPStatus.OK, page("AI Village — Signale", content))
     def do_POST(self):
@@ -219,7 +243,7 @@ class Handler(BaseHTTPRequestHandler):
             password = form.get("password", [""])[0]
             if not SIGNAL_USER or not SIGNAL_PASSWORD or not (hmac.compare_digest(user, SIGNAL_USER) and hmac.compare_digest(password, SIGNAL_PASSWORD)):
                 return send(self, HTTPStatus.UNAUTHORIZED, login_page("Benutzername oder Passwort ist nicht korrekt."))
-            token = secrets.token_urlsafe(32); SESSIONS[token] = time.time() + 8 * 3600
+            token = secrets.token_urlsafe(32); SESSIONS[token] = {'expires': time.time() + 8 * 3600, 'csrf': secrets.token_urlsafe(32)}
             next_url = form.get("next", ["/signals#contact"])[0]
             if not next_url.startswith("/"): next_url = "/signals#contact"
             self.send_response(HTTPStatus.SEE_OTHER); self.send_header("Location", next_url); self.send_header("Set-Cookie", f"av_session={token}; Max-Age=28800; Path=/; HttpOnly; SameSite=Lax"); self.end_headers(); return
@@ -231,12 +255,20 @@ class Handler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length", "0"))
         if length <= 0 or length > MAX_MESSAGE + 512: return send(self, HTTPStatus.BAD_REQUEST, page("Ungültige Nachricht", "<p>Nachricht zu groß oder leer.</p>"))
         form = parse_qs(self.rfile.read(length).decode("utf-8", errors="replace"), keep_blank_values=True)
+        csrf = form.get("csrf_token", [""])[0]
+        expected_csrf = session_csrf(self)
+        if not expected_csrf or not hmac.compare_digest(csrf, expected_csrf):
+            return send(self, HTTPStatus.FORBIDDEN, page("Signal abgewiesen", "<p>Die Sitzungssicherheit ist abgelaufen. Bitte die Kontaktseite neu laden.</p>"))
         name = form.get("name", [""])[0].strip()[:80]
         message = form.get("message", [""])[0].strip()[:MAX_MESSAGE]
         if not message: return send(self, HTTPStatus.BAD_REQUEST, page("Ungültige Nachricht", "<p>Eine Nachricht ist erforderlich.</p>"))
         bucket.append(now); stamp = datetime.now(timezone.utc).isoformat()
         entry = {"timestamp": stamp, "event": "organic_message", "source": "public-webui", "name": name, "message": message, "untrusted": True}
-        append(INBOX, entry); append(EVENTS, {"timestamp": stamp, "event": "organic_message_received", "detail": "new untrusted organic message available in organic-inbox.jsonl"})
+        append(INBOX, entry)
+        append_event(EVENTS, source="public-webui", kind="organic_message_received",
+                     event="organic_message_received",
+                     detail="new untrusted organic message available in organic-inbox.jsonl",
+                     name=name, untrusted=True)
         return send(self, HTTPStatus.OK, page("Signal empfangen", "<p>Das Village hat das Signal in seinen Himmel aufgenommen. Eine Antwort ist nicht garantiert.</p><p><a href=\"/\">Zurück zu den Signalen</a></p>"))
 
 if __name__ == '__main__':

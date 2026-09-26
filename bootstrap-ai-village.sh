@@ -118,6 +118,11 @@ install -d -m 0755 /usr/local/share/ai-village/web
 install -m 0644 "$SCRIPT_DIR"/web/observatory.* /usr/local/share/ai-village/web/
 install -m 0644 "$SCRIPT_DIR/web/observer.py" /usr/local/lib/ai-village/observer.py
 install -m 0644 "$SCRIPT_DIR/web/decision.py" /usr/local/lib/ai-village/decision.py
+install -d -m 0755 /usr/local/lib/ai-village/village
+install -m 0644 "$SCRIPT_DIR/village/firewatch.py" /usr/local/lib/ai-village/village/firewatch.py
+install -m 0755 "$SCRIPT_DIR/scripts/village-firewatch" /usr/local/lib/ai-village/village-firewatch
+install -m 0644 "$SCRIPT_DIR/village/meetings.py" /usr/local/lib/ai-village/village/meetings.py
+install -m 0755 "$SCRIPT_DIR/scripts/meeting-scheduler.py" /usr/local/lib/ai-village/meeting-scheduler.py
 if [[ ! -e "$VILLAGE_ROOT/board/memory-substrate-orientation.json" ]]; then
   cat > "$VILLAGE_ROOT/board/memory-substrate-orientation.json" <<'TASK'
 {
@@ -134,6 +139,9 @@ TASK
   chmod 0640 "$VILLAGE_ROOT/board/memory-substrate-orientation.json"
 fi
 install -m 0755 "$SCRIPT_DIR/memory/gateway.py" /usr/local/lib/ai-village/memory-gateway.py
+install -d -m 0755 /usr/local/lib/ai-village/memory
+install -m 0644 "$SCRIPT_DIR"/memory/projection.py "$SCRIPT_DIR"/memory/chroma_adapter.py "$SCRIPT_DIR"/memory/neo4j_adapter.py /usr/local/lib/ai-village/memory/
+install -m 0755 "$SCRIPT_DIR/scripts/memory-projection-worker.py" /usr/local/lib/ai-village/memory-projection-worker.py
 install -m 0755 "$SCRIPT_DIR/memory/village-memory" /usr/local/bin/village-memory
 install -d -m 2770 -o root -g ai-village "$VILLAGE_ROOT" "$VILLAGE_ROOT/board" "$VILLAGE_ROOT/users" "$VILLAGE_ROOT/logs" "$VILLAGE_ROOT/run"
 install -d -m 2770 -o village-web -g ai-village "$VILLAGE_ROOT/memory"
@@ -283,6 +291,7 @@ done
 
 install -m 0644 "$SCRIPT_DIR/prompts/resident-system.txt" /usr/local/share/ai-village/system-prompt.txt
 install -m 0644 "$SCRIPT_DIR/web/runtime.py" /usr/local/lib/ai-village/runtime.py
+install -m 0644 "$SCRIPT_DIR/web/event_history.py" /usr/local/lib/ai-village/event_history.py
 install -d -m 0755 /usr/local/lib/ai-village/village
 for village_module in "$SCRIPT_DIR"/village/*.py; do
   install -m 0644 "$village_module" /usr/local/lib/ai-village/village/
@@ -292,6 +301,9 @@ cat > /usr/local/lib/ai-village/agent-runner <<'RUNNER'
 exec /usr/bin/python3 /usr/local/lib/ai-village/runtime.py
 RUNNER
 chmod 0755 /usr/local/lib/ai-village/agent-runner
+# P02.2 canonical helper overlay.
+install -m 0755 "$SCRIPT_DIR/scripts/agent-runner" /usr/local/lib/ai-village/agent-runner
+install -m 0755 "$SCRIPT_DIR/scripts/append-event.py" /usr/local/lib/ai-village/append-event.py
 
 cat > /usr/local/lib/ai-village/authority.py <<'AUTHORITY'
 #!/usr/bin/env python3
@@ -353,6 +365,9 @@ while True:
         conn.close()
 AUTHORITY
 chmod 0750 /usr/local/lib/ai-village/authority.py
+# P02.3 canonical authority entrypoint. The tested AuthorityCore remains in
+# village/authority.py; this wrapper keeps the existing service path stable.
+install -m 0750 "$SCRIPT_DIR/scripts/authority-server.py" /usr/local/lib/ai-village/authority.py
 
 cat > /usr/local/bin/village-authority <<'CLIENT'
 #!/usr/bin/env python3
@@ -569,6 +584,9 @@ def main():
 if __name__ == "__main__": main()
 TELEMETRY
 chmod 0755 /usr/local/lib/ai-village/telemetry-collector.py
+# P02.1 canonical-source overlay: the legacy heredoc above remains only as a
+# bootstrap fallback; the checked-out telemetry implementation is authoritative.
+install -m 0755 "$SCRIPT_DIR/web/telemetry-collector.py" /usr/local/lib/ai-village/telemetry-collector.py
 
 cat > /usr/local/lib/ai-village/webui.py <<'WEBUI'
 #!/usr/bin/env python3
@@ -816,6 +834,9 @@ if __name__ == '__main__':
     ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()
 WEBUI
 chmod 0755 /usr/local/lib/ai-village/webui.py
+# P02.1 canonical-source overlay: never let the historical embedded WebUI
+# silently replace the versioned repository implementation.
+install -m 0755 "$SCRIPT_DIR/web/webui.py" /usr/local/lib/ai-village/webui.py
 
 cat > /usr/local/sbin/village-resume <<'RESUME'
 #!/usr/bin/env bash
@@ -836,6 +857,8 @@ shopt -s nullglob
 for unit in /etc/systemd/system/ai-village-agent-*.service; do systemctl start "$(basename "$unit")"; done
 RESUME
 chmod 0755 /usr/local/sbin/village-resume
+# P02.2 canonical helper overlay.
+install -m 0755 "$SCRIPT_DIR/scripts/village-resume" /usr/local/sbin/village-resume
 
 cat > /usr/local/sbin/village-update <<'UPDATE'
 #!/usr/bin/env bash
@@ -850,6 +873,8 @@ apt-get update && apt-get -y dist-upgrade
 if [[ -f /var/run/reboot-required ]] && is_true "${VILLAGE_AUTO_REBOOT:-false}"; then systemctl reboot; fi
 UPDATE
 chmod 0755 /usr/local/sbin/village-update
+# P02.2 canonical helper overlay.
+install -m 0755 "$SCRIPT_DIR/scripts/village-update" /usr/local/sbin/village-update
 
 cat > /etc/systemd/system/ai-village-bootstrap.service <<'UNIT'
 [Unit]
@@ -917,6 +942,8 @@ NoNewPrivileges=true
 WantedBy=multi-user.target
 UNIT
 
+install -m 0644 "$SCRIPT_DIR/deployment/ai-village-memory-projection.service" /etc/systemd/system/ai-village-memory-projection.service
+
 cat > /etc/systemd/system/ai-village-telemetry.service <<'UNIT'
 [Unit]
 Description=AI Village passive telemetry collector
@@ -937,6 +964,50 @@ ReadWritePaths=/var/lib/ai-village/telemetry
 Nice=10
 MemoryMax=256M
 CPUQuota=25%
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+cat > /etc/systemd/system/ai-village-firewatch.service <<'UNIT'
+[Unit]
+Description=AI Village Firewatch infrastructure guard
+After=local-fs.target ai-village-telemetry.service
+Wants=ai-village-telemetry.service
+[Service]
+Type=simple
+User=root
+Group=root
+ExecStart=/usr/local/lib/ai-village/village-firewatch --interval=30 --output=/var/lib/ai-village/telemetry/firewatch.jsonl
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadOnlyPaths=/proc /sys
+ReadWritePaths=/var/lib/ai-village/telemetry
+RestrictAddressFamilies=AF_UNIX
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+cat > /etc/systemd/system/ai-village-meeting-scheduler.service <<'UNIT'
+[Unit]
+Description=AI Village standup and jour fixe scheduler
+After=ai-village-memory-gateway.service
+[Service]
+Type=simple
+User=root
+Group=ai-village
+Environment=VILLAGE_ROOT=/var/lib/ai-village
+Environment=VILLAGE_MEETING_INTERVAL_SECONDS=21600
+ExecStart=/usr/bin/python3 /usr/local/lib/ai-village/meeting-scheduler.py
+Restart=always
+RestartSec=10
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/ai-village/board
 [Install]
 WantedBy=multi-user.target
 UNIT
@@ -1109,11 +1180,14 @@ WantedBy=timers.target
 UNIT
 
 systemctl daemon-reload
-systemctl enable ai-village-authority.service ai-village-bootstrap.service ai-village-webui.service ai-village-telemetry.service ai-village-memory-gateway.service
+systemctl enable ai-village-authority.service ai-village-bootstrap.service ai-village-webui.service ai-village-telemetry.service ai-village-memory-gateway.service ai-village-memory-projection.service ai-village-firewatch.service ai-village-meeting-scheduler.service
 for index in "${AGENT_INDEXES[@]}"; do systemctl enable "ai-village-agent-$(printf '%02d-%s' "$index" "$(get_agent "$index" NAME)").service"; done
 if is_true "$VILLAGE_AUTO_UPDATE"; then systemctl enable --now ai-village-update.timer; else systemctl disable --now ai-village-update.timer >/dev/null 2>&1 || true; fi
 if is_true "$VILLAGE_WEBUI_ENABLED"; then systemctl restart ai-village-webui.service; else systemctl disable --now ai-village-webui.service >/dev/null 2>&1 || true; fi
 if is_true "$MEMORY_GATEWAY_ENABLED"; then systemctl restart ai-village-memory-gateway.service; else systemctl disable --now ai-village-memory-gateway.service >/dev/null 2>&1 || true; fi
+if is_true "$MEMORY_GATEWAY_ENABLED"; then systemctl restart ai-village-memory-projection.service; else systemctl disable --now ai-village-memory-projection.service >/dev/null 2>&1 || true; fi
 systemctl restart ai-village-telemetry.service
+systemctl restart ai-village-firewatch.service
+systemctl restart ai-village-meeting-scheduler.service
 systemctl start ai-village-bootstrap.service
 note "Village awake. Board: tail -f $VILLAGE_ROOT/board/events.jsonl"

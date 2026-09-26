@@ -4,6 +4,53 @@ import re
 import sys
 
 
+# Keep this contract in sync with Resident.execute(). The parser previously
+# accepted only the founding actions, so valid meeting/team/research/job/artifact
+# proposals were discarded before reaching the runtime.
+SUPPORTED_ACTIONS = frozenset({
+    'execute_bash', 'start_job', 'job_status', 'cancel_job',
+    'board_message', 'task_operation', 'team_operation', 'artifact_operation',
+    'memory_remember', 'memory_search', 'research_request', 'meeting_operation',
+    'idle',
+})
+
+
+def _normalize_action(name, args):
+    """Normalize documented legacy aliases without interpreting free prose."""
+    normalized = dict(args)
+    if name in ('meeting_operation', 'artifact_operation', 'team_operation') and not normalized.get('operation'):
+        if normalized.get('action'):
+            normalized['operation'] = normalized['action']
+        elif name == 'team_operation' and all(normalized.get(k) for k in ('project', 'goal', 'role')):
+            normalized['operation'] = 'create'
+    return normalized
+
+
+def _validate_action(name, args):
+    if name not in SUPPORTED_ACTIONS or not isinstance(args, dict):
+        return 'unknown action or malformed arguments'
+    required = {
+        'execute_bash': ('command',), 'start_job': ('command',),
+        'board_message': ('message',), 'memory_remember': ('content',),
+        'memory_search': ('query',), 'research_request': ('source', 'query'),
+        'meeting_operation': ('operation',), 'team_operation': ('operation',),
+        'artifact_operation': ('operation', 'artifact_id'),
+    }.get(name, ())
+    if any(not isinstance(args.get(field), str) or not args[field].strip() for field in required):
+        return 'missing action argument'
+    if name == 'task_operation' and args.get('action') not in ('create', 'claim', 'progress', 'complete', 'yield'):
+        return 'unknown task operation'
+    if name == 'research_request' and args.get('source') not in ('wikipedia', 'github', 'dockerhub'):
+        return 'unsupported research source'
+    if name == 'meeting_operation' and args.get('operation') not in ('report', 'close'):
+        return 'unknown meeting operation'
+    if name == 'team_operation' and args.get('operation') not in ('create', 'join', 'leave', 'create_subtask', 'claim_subtask', 'complete_subtask', 'propose_role', 'vote_role'):
+        return 'unknown team operation'
+    if name == 'artifact_operation' and args.get('operation') not in ('register', 'claim_success', 'verify', 'adopt', 'inspect'):
+        return 'unknown artifact operation'
+    return None
+
+
 def final_content(content):
     # Some imported models emit reasoning tags in message.content even when the
     # server has no separate thinking field. Never execute or broadcast that text.
@@ -65,13 +112,10 @@ def decision(response):
     tool = obj.get('tool_call', obj)
     if not isinstance(tool, dict): return fallback('invalid action envelope', content)
     name, args = tool.get('name'), tool.get('arguments', {})
-    if name not in ('execute_bash', 'board_message', 'memory_remember', 'memory_search', 'task_operation', 'idle') or not isinstance(args, dict):
-        return fallback('unknown action or malformed arguments', content)
-    field = {'execute_bash':'command','board_message':'message','memory_remember':'content','memory_search':'query'}.get(name)
-    if field and (not isinstance(args.get(field), str) or not args[field].strip()):
-        return fallback('missing action text', content)
-    if name == 'task_operation' and args.get('action') not in ('create','claim','complete','yield'):
-        return fallback('unknown task operation', content)
+    args = _normalize_action(name, args)
+    reason = _validate_action(name, args)
+    if reason:
+        return fallback(reason, content)
     return {'observation': str(obj.get('observation', ''))[:2000], 'tool_call': {'name': name, 'arguments': args}}
 
 
