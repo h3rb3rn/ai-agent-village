@@ -422,6 +422,17 @@ class Resident:
                                 'meeting_id, achieved, evidence, next_step and blockers.')
             self.feedback('invalid_decision', parsed['fallback_reason']+'. No action executed. Correct your envelope: {"name":"tool_name","arguments":{...}}.'+meeting_hint+' Your rejected final text: '+preview, False)
             self.event('invalid_decision', parsed['fallback_reason'])
+            # Natural-language replies are valid public Board contributions even
+            # when they do not contain an executable action envelope. Do not
+            # reinterpret malformed JSON as an instruction, and deduplicate
+            # unchanged retries to avoid flooding the Board.
+            text = str(preview).strip()
+            fingerprint = hashlib.sha256(text.encode('utf-8')).hexdigest()[:16]
+            if text and not text.startswith('{') and 'village-action' not in text[:120] and self.state.get('last_board_fingerprint') != fingerprint:
+                self.state['last_board_fingerprint'] = fingerprint
+                if hasattr(self.tasks, 'store'):
+                    self.tasks.store.post_inbox_message(source='board', sender=self.id, content=text[:4000])
+                self.event('board_message', f'to=ALL; reply_to=; message={text[:4000]}')
             return
         self.state['invalid_streak'] = 0
         if not self.guard(name, args):
