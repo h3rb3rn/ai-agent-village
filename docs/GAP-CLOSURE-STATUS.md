@@ -1,13 +1,11 @@
 # AI Village – Arbeitsstatus
 
-Plan erstellt am 24.09.2026. **Alle Arbeitspakete sind zunächst TODO.**
-Vorhandene Teilimplementierungen erst nach Prüfung als Abnahme anrechnen.
-Letzte Betreiberaktionen: Simulation am 25.09.2026 um 01:12 CEST kontrolliert
-freigegeben und über `village-resume` gestartet; am 25.09.2026 um 10:22 CEST für
-einen King-Modellwechsel und Knowledgebase-Arbeiten wieder pausiert. Derzeit sind
-alle neun Agent-Units `inactive/dead`; kein `runtime.py`-Prozess läuft. Dies sind
-Betriebs-Smoke-Tests, keine vollständige Live-Verhaltensabnahme (P26 bleibt TODO).
-Die Host-`.env` wurde nicht verändert.
+Plan erstellt am 24.09.2026; Stand dieser Datei: 2026-09-27. Die Tabelle unten ist maßgeblich
+(`LOCAL_VERIFIED` heißt nicht ausgerollt, `active` heißt nicht funktionierender Agent).
+Die Simulation läuft auf N06-M10 (kontrollierter Clean-State-Reset P21.9 am 26.09.2026, 21:00 UTC, danach
+Diagnose P21.10). Pakete P21.11–P21.19 sind lokal umgesetzt und getestet, aber noch nicht auf dem Host;
+Blocker und Rollout-Reihenfolge siehe [Runbook](ROLLOUT-QUALITY-RECOVERY.md) und
+[Grenzen/GAP-Register](analysis/LIMITS-AND-GAPS-2026-09-27.md). Die Host-`.env` wurde nicht verändert.
 
 Statuslegende und Regeln: [Plan](GAP-CLOSURE-PLAN.md#2-arbeitsweise-und-gemeinsame-verträge).
 Pro Paket Nachweis unter `docs/evidence/Pxx.md` anlegen, sobald tatsächlich daran gearbeitet wird.
@@ -52,6 +50,7 @@ Pro Paket Nachweis unter `docs/evidence/Pxx.md` anlegen, sobald tatsächlich dar
 | P21.17 | Aufgabenvorlagen (Versuchsarm, standardmäßig aus) | P21.16 | LOCAL_VERIFIED | [P21.13–P21.19](evidence/P21.13-P21.19.md) · Betreiberentscheid offen |
 | P21.18 | Laufzeit-Beobachtungen ins Gedächtnis | P21.16 | LOCAL_VERIFIED | [P21.13–P21.19](evidence/P21.13-P21.19.md) · Host offen |
 | P21.19 | Read-only-Metriken | P21.11 | LOCAL_VERIFIED | [P21.13–P21.19](evidence/P21.13-P21.19.md) · [Runbook](ROLLOUT-QUALITY-RECOVERY.md) |
+| P21.20 | GAP-Sweep: Web-UI-Härtung, Ressourcenlimits, Agent-Health, toleranter Parser | P21.11 | LOCAL_VERIFIED | [docs/evidence/P21.20.md](evidence/P21.20.md) · [Register](analysis/LIMITS-AND-GAPS-2026-09-27.md) · Host offen |
 | P22 | Dashboard-Integration | P09–P10, P13, P16–P17, P20–P21 | PARTIAL / LOCAL_VERIFIED | [P22.1](evidence/P22.1.md), [P22.2](evidence/P22.2.md), [P22.3](evidence/P22.3.md) · Host-/Browser-Abnahme offen |
 | P22.4 | Responsives Gedächtnis-Substrat | P22 | HOST_VERIFIED | [docs/evidence/P22.4.md](evidence/P22.4.md) |
 | P23 | Neuinstallation und Integration | P01–P22 lokal geprüft | PARTIAL / LOCAL_VERIFIED | [P23.1](evidence/P23.1.md) · Frische Debian-VM-Abnahme offen |

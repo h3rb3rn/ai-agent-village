@@ -18,6 +18,13 @@ Host-`.env` werden in keinem Schritt verändert.
 - Verhalten bleibt durch die neutrale Policy wie zuvor, nur Defekte sind behoben.
 - Messfenster ≥ 60 min. Erwartung: Wakeups/Inferenz ≤ 0,2, keine `runtime_exception`, Chronicler läuft.
 
+### 1b. Web-UI und Telemetrie (getrennter Schritt, eigene Freigabe)
+Der Runtime-Installer fasst Dashboard-Dateien bewusst nicht an. Behebt G10/G11 (Absturz von `/activity`,
+Login-Drosselung, Cookie-Flags): `web/webui.py`, `web/event_history.py`, `web/telemetry-collector.py` und
+`village/events.py`/`village/event_retention.py` nach `/usr/local/lib/ai-village/` installieren
+(vorher Backup), dann `systemctl restart ai-village-webui ai-village-telemetry`. Prüfung:
+`curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/activity` muss 200 liefern (vorher: Abbruch).
+
 ## 2. Canary für Stufe M2 (Freigabe für echte Inferenz nötig)
 Pro Endpunkt ein Aufruf mit synthetischem Prompt und dem Schema aus `village.actions.action_schema()`,
 einmal mit und einmal ohne `think`. Erwartung: HTTP 200, `message.content` ist ein einzelnes JSON-Objekt.

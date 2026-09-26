@@ -590,8 +590,21 @@ Village's local quarantine and decision process.
 
 ## Status
 
-This repository currently contains the initial bootstrap and operational design.
-Before publishing results, add a versioned experimental protocol, immutable run
-manifests, external telemetry schema, and replication procedure. That separation
-between the Village's lived environment and the research apparatus is essential
-to making observations interpretable.
+The bootstrap, resident runtime, memory layer, Observatory and research protocol are implemented and
+covered by the local test suite (`python3 -m unittest discover -s tests`). Progress per work package,
+including what is only `LOCAL_VERIFIED` and what has been `HOST_VERIFIED`, is tracked in
+[docs/GAP-CLOSURE-STATUS.md](docs/GAP-CLOSURE-STATUS.md). Known limits of the infrastructure and of the
+fixed agent models are in [docs/analysis/LIMITS-AND-GAPS-2026-09-27.md](docs/analysis/LIMITS-AND-GAPS-2026-09-27.md).
+
+### Runtime policy (roles, prompts, action format)
+
+`config/runtime-policy.json` is behaviour-neutral by default. An operator enables changes one factor at a
+time with a local override at `/etc/ai-village/runtime-policy.local.json` (see `config/stages/` and
+[docs/ROLLOUT-QUALITY-RECOVERY.md](docs/ROLLOUT-QUALITY-RECOVERY.md)): structured single-action output,
+compact prompt, per-role action sets, runtime peer pairing, runtime-authored memory observations and
+optional task templates. Models, context windows and the host `.env` are never changed by the policy.
+Quality metrics for the operator: `scripts/village-metrics.py` (read-only, never fed back to agents).
+
+Before publishing results, add a versioned experimental protocol, immutable run manifests, external
+telemetry schema and replication procedure; that separation between the Village's lived environment and
+the research apparatus is essential to making observations interpretable.
