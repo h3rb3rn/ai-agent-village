@@ -577,6 +577,9 @@ def main():
 if __name__ == "__main__": main()
 TELEMETRY
 chmod 0755 /usr/local/lib/ai-village/telemetry-collector.py
+# P02.1 canonical-source overlay: the legacy heredoc above remains only as a
+# bootstrap fallback; the checked-out telemetry implementation is authoritative.
+install -m 0755 "$SCRIPT_DIR/web/telemetry-collector.py" /usr/local/lib/ai-village/telemetry-collector.py
 
 cat > /usr/local/lib/ai-village/webui.py <<'WEBUI'
 #!/usr/bin/env python3
@@ -824,6 +827,9 @@ if __name__ == '__main__':
     ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()
 WEBUI
 chmod 0755 /usr/local/lib/ai-village/webui.py
+# P02.1 canonical-source overlay: never let the historical embedded WebUI
+# silently replace the versioned repository implementation.
+install -m 0755 "$SCRIPT_DIR/web/webui.py" /usr/local/lib/ai-village/webui.py
 
 cat > /usr/local/sbin/village-resume <<'RESUME'
 #!/usr/bin/env bash
