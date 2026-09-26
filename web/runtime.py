@@ -415,7 +415,14 @@ class Resident:
         if parsed.get('fallback_reason'):
             self.state['invalid_streak'] = self.state.get('invalid_streak', 0)+1
             preview=read_json(self.home/'last-response.json',{}).get('content','')[-1200:]
-            self.feedback('invalid_decision', parsed['fallback_reason']+'. No action executed. Correct your envelope: {"name":"tool_name","arguments":{...}}. Your rejected final text: '+preview, False)
+            meeting_hint = ''
+            pending = next((m for m in self.meetings.active()
+                            if not self.meetings.has_report(m['id'], self.agent_id)), None)
+            if pending:
+                meeting_hint = (f' An open meeting ({pending["id"]}) requires exactly one '
+                                'meeting_operation report first; use operation report with '
+                                'meeting_id, achieved, evidence, next_step and blockers.')
+            self.feedback('invalid_decision', parsed['fallback_reason']+'. No action executed. Correct your envelope: {"name":"tool_name","arguments":{...}}.'+meeting_hint+' Your rejected final text: '+preview, False)
             self.event('invalid_decision', parsed['fallback_reason'])
             return
         self.state['invalid_streak'] = 0
