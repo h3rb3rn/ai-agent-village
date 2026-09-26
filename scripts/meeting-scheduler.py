@@ -23,6 +23,12 @@ def main():
                 if age > 4*3600: meetings.close(old['id'])
             except (KeyError, ValueError):
                 meetings.close(old['id'])
+        # A scheduler restart must not create a second agenda while the current
+        # one is still open. The newest open meeting is the only social round;
+        # stale rounds are closed by the bounded cleanup above.
+        if meetings.active():
+            time.sleep(max(60, INTERVAL))
+            continue
         stamp=datetime.now(timezone.utc).strftime('%Y%m%dT%H%MZ')
         kind='daily_standup' if datetime.now(timezone.utc).hour % 24 == 8 else 'jour_fixe'
         mid=f'meeting_{kind}_{datetime.now(timezone.utc).strftime("%Y%m%d%H")}'
