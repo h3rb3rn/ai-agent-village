@@ -300,6 +300,8 @@ cat > /usr/local/lib/ai-village/agent-runner <<'RUNNER'
 exec /usr/bin/python3 /usr/local/lib/ai-village/runtime.py
 RUNNER
 chmod 0755 /usr/local/lib/ai-village/agent-runner
+# P02.2 canonical helper overlay.
+install -m 0755 "$SCRIPT_DIR/scripts/agent-runner" /usr/local/lib/ai-village/agent-runner
 
 cat > /usr/local/lib/ai-village/authority.py <<'AUTHORITY'
 #!/usr/bin/env python3
@@ -850,6 +852,8 @@ shopt -s nullglob
 for unit in /etc/systemd/system/ai-village-agent-*.service; do systemctl start "$(basename "$unit")"; done
 RESUME
 chmod 0755 /usr/local/sbin/village-resume
+# P02.2 canonical helper overlay.
+install -m 0755 "$SCRIPT_DIR/scripts/village-resume" /usr/local/sbin/village-resume
 
 cat > /usr/local/sbin/village-update <<'UPDATE'
 #!/usr/bin/env bash
@@ -864,6 +868,8 @@ apt-get update && apt-get -y dist-upgrade
 if [[ -f /var/run/reboot-required ]] && is_true "${VILLAGE_AUTO_REBOOT:-false}"; then systemctl reboot; fi
 UPDATE
 chmod 0755 /usr/local/sbin/village-update
+# P02.2 canonical helper overlay.
+install -m 0755 "$SCRIPT_DIR/scripts/village-update" /usr/local/sbin/village-update
 
 cat > /etc/systemd/system/ai-village-bootstrap.service <<'UNIT'
 [Unit]
