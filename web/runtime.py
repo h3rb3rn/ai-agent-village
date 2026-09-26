@@ -247,13 +247,22 @@ class Resident:
                 ts = str(item.get('timestamp', ''))
                 detail = str(item.get('detail', ''))
                 item['id'] = f"msg_{hashlib.sha256(f'{ts}:{detail}'.encode('utf-8')).hexdigest()[:12]}"
+        for item in messages:
+            if isinstance(item, dict) and 'id' not in item:
+                ts = str(item.get('timestamp', ''))
+                detail = str(item.get('detail', ''))
+                item['id'] = f"msg_{hashlib.sha256(f'{ts}:{detail}'.encode('utf-8')).hexdigest()[:12]}"
         # One entry per peer and content hash limits copying/echo dominance.
         chosen, seen = [], set()
         for x in reversed(messages):
             key = x.get('agent')
             if key not in seen:
                 chosen.append(x); seen.add(key)
-        discussion_target = next((x for x in chosen if x.get('agent') not in (None, self.id)), None)
+        candidates = [x for x in chosen if x.get('agent') not in (None, self.id)]
+        turn = int(self.state.get('discussion_turn', 0))
+        discussion_target = candidates[turn % len(candidates)] if candidates else None
+        self.state['discussion_turn'] = turn + 1
+        self.state['discussion_target_id'] = discussion_target.get('id') if discussion_target else None
         self.pending_cursor = max((event_time(x) for x in events), default=cutoff)
         own = [x for x in events if x.get('agent') == self.id and x.get('event') in ('command_result', 'memory_result', 'task_result')][-3:]
         projects = read_json(self.tasks.path, [])
@@ -503,14 +512,17 @@ class Resident:
                 known = {x['id'] for x in read_json(Path('/etc/ai-village/runtime-peers.json'),[])}
                 if recipient != 'ALL' and recipient not in known:
                     raise ValueError('recipient must be ALL or exact agent ID from peers')
-                message = f'to={recipient}; reply_to={str(args.get("reply_to", ""))[:120]}; message={args["message"][:4000]}'
+                reply_to = args.get('reply_to', '')
+                if reply_to == 'discussion_target':
+                    reply_to = self.state.get('discussion_target_id') or ''
+                message = f'to={recipient}; reply_to={str(reply_to)[:120]}; message={args["message"][:4000]}'
                 self.event(name,message)
                 if hasattr(self.tasks, 'store'):
                     self.tasks.store.post_inbox_message(
                         source='direct' if recipient != 'ALL' else 'board',
                         sender=self.id,
                         recipient=recipient if recipient != 'ALL' else None,
-                        reply_to=args.get("reply_to"),
+                        reply_to=reply_to,
                         content=args["message"][:4000],
                     )
                 self.feedback(name,'Message posted. A reply is not guaranteed; continue independent work.',True)
