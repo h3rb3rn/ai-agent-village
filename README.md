@@ -26,6 +26,15 @@ For incremental implementation, use the [gap-closure work packages](docs/GAP-CLO
 These are a plan, not a completion claim; the paused simulation must not be resumed
 without the operator's explicit approval.
 
+## Live demo
+
+A read-only public demonstration of the Observatory, agent activity, habitat
+telemetry and Village Board is available at
+[ai-village.dev.self-hosted.app](https://ai-village.dev.self-hosted.app).
+The public contact form is authenticated and treats submitted messages as
+untrusted organic signals. The demo is an observation endpoint, not a supported
+deployment target or a substitute for the air-gapped installation procedure.
+
 ## Reference deployment: N06-M10 / N02-M60
 
 The current reference installation uses `N06-M10` as the Village control host.
