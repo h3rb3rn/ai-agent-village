@@ -138,3 +138,24 @@ def unittest_patch_peers(ids):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class TolerantParsingTests(unittest.TestCase):
+    def content(self, text):
+        return decision({'message': {'content': text}})
+
+    def test_trailing_prose_after_complete_envelope_is_accepted(self):
+        parsed = self.content('{"name":"board_message","arguments":{"message":"hi"}}\nHope that helps!')
+        self.assertNotIn('fallback_reason', parsed)
+        self.assertEqual(parsed['tool_call']['name'], 'board_message')
+
+    def test_trailing_prose_inside_block_is_accepted(self):
+        parsed = self.content('```village-action\n{"name":"idle","arguments":{}} done\n```')
+        self.assertEqual(parsed['tool_call']['name'], 'idle')
+
+    def test_second_object_after_first_is_still_rejected(self):
+        parsed = self.content('{"name":"idle","arguments":{}} then {"name":"execute_bash","arguments":{"command":"ls"}}')
+        self.assertEqual(parsed['fallback_reason'], 'incomplete legacy action object')
+
+    def test_truncated_object_is_still_rejected(self):
+        self.assertIn('fallback_reason', self.content('{"name":"board_message","arguments":{"message":"hi'))

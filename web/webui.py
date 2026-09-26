@@ -82,6 +82,37 @@ def session_csrf(handler):
     if not isinstance(session, dict) or session.get('expires', 0) <= time.time(): return ''
     return str(session.get('csrf', ''))
 
+LOGIN_FAILURES = defaultdict(deque)
+LOGIN_MAX_FAILURES = 5
+LOGIN_WINDOW_SECONDS = 900
+
+
+def login_blocked(ip, now=None):
+    now = time.time() if now is None else now
+    bucket = LOGIN_FAILURES[ip]
+    while bucket and bucket[0] < now - LOGIN_WINDOW_SECONDS: bucket.popleft()
+    return len(bucket) >= LOGIN_MAX_FAILURES
+
+
+def content_length(handler, maximum):
+    """Parsed Content-Length, or -1 when missing, malformed, empty or above ``maximum``."""
+    try: length = int(handler.headers.get("Content-Length", "0"))
+    except (TypeError, ValueError): return -1
+    return length if 0 < length <= maximum else -1
+
+
+def session_cookie(handler, token, max_age=28800):
+    secure = "; Secure" if handler.headers.get("X-Forwarded-Proto", "").lower() == "https" else ""
+    return f"av_session={token}; Max-Age={max_age}; Path=/; HttpOnly; SameSite=Lax{secure}"
+
+
+def prune_sessions(now=None):
+    now = time.time() if now is None else now
+    for token, session in list(SESSIONS.items()):
+        expires = session.get('expires', 0) if isinstance(session, dict) else session
+        if expires <= now: SESSIONS.pop(token, None)
+
+
 def auth_required(handler):
     body = '<section class="auth-card"><p class="eyebrow">GESCHÜTZTER ANTWORTKANAL</p><h2>Anmeldung für Signals</h2><p>Zum Senden einer Nachricht ist eine Anmeldung erforderlich. Die Zugangsdaten werden nur innerhalb der WebUI geprüft.</p><form method="post" action="/contact/login"><label>Benutzername<input name="username" autocomplete="username" required></label><label>Passwort<input type="password" name="password" autocomplete="current-password" required></label><input type="hidden" name="next" value="/signals#contact"><button type="submit">Anmelden</button></form></section>'
     send(handler, HTTPStatus.UNAUTHORIZED, page("Signal-Zugang", body))
@@ -196,34 +227,35 @@ class Handler(BaseHTTPRequestHandler):
             return
         if route == '/contact/status':
             return send(self, HTTPStatus.OK, json.dumps({'authenticated': signal_authorized(self), 'csrf_token': session_csrf(self)}, ensure_ascii=False), 'application/json; charset=utf-8')
-        if route == '/signals': self.path = '/'
-        if self.path == "/healthz": return send(self, HTTPStatus.OK, "ok\n", "text/plain; charset=utf-8")
-        if self.path == "/api/activity": return send(self, HTTPStatus.OK, json.dumps(activity(), ensure_ascii=False), "application/json; charset=utf-8")
-        if self.path == "/api/telemetry": return send(self, HTTPStatus.OK, json.dumps(telemetry(), ensure_ascii=False), "application/json; charset=utf-8")
-        if self.path == "/api/telemetry/history": return send(self, HTTPStatus.OK, json.dumps(telemetry_history(), ensure_ascii=False), "application/json; charset=utf-8")
-        if self.path == "/api/inference": return send(self, HTTPStatus.OK, json.dumps(inference_events(), ensure_ascii=False), "application/json; charset=utf-8")
-        if self.path == "/dashboard":
+        if route == '/signals': route = '/'
+        if route == "/healthz": return send(self, HTTPStatus.OK, "ok\n", "text/plain; charset=utf-8")
+        if route == "/api/activity": return send(self, HTTPStatus.OK, json.dumps(activity(), ensure_ascii=False), "application/json; charset=utf-8")
+        if route == "/api/telemetry": return send(self, HTTPStatus.OK, json.dumps(telemetry(), ensure_ascii=False), "application/json; charset=utf-8")
+        if route == "/api/telemetry/history": return send(self, HTTPStatus.OK, json.dumps(telemetry_history(), ensure_ascii=False), "application/json; charset=utf-8")
+        if route == "/api/inference": return send(self, HTTPStatus.OK, json.dumps(inference_events(), ensure_ascii=False), "application/json; charset=utf-8")
+        if route == "/dashboard":
             current = telemetry(); cards = []
             for agent in current.get("agents", []):
                 loaded = ", ".join(str(item.get("name", "")) for item in agent.get("ollama", [])) or "kein Runner"
                 cards.append("<article><h2>{} <small>{}</small></h2><p>Service: <b>{}</b><br>Modell: {}<br>Ollama: {}<br>Kontext: {}<br>Endpoint: {}</p></article>".format(html.escape(agent.get("name", "")), html.escape(agent.get("role", "")), html.escape(agent.get("service", "")), html.escape(agent.get("model", "")), html.escape(loaded), html.escape(str(agent.get("context", ""))), html.escape(agent.get("endpoint", ""))))
             content = "<meta http-equiv=\"refresh\" content=\"15\"><p>Read-only passive telemetry; no Board writes or agent feedback.</p><p>Snapshot: {}</p><p><a href=\"/\">Signale</a> · <a href=\"/activity\">Aktivität</a> · <a href=\"/api/telemetry\">JSON</a></p>".format(html.escape(str(current.get("timestamp")))) + "".join(cards or ["<p>Telemetry collector has not produced a snapshot yet.</p>"])
             return send(self, HTTPStatus.OK, page("AI Village — Dashboard", content))
-        if self.path == "/activity":
+        if route == "/activity":
             cards = []
             for item in reversed(activity()):
-                actor = " / ".join(part for part in (item["agent"], item["name"], item["role"]) if part)
+                actor = " / ".join(str(part) for part in (item.get("agent"), item.get("name"), item.get("role")) if part)
                 cards.append("<article><small>{}</small><h2>{} — {}</h2><p>{}</p></article>".format(
-                    html.escape(item["timestamp"]), html.escape(actor or "Village"), html.escape(item["event"]), html.escape(item["detail"])))
+                    html.escape(str(item.get("timestamp", ""))), html.escape(actor or "Village"),
+                    html.escape(str(item.get("event", ""))), html.escape(str(item.get("detail", "")))))
             content = "<meta http-equiv=\"refresh\" content=\"5\"><p>Passive Beobachtung; diese Ansicht führt keine Agentenaktion aus und aktualisiert sich alle fünf Sekunden.</p><p><a href=\"/\">Signale</a> · <a href=\"/api/activity\">JSON</a></p>" + "".join(cards or ["<p>Noch keine Ereignisse.</p>"])
             return send(self, HTTPStatus.OK, page("AI Village — Aktivität", content))
-        if self.path.startswith("/signals/"):
-            name = self.path.removeprefix("/signals/")
+        if route.startswith("/signals/"):
+            name = route.removeprefix("/signals/")
             if not re.fullmatch(r"[A-Za-z0-9_.-]+\.md", name): return send(self, HTTPStatus.NOT_FOUND, "not found", "text/plain")
             target = OUTBOX / name
             if not target.is_file(): return send(self, HTTPStatus.NOT_FOUND, "not found", "text/plain")
             return send(self, HTTPStatus.OK, target.read_text(encoding="utf-8", errors="replace"), "text/plain; charset=utf-8")
-        if self.path != "/": return send(self, HTTPStatus.NOT_FOUND, page("Nicht gefunden", "<p>Dieses Signal existiert nicht.</p>"))
+        if route != "/": return send(self, HTTPStatus.NOT_FOUND, page("Nicht gefunden", "<p>Dieses Signal existiert nicht.</p>"))
         entries = []
         for item in sorted(OUTBOX.glob("*.md"), reverse=True)[:50]:
             text = item.read_text(encoding="utf-8", errors="replace")
@@ -237,23 +269,28 @@ class Handler(BaseHTTPRequestHandler):
         return send(self, HTTPStatus.OK, page("AI Village — Signale", content))
     def do_POST(self):
         if self.path == "/contact/login":
-            length = min(int(self.headers.get("Content-Length", "0")), 4096)
-            form = parse_qs(self.rfile.read(max(0, length)).decode("utf-8", errors="replace"), keep_blank_values=True)
+            ip = self.client_address[0]
+            if login_blocked(ip): return send(self, HTTPStatus.TOO_MANY_REQUESTS, login_page("Zu viele Fehlversuche. Bitte in 15 Minuten erneut versuchen."))
+            length = content_length(self, 4096)
+            if length < 0: return send(self, HTTPStatus.BAD_REQUEST, login_page("Ungültige Anfrage."))
+            form = parse_qs(self.rfile.read(length).decode("utf-8", errors="replace"), keep_blank_values=True)
             user = form.get("username", [""])[0].strip()
             password = form.get("password", [""])[0]
             if not SIGNAL_USER or not SIGNAL_PASSWORD or not (hmac.compare_digest(user, SIGNAL_USER) and hmac.compare_digest(password, SIGNAL_PASSWORD)):
+                LOGIN_FAILURES[ip].append(time.time())
                 return send(self, HTTPStatus.UNAUTHORIZED, login_page("Benutzername oder Passwort ist nicht korrekt."))
+            LOGIN_FAILURES.pop(ip, None); prune_sessions()
             token = secrets.token_urlsafe(32); SESSIONS[token] = {'expires': time.time() + 8 * 3600, 'csrf': secrets.token_urlsafe(32)}
             next_url = form.get("next", ["/signals#contact"])[0]
             if not next_url.startswith("/"): next_url = "/signals#contact"
-            self.send_response(HTTPStatus.SEE_OTHER); self.send_header("Location", next_url); self.send_header("Set-Cookie", f"av_session={token}; Max-Age=28800; Path=/; HttpOnly; SameSite=Lax"); self.end_headers(); return
+            self.send_response(HTTPStatus.SEE_OTHER); self.send_header("Location", next_url); self.send_header("Set-Cookie", session_cookie(self, token)); self.end_headers(); return
         if self.path != "/contact": return send(self, HTTPStatus.NOT_FOUND, page("Nicht gefunden", ""))
         if not signal_authorized(self): return auth_required(self)
         ip = self.client_address[0]; now = time.time(); bucket = RATE[ip]
         while bucket and bucket[0] < now - 900: bucket.popleft()
         if len(bucket) >= 6: return send(self, HTTPStatus.TOO_MANY_REQUESTS, page("Langsamer", "<p>Bitte später erneut senden.</p>"))
-        length = int(self.headers.get("Content-Length", "0"))
-        if length <= 0 or length > MAX_MESSAGE + 512: return send(self, HTTPStatus.BAD_REQUEST, page("Ungültige Nachricht", "<p>Nachricht zu groß oder leer.</p>"))
+        length = content_length(self, MAX_MESSAGE + 512)
+        if length < 0: return send(self, HTTPStatus.BAD_REQUEST, page("Ungültige Nachricht", "<p>Nachricht zu groß oder leer.</p>"))
         form = parse_qs(self.rfile.read(length).decode("utf-8", errors="replace"), keep_blank_values=True)
         csrf = form.get("csrf_token", [""])[0]
         expected_csrf = session_csrf(self)

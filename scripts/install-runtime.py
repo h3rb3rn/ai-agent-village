@@ -25,6 +25,23 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from village.release import RELEASE_FILES, compute_sha256, get_git_revision
 
 
+# Resident bash commands run as ordinary Unix users inside these cgroups. Without limits one
+# runaway command (fork bomb, memory hog, endless file) can starve Neo4j, Chroma, the memory
+# gateway and every other resident on the 4-core / 16 GiB control host.
+AGENT_LIMITS = (('MemoryHigh', '1536M'), ('MemoryMax', '3G'), ('TasksMax', '512'),
+                ('CPUQuota', '150%'), ('LimitFSIZE', '4G'))
+SLICE_LIMITS = (('MemoryMax', '10G'), ('CPUQuota', '300%'))
+SLICE_NAME = 'ai-village-agents.slice'
+
+
+def agent_limits_dropin():
+    return '[Service]\nSlice=' + SLICE_NAME + '\n' + ''.join(f'{k}={v}\n' for k, v in AGENT_LIMITS)
+
+
+def agents_slice_unit():
+    return '[Unit]\nDescription=AI Village resident agents (shared resource ceiling)\n[Slice]\n' + ''.join(f'{k}={v}\n' for k, v in SLICE_LIMITS)
+
+
 def read_env(path):
     values = {}
     for line in path.read_text().splitlines():
@@ -152,6 +169,8 @@ def main():
             put(dropin,f'[Service]\nEnvironmentFile={credential}\n')
             pause_dropin=Path('/etc/systemd/system')/f'ai-village-agent-{ident}.service.d/10-pause.conf'
             put(pause_dropin,'[Unit]\nConditionPathExists=!/etc/ai-village/paused\n')
+            put(Path('/etc/systemd/system')/f'ai-village-agent-{ident}.service.d/40-resource-limits.conf',agent_limits_dropin())
+        put(Path('/etc/systemd/system')/SLICE_NAME,agents_slice_unit())
         put(token_path,json.dumps(tokens),0o600,pwd.getpwnam('village-web').pw_uid,0)
         peers=[dict(id=a['AGENT_ID'],name=a['AGENT_NAME'],role=a['AGENT_ROLE'],model=a['OLLAMA_MODEL']) for a in agents]
         put(Path('/etc/ai-village/runtime-peers.json'),json.dumps(peers))

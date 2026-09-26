@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+from datetime import datetime
 import shutil
 import subprocess
 import time
@@ -47,9 +48,76 @@ def _service_active(name: str) -> bool:
         return False
 
 
+AGENT_EVENTS = Path("/var/lib/ai-village/telemetry/agent-events.jsonl")
+PAUSE_MARKER = Path("/etc/ai-village/paused")
+
+
+def _read_events(path: Path, max_bytes: int = 1_048_576) -> list[dict]:
+    try:
+        with path.open("rb") as handle:
+            handle.seek(0, 2)
+            size = handle.tell()
+            handle.seek(max(0, size - max_bytes))
+            if size > max_bytes:
+                handle.readline()
+            lines = handle.read().decode("utf-8", errors="replace").splitlines()
+    except OSError:
+        return []
+    rows = []
+    for line in lines:
+        try:
+            value = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(value, dict):
+            rows.append(value)
+    return rows
+
+
+def _ts(row: dict) -> float:
+    try:
+        return datetime.fromisoformat(str(row.get("timestamp", "")).replace("Z", "+00:00")).timestamp()
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def agent_health(events: list[dict], *, now: float, stall_seconds: int = 1800,
+                 exception_streak: int = 3) -> list[dict]:
+    """Detect residents that are alive as services but produce no usable work.
+
+    A wedged loop (repeated runtime exceptions) or a resident without a finished inference for
+    ``stall_seconds`` is a hazard the operator must see; the guard never restarts anything.
+    """
+    by_agent: dict[str, list[dict]] = {}
+    for row in events:
+        if row.get("agent"):
+            by_agent.setdefault(row["agent"], []).append(row)
+    alerts = []
+    for agent, rows in sorted(by_agent.items()):
+        rows.sort(key=_ts)
+        finished = [r for r in rows if r.get("event") == "inference_finished"]
+        last_finished = _ts(finished[-1]) if finished else 0.0
+        trailing = 0
+        for row in reversed(rows):
+            if row.get("event") == "runtime_exception":
+                trailing += 1
+            elif row.get("event") in ("inference_finished", "agent_start"):
+                break
+        if trailing >= exception_streak:
+            alerts.append({"severity": "warning", "code": "agent_wedged", "agent": agent,
+                           "message": f"{agent}: {trailing} consecutive runtime exceptions without a finished inference"})
+        elif rows and now - _ts(rows[-1]) < stall_seconds and last_finished and now - last_finished > stall_seconds:
+            alerts.append({"severity": "warning", "code": "agent_stalled", "agent": agent,
+                           "message": f"{agent}: no finished inference for {int((now - last_finished) // 60)} minutes"})
+    return alerts
+
+
 def observe(*, thresholds: GuardThresholds = GuardThresholds(),
             disk_path: str = "/var/lib/ai-village",
-            service_checker: Callable[[str], bool] = _service_active) -> dict:
+            service_checker: Callable[[str], bool] = _service_active,
+            agent_events: Path | None = AGENT_EVENTS,
+            pause_marker: Path = PAUSE_MARKER,
+            now: float | None = None) -> dict:
     """Return one side-effect-free health observation and derived alerts."""
     memory = _memory_available_mib()
     disk = shutil.disk_usage(disk_path)
@@ -69,6 +137,8 @@ def observe(*, thresholds: GuardThresholds = GuardThresholds(),
     for service, active in services.items():
         if not active:
             alerts.append({"severity": "critical", "code": f"service_{service}_down", "message": f"{service} is inactive"})
+    if agent_events and not pause_marker.exists():
+        alerts.extend(agent_health(_read_events(agent_events), now=time.time() if now is None else now))
     return {"timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "memory_available_mib": memory, "disk_free_gib": round(disk_free_gib, 2),
             "load_per_cpu": round(load_per_cpu, 3) if load_per_cpu is not None else None,

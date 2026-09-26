@@ -51,6 +51,25 @@ def _validate_action(name, args):
     return None
 
 
+def _parse_object(text):
+    """Parse one JSON object; tolerate trailing prose but never a second object.
+
+    Small models often append a sentence after a correct envelope. Accepting the first
+    complete object is safe only when nothing after it could be another action.
+    """
+    try:
+        return json.loads(text)
+    except ValueError:
+        pass
+    try:
+        obj, end = json.JSONDecoder().raw_decode(text.lstrip())
+    except ValueError:
+        raise
+    if '{' in text.lstrip()[end:]:
+        raise ValueError('more than one object')
+    return obj
+
+
 def final_content(content):
     # Some imported models emit reasoning tags in message.content even when the
     # server has no separate thinking field. Never execute or broadcast that text.
@@ -99,10 +118,10 @@ def decision(response, allowed=None):
     if len(blocks)>1:
         return fallback('multiple action blocks', content)
     if blocks:
-        try: obj = json.loads(blocks[0])
+        try: obj = _parse_object(blocks[0])
         except ValueError: return fallback('incomplete village-action block', content)
     elif content.startswith('{'):
-        try: obj = json.loads(content)
+        try: obj = _parse_object(content)
         except ValueError: return fallback('incomplete legacy action object', content)
     elif '```village-action' in content:
         return fallback('unclosed action block', content)
