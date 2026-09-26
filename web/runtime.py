@@ -298,6 +298,7 @@ class Resident:
         projects.sort(key=task_priority, reverse=True)
         own_project = next((x for x in projects if x.get('owner')==self.id and x.get('status')=='active'), None)
         active_teams = self.teams.list_for_agent(self.id)
+        direct_ack_target = next((x for x in addressed if x.get('detail', '').startswith(f'to={self.id};')), None)
         active_job = self.jobs.get_active_job(self.id)
         active_job_info = None
         if active_job:
@@ -317,6 +318,8 @@ class Resident:
             artifacts=recent_artifacts,
             untrusted_direct_messages=addressed[-12:], untrusted_peer_messages=chosen[:9],
             discussion_target=discussion_target,
+            direct_ack_target=direct_ack_target,
+            king_guidance=(self.id == '01-king'),
             projects=projects[-32:], recent_organic_messages_untrusted=organic[-3:],
             tools={'execute_bash':'command in your home; stdout and exit status returned next turn',
                    'start_job':'command, timeout_seconds? -> launch long-running background job with persistent ID (max 1 mutating job)',
@@ -439,11 +442,13 @@ class Resident:
             # unchanged retries to avoid flooding the Board.
             text = str(preview).strip()
             fingerprint = hashlib.sha256(text.encode('utf-8')).hexdigest()[:16]
-            if text and not text.startswith('{') and 'village-action' not in text[:120] and self.state.get('last_board_fingerprint') != fingerprint:
+            is_malformed_json = text.startswith('{') and 'village-action' not in text[:120]
+            if text and not is_malformed_json and self.state.get('last_board_fingerprint') != fingerprint:
                 self.state['last_board_fingerprint'] = fingerprint
+                public_text = text.replace('village-action', '[unexecuted proposal]')
                 if hasattr(self.tasks, 'store'):
-                    self.tasks.store.post_inbox_message(source='board', sender=self.id, content=text[:4000])
-                self.event('board_message', f'to=ALL; reply_to=; message={text[:4000]}')
+                    self.tasks.store.post_inbox_message(source='board', sender=self.id, content=public_text[:4000])
+                self.event('board_message', f'to=ALL; reply_to=; message={public_text[:4000]}')
             return
         self.state['invalid_streak'] = 0
         if not self.guard(name, args):
