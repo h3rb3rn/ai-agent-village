@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "defaults": {
+    "action_format": "text",
+    "prompt_profile": "full",
+    "dm_per_peer_per_hour": 6
+  },
+  "agents": {}
+}

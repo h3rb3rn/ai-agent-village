@@ -290,6 +290,9 @@ for binary in /usr/bin/podman /usr/bin/buildah; do
 done
 
 install -m 0644 "$SCRIPT_DIR/prompts/resident-system.txt" /usr/local/share/ai-village/system-prompt.txt
+install -m 0644 "$SCRIPT_DIR/prompts/resident-core.txt" /usr/local/share/ai-village/system-prompt-core.txt
+install -m 0644 "$SCRIPT_DIR/config/runtime-policy.json" /usr/local/share/ai-village/runtime-policy.json
+install -m 0644 "$SCRIPT_DIR/config/task-templates.json" /usr/local/share/ai-village/task-templates.json
 install -m 0644 "$SCRIPT_DIR/web/runtime.py" /usr/local/lib/ai-village/runtime.py
 install -m 0644 "$SCRIPT_DIR/web/event_history.py" /usr/local/lib/ai-village/event_history.py
 install -d -m 0755 /usr/local/lib/ai-village/village

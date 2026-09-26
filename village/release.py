@@ -62,6 +62,10 @@ RELEASE_FILES = [
     ("village/teams.py", "lib/village/teams.py", 0o644),
     ("village/events.py", "lib/village/events.py", 0o644),
     ("village/event_retention.py", "lib/village/event_retention.py", 0o644),
+    ("village/actions.py", "lib/village/actions.py", 0o644),
+    ("village/collaboration.py", "lib/village/collaboration.py", 0o644),
+    ("village/policy.py", "lib/village/policy.py", 0o644),
+    ("village/prompting.py", "lib/village/prompting.py", 0o644),
     ("village/__init__.py", "lib/village/__init__.py", 0o644),
     ("village/authority.py", "lib/authority.py", 0o750),
     # Scripts & runners
@@ -72,6 +76,9 @@ RELEASE_FILES = [
     ("scripts/append-event.py", "lib/append-event.py", 0o755),
     # Shared prompt constitution
     ("prompts/resident-system.txt", "share/system-prompt.txt", 0o644),
+    ("prompts/resident-core.txt", "share/system-prompt-core.txt", 0o644),
+    ("config/runtime-policy.json", "share/runtime-policy.json", 0o644),
+    ("config/task-templates.json", "share/task-templates.json", 0o644),
     # Observatory web UI assets
     ("web/observatory.html", "share/web/observatory.html", 0o644),
     ("web/observatory.css", "share/web/observatory.css", 0o644),

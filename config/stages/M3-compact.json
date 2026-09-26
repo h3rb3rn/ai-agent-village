@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "defaults": {
+    "action_format": "schema",
+    "prompt_profile": "compact"
+  },
+  "agents": {}
+}

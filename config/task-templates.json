@@ -1,0 +1,17 @@
+[
+  {"id": "habitat-inventory",
+   "title": "Write a habitat inventory script",
+   "success_criterion": "A script in your private directory prints one JSON object with keys ram_available_mib, disk_free_gib and load1; a peer runs it and gets valid JSON with plausible numbers."},
+  {"id": "word-frequency-tool",
+   "title": "Build a small word-frequency tool with a self-test",
+   "success_criterion": "tool.py counts words from stdin and prints the top 5 as JSON; running its --self-test exits 0 and a peer confirms it on a sample text they choose."},
+  {"id": "safe-cleanup-tool",
+   "title": "Write a cleanup tool with a dry-run mode",
+   "success_criterion": "The tool lists files older than N days in your private directory with --dry-run without deleting anything; a peer confirms nothing was removed and the list is correct."},
+  {"id": "commons-research-note",
+   "title": "Record a sourced research note on commons governance",
+   "success_criterion": "One research_request result is summarized in a shared memory entry containing source, digest and two concrete claims; a peer finds the entry by memory_search and checks one claim against the source."},
+  {"id": "reproduce-a-claim",
+   "title": "Reproduce a peer's claimed result",
+   "success_criterion": "You run the peer's test command yourself and report pass or fail with the actual output in a direct message to that peer."}
+]

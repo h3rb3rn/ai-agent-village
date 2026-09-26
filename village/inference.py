@@ -59,6 +59,7 @@ def build_ollama_request(
     keep_alive: str = "10m",
     temperature: float = 0.35,
     api_token: Optional[str] = None,
+    response_format: Optional[Dict[str, Any]] = None,
 ) -> urllib.request.Request:
     """Build an HTTP Request targeting an Ollama native /api/chat endpoint.
 
@@ -72,6 +73,7 @@ def build_ollama_request(
         keep_alive: Keep-alive duration string (e.g. 10m, 24h).
         temperature: Sampling temperature.
         api_token: Optional Bearer authentication token.
+        response_format: Optional JSON schema sent as Ollama ``format`` (structured output).
 
     Returns:
         urllib.request.Request: Fully configured request object.
@@ -93,6 +95,8 @@ def build_ollama_request(
     }
     if think_level and think_level != "off":
         payload["think"] = think_level
+    if response_format:
+        payload["format"] = response_format
 
     headers: Dict[str, str] = {
         "Content-Type": "application/json",

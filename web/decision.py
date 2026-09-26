@@ -67,7 +67,7 @@ def fallback(reason, content=''):
     return {'observation': '', 'fallback_reason': reason, 'tool_call': {'name': 'board_message', 'arguments': {'message': message}}}
 
 
-def decision(response):
+def decision(response, allowed=None):
     if response.get('done_reason') == 'length':
         return fallback('output budget exhausted')
     content = final_content(response.get('message', {}).get('content', ''))
@@ -107,7 +107,7 @@ def decision(response):
     elif '```village-action' in content:
         return fallback('unclosed action block', content)
     else:
-        return {'observation': '', 'tool_call': {'name': 'board_message', 'arguments': {'message': content}}}
+        return {'observation': '', 'prose': True, 'tool_call': {'name': 'board_message', 'arguments': {'message': content}}}
     if not isinstance(obj, dict): return fallback('action is not an object', content)
     tool = obj.get('tool_call', obj)
     if not isinstance(tool, dict): return fallback('invalid action envelope', content)
@@ -116,6 +116,8 @@ def decision(response):
     reason = _validate_action(name, args)
     if reason:
         return fallback(reason, content)
+    if allowed is not None and name not in allowed:
+        return fallback('action ' + str(name) + ' is not available to you; choose one of: ' + ', '.join(allowed), content)
     return {'observation': str(obj.get('observation', ''))[:2000], 'tool_call': {'name': name, 'arguments': args}}
 
 

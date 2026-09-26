@@ -695,6 +695,21 @@ class CoordinationStore:
                 with event_path.open('a', encoding='utf-8') as handle:
                     handle.write(json.dumps(event, ensure_ascii=False) + '\n')
 
+        elif source == 'direct':
+            # Metadata only: direct content stays private, but the observatory
+            # and collaboration checkpoints must see that a consultation happened.
+            event = {
+                'schema_version': '1.0', 'event_id': mid + '_meta',
+                'run_id': 'coordination', 'timestamp': ts,
+                'source': 'coordination', 'kind': 'direct_message',
+                'agent': sender, 'event': 'direct_message',
+                'detail': f"to={recipient or 'ALL'}; reply_to={reply_to or ''}; chars={len(str(content))}",
+            }
+            with (self.board_dir / '.lock').open('a') as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX)
+                with (self.board_dir / 'events.jsonl').open('a', encoding='utf-8') as handle:
+                    handle.write(json.dumps(event, ensure_ascii=False) + '\n')
+
         return {
             "id": mid,
             "source": source,
@@ -751,6 +766,39 @@ class CoordinationStore:
                 for r in rows
             ]
 
+    @staticmethod
+    def _existing_message_ids(conn: sqlite3.Connection, message_ids: List[str]) -> List[str]:
+        """Return only IDs that exist in inbox_messages, preserving order and dropping duplicates."""
+        wanted = list(dict.fromkeys(str(m) for m in message_ids))
+        if not wanted:
+            return []
+        marks = ",".join("?" for _ in wanted)
+        found = {r[0] for r in conn.execute(f"SELECT id FROM inbox_messages WHERE id IN ({marks})", wanted)}
+        return [m for m in wanted if m in found]
+
+    def fetch_undelivered_wakeups(self, agent_id: str, limit: int = 1) -> List[Dict[str, Any]]:
+        """Messages that justify waking a sleeping agent early.
+
+        Only messages addressed to the agent (or operator/organic signals) that
+        have never been placed in one of its prompts qualify. Broadcasts from
+        peers are read from the Board and must not keep an agent awake, and a
+        message stops waking the agent once it was delivered, even if the model
+        response was rejected. This keeps cycle spacing and backoff effective.
+        """
+        with self._conn() as conn:
+            rows = conn.execute(
+                """
+                SELECT m.id, m.sender, m.source FROM inbox_messages m
+                LEFT JOIN message_receipts r ON m.id = r.message_id AND r.agent_id = ?
+                WHERE (m.recipient = ? OR (m.source = 'organic' AND m.recipient IS NULL))
+                  AND m.sender != ?
+                  AND (r.delivered IS NULL OR r.delivered = 0)
+                ORDER BY m.timestamp ASC, m.id ASC LIMIT ?
+                """,
+                (agent_id, agent_id, agent_id, int(limit)),
+            ).fetchall()
+            return [{"id": r["id"], "sender": r["sender"], "source": r["source"]} for r in rows]
+
     def mark_messages_delivered(self, agent_id: str, message_ids: List[str]) -> None:
         """Mark messages as delivered to the agent in the prompt context.
 
@@ -762,7 +810,9 @@ class CoordinationStore:
             return
         now_str = utc_now()
         with self._conn() as conn:
-            for mid in message_ids:
+            # Board-derived synthetic IDs are not inbox rows; a receipt for them
+            # would violate the foreign key and wedge the resident loop.
+            for mid in self._existing_message_ids(conn, message_ids):
                 conn.execute(
                     """
                     INSERT INTO message_receipts (message_id, agent_id, delivered, delivered_at)
@@ -790,7 +840,7 @@ class CoordinationStore:
         now_str = utc_now()
         acked = 0
         with self._conn() as conn:
-            for mid in message_ids:
+            for mid in self._existing_message_ids(conn, message_ids):
                 cursor = conn.execute(
                     """
                     INSERT INTO message_receipts (message_id, agent_id, delivered, delivered_at, acknowledged, acknowledged_at)

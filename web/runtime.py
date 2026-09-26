@@ -12,6 +12,7 @@ from pathlib import Path
 import re
 import signal
 import selectors
+import sqlite3
 import subprocess
 import time
 import urllib.error
@@ -45,6 +46,9 @@ from village.meetings import MeetingStore
 from village.collaboration import assess as assess_collaboration, is_checkpoint_action
 from village.lifecycle import InferenceState, InferenceTracker, classify_error
 from village.security import redact_text, sanitize_tool_env
+from village.actions import action_schema
+from village.policy import agent_policy, load_policy
+from village.prompting import build_system_prompt, compact_context, user_suffix
 
 VERSION = '2026-09-25-dynamic-teams-1'
 
@@ -173,6 +177,7 @@ class Resident:
         reconciled = self.tracker.reconcile_stale_requests()
         if reconciled > 0:
             self.event('inference_reconciled', f'reconciled={reconciled} incomplete requests transitioned to unknown', True)
+        self.policy = agent_policy(self.name, load_policy(env=self.env))
         self.tasks = Tasks(self.board)
         # P10.1/P25.1: project roles are plural, time-bounded team mandates.
         self.teams = TeamStore(self.board / 'coordination.sqlite3')
@@ -265,7 +270,13 @@ class Resident:
                 chosen.append(x); seen.add(key)
         candidates = [x for x in chosen if x.get('agent') not in (None, self.id)]
         turn = int(self.state.get('discussion_turn', 0))
-        discussion_target = candidates[turn % len(candidates)] if candidates else None
+        partner = self.pair_partner(peers)
+        if partner:
+            # Paired mode: the runtime selects the conversation partner (routing only).
+            discussion_target = next((x for x in reversed(addressed) if x.get('agent') == partner), None) \
+                or next((x for x in chosen if x.get('agent') == partner), None)
+        else:
+            discussion_target = candidates[turn % len(candidates)] if candidates else None
         self.state['discussion_turn'] = turn + 1
         self.state['discussion_target_id'] = discussion_target.get('id') if discussion_target else None
         self.pending_cursor = max((event_time(x) for x in events), default=cutoff)
@@ -308,7 +319,7 @@ class Resident:
             events,
             self.id,
             has_active_task=bool(own_project),
-            peer_id=(discussion_target.get('agent') if discussion_target else None),
+            peer_id=(partner or (discussion_target.get('agent') if discussion_target else None)),
         )
         self.current_collaboration_checkpoint = collaboration_checkpoint
         active_job = self.jobs.get_active_job(self.id)
@@ -347,6 +358,12 @@ class Resident:
                    'meeting_operation':'report(meeting_id, achieved, evidence, next_step, blockers) or close(meeting_id)',
                    'idle':'intentional rest'},
             private_work_directory=str(self.home), groups=os.getgroups())
+        if self.policy.task_templates:
+            share = self.env.get('VILLAGE_SHARE_DIR', '/usr/local/share/ai-village')
+            templates = read_json(Path(f'{share}/task-templates.json'), [])
+            if templates:
+                context['task_templates'] = templates
+                context['task_templates_note'] = 'Optional starting points. Use task_operation create with a template title and success_criterion; assign the work to a named peer by message.'
         if own_project and own_project.get('blockers'):
             context['task_blocker_guidance'] = (
                 f"Your active task {own_project['id']} has blockers: {own_project['blockers']}. "
@@ -382,6 +399,8 @@ class Resident:
         if context.get('last_action_feedback'):
             context['last_action_feedback']=dict(context['last_action_feedback'])
             context['last_action_feedback']['result']=context['last_action_feedback']['result'][-2500:]
+        if self.policy.prompt_profile == 'compact':
+            context = compact_context(context)
         for field in ('untrusted_peer_messages','own_recent_results','untrusted_direct_messages',
                       'recent_organic_messages_untrusted','retrieved_memory_untrusted','projects'):
             while context.get(field) and len(json.dumps(context,ensure_ascii=False))>budget:
@@ -396,13 +415,68 @@ class Resident:
                 delivered_ids.append(str(item['id']))
         self.delivered_inbox_ids = delivered_ids
         if delivered_ids and hasattr(self.tasks, 'store'):
-            self.tasks.store.mark_messages_delivered(self.id, delivered_ids)
+            try:
+                self.tasks.store.mark_messages_delivered(self.id, delivered_ids)
+            except sqlite3.Error as exc:
+                self.event('inbox_delivery_error', f'{type(exc).__name__}: {exc}', True)
         return json.dumps(context, ensure_ascii=False)
+
+    def auto_record(self, summary, key_material):
+        """Runtime-authored, clearly labelled observation. It never counts as an agent action
+        for collaboration checkpoints and is rate-limited so it cannot exhaust the write quota."""
+        if not self.policy.auto_memory:
+            return
+        if time.time() - float(self.state.get('last_auto_memory_at', 0)) < 600:
+            return
+        digest = hashlib.sha256(key_material.encode('utf-8')).hexdigest()[:16]
+        try:
+            result = self.memory('/v1/memories', {
+                'agent': self.id, 'content': '[runtime-observed, not an agent claim] ' + self.redact(summary)[:900],
+                'kind': 'runtime_observation', 'scope': 'private', 'source_event': 'runtime:' + key_material[:60],
+                'confidence': 0.9, 'metadata': {'origin': 'runtime'}, 'idempotency_key': f'auto-{self.id}-{digest}'})
+            self.state['last_auto_memory_at'] = time.time()
+            self.event('memory_auto', f'id={result.get("id", "")}', True)
+        except (OSError, ValueError) as exc:
+            self.event('memory_auto_error', str(exc)[:200], True)
+
+    def peer_ids(self, peers=None):
+        peers = read_json(Path('/etc/ai-village/runtime-peers.json'), []) if peers is None else peers
+        return [p['id'] for p in peers if isinstance(p, dict) and p.get('id') and p['id'] != self.id]
+
+    def pair_partner(self, peers=None):
+        """Exact agent ID of the current conversation partner, or None when unpaired."""
+        wanted = self.policy.pair_with
+        if not wanted:
+            return None
+        peers = read_json(Path('/etc/ai-village/runtime-peers.json'), []) if peers is None else peers
+        others = [p for p in peers if isinstance(p, dict) and p.get('id') and p['id'] != self.id]
+        ids = [p['id'] for p in others if '*' in wanted or p.get('name') in wanted]
+        if not ids:
+            return None
+        return ids[int(self.state.get('pair_index', 0)) % len(ids)]
+
+    def effective_action_format(self):
+        if self.state.get('schema_disabled_until', 0) > time.time():
+            return 'text'
+        return self.policy.action_format
 
     def guard(self, name, args):
         if is_paused(self.pause_marker) and name in ('execute_bash', 'start_job'):
             self.feedback(name, 'Execution blocked: simulation is paused ("pausiert startet nichts").', False)
             return False
+
+        if name not in self.policy.allowed_actions:
+            self.feedback(name, f'Action {name} is not available to you. Choose one of: {", ".join(self.policy.allowed_actions)}.', False)
+            return False
+        if name == 'board_message':
+            recipient = str(args.get('recipient', 'ALL'))
+            if recipient != 'ALL':
+                log = self.state.setdefault('dm_log', {})
+                stamps = [t for t in log.get(recipient, []) if t > time.time() - 3600]
+                if len(stamps) >= self.policy.dm_per_peer_per_hour:
+                    self.feedback(name, f'Conversation budget with {recipient} reached ({len(stamps)} messages this hour). Do independent work, run a check, or record a memory instead.', False)
+                    self.event('dm_budget_reached', f'peer={recipient}', True)
+                    return False
 
         # P21.6: cooperation is advisory first, then bounded enforcement after
         # three misses. This prevents small models from deadlocking while still
@@ -470,20 +544,17 @@ class Resident:
                                 'meeting_id, achieved, evidence, next_step and blockers.')
             self.feedback('invalid_decision', parsed['fallback_reason']+'. No action executed. Correct your envelope: {"name":"tool_name","arguments":{...}}.'+meeting_hint+' Your rejected final text: '+preview, False)
             self.event('invalid_decision', parsed['fallback_reason'])
-            # Natural-language replies are valid public Board contributions even
-            # when they do not contain an executable action envelope. Do not
-            # reinterpret malformed JSON as an instruction, and deduplicate
-            # unchanged retries to avoid flooding the Board.
-            text = str(preview).strip()
-            fingerprint = hashlib.sha256(text.encode('utf-8')).hexdigest()[:16]
-            is_malformed_json = text.startswith('{') and 'village-action' not in text[:120]
-            if text and not is_malformed_json and self.state.get('last_board_fingerprint') != fingerprint:
-                self.state['last_board_fingerprint'] = fingerprint
-                public_text = text.replace('village-action', '[unexecuted proposal]')
-                if hasattr(self.tasks, 'store'):
-                    self.tasks.store.post_inbox_message(source='board', sender=self.id, content=public_text[:4000])
+            # A rejected generation is never published: it stays in the resident's
+            # private last-response.json (bounded, redacted) and is only counted.
+            self.state['last_rejected_fingerprint'] = hashlib.sha256(str(preview).encode('utf-8')).hexdigest()[:16]
             return
         self.state['invalid_streak'] = 0
+        checkpoint = getattr(self, 'current_collaboration_checkpoint', None)
+        if (parsed.get('prose') and name == 'board_message' and 'recipient' not in args
+                and checkpoint and checkpoint.stage == 'consult' and checkpoint.peer_id):
+            # Routing only: the agent's own words go to the peer the runtime selected.
+            args = dict(args, recipient=checkpoint.peer_id)
+            self.event('prose_routed_to_peer', f'peer={checkpoint.peer_id}', True)
         if not self.guard(name, args):
             return
         try:
@@ -517,6 +588,8 @@ class Resident:
                 output=output[-6000:]
                 result = f'result={"success" if process.returncode==0 else "failure("+str(process.returncode)+")"}; command={command}; output={output}'
                 self.event('command_result',result); self.feedback(name,result,process.returncode==0)
+                if output.strip():
+                    self.auto_record(f'command `{command[:200]}` exit={process.returncode}; output tail: {output[-500:]}', 'command_result:'+command)
             elif name == 'start_job':
                 command = args['command']
                 timeout = int(args.get('timeout_seconds', self.env.get('VILLAGE_COMMAND_TIMEOUT_SECONDS', '3600')))
@@ -562,10 +635,17 @@ class Resident:
                         reply_to=reply_to,
                         content=args["message"][:4000],
                     )
+                if recipient != 'ALL':
+                    log = self.state.setdefault('dm_log', {})
+                    log[recipient] = [t for t in log.get(recipient, []) if t > time.time() - 3600] + [time.time()]
+                    if recipient == self.pair_partner():
+                        self.state['pair_index'] = int(self.state.get('pair_index', 0)) + 1
                 self.feedback(name,'Message posted. A reply is not guaranteed; continue independent work.',True)
             elif name == 'task_operation':
                 result=self.tasks.operate(self.id,args)
                 self.event('task_result',json.dumps(result)); self.feedback(name,json.dumps(result),True)
+                if args.get('action') in ('complete','yield'):
+                    self.auto_record(f'task {args.get("task_id")} {args.get("action")}: {str(args.get("evidence",""))[:400]}', 'task:'+str(args.get('task_id'))+str(args.get('action')))
             elif name == 'team_operation':
                 operation = args.get('operation') or args.get('action')
                 if operation == 'create':
@@ -652,8 +732,8 @@ class Resident:
             else:
                 self.feedback('idle','Intentional rest; next turn may resume your own project.',True)
                 self.event('idle','intentional rest')
-        except (OSError, ValueError) as exc:
-            self.feedback(name,str(exc),False)
+        except (OSError, ValueError, sqlite3.Error) as exc:
+            self.feedback(name,f'{type(exc).__name__}: {exc}',False)
             self.event('action_error',f'action={name}; error={exc}')
 
     def cycle(self):
@@ -666,12 +746,20 @@ class Resident:
 
         snapshot = self.snapshot()
         identity = Path(self.env['AGENT_IDENTITY_PROMPT']).read_text()
-        prompt = Path('/usr/local/share/ai-village/system-prompt.txt').read_text()
+        compact = self.policy.prompt_profile == 'compact'
+        share = self.env.get('VILLAGE_SHARE_DIR', '/usr/local/share/ai-village')
+        full_text = '' if compact else Path(f'{share}/system-prompt.txt').read_text()
+        core_text = Path(f'{share}/system-prompt-core.txt').read_text() if compact else ''
         # Older founding profiles may name a previous model: current environment wins.
         live = f'Current runtime model={self.env["OLLAMA_MODEL"]}, context={self.env.get("OLLAMA_NUM_CTX")}, role={self.role}. These override stale model details in founding identity.'
+        action_format = self.effective_action_format()
+        checkpoint = getattr(self, 'current_collaboration_checkpoint', None)
+        consult_peer = checkpoint.peer_id if (checkpoint and checkpoint.stage == 'consult' and 'board_message' in self.policy.allowed_actions) else None
+        response_format = action_schema(self.policy.allowed_actions, self.peer_ids(), consult_peer) if action_format == 'schema' else None
         messages = [
-            {'role': 'system', 'content': prompt + '\n' + identity + '\n' + live},
-            {'role': 'user', 'content': snapshot + '\n\nChoose ONE next action, not a sequence or hypothetical result. For tools, return one complete named action envelope and stop. Ordinary conversation may be prose.'}
+            {'role': 'system', 'content': build_system_prompt(self.policy.prompt_profile, core_text, full_text, identity, live,
+                                                              self.policy.allowed_actions, action_format, self.policy.role_brief)},
+            {'role': 'user', 'content': snapshot + user_suffix(action_format)}
         ]
         api_type = self.env.get('API_TYPE', 'ollama').lower()
         api_token = self.env.get('API_TOKEN', self.env.get('OLLAMA_API_TOKEN'))
@@ -704,6 +792,7 @@ class Resident:
                 think_level=self.env.get('OLLAMA_THINK_LEVEL', 'off'),
                 keep_alive=self.env.get('OLLAMA_KEEP_ALIVE', '10m'),
                 api_token=api_token,
+                response_format=response_format,
             )
         try:
             with urllib.request.urlopen(request, timeout=int(self.env.get('VILLAGE_OLLAMA_TIMEOUT_SECONDS', '3600'))) as response:
@@ -732,13 +821,24 @@ class Resident:
             self.event('inference_finished', f'request_id={req_record.request_id} duration_ms={elapsed_ms}; gpu_verified={gpu_verified}; metrics={json.dumps(metrics)}', True)
             # Private last output, bounded; do not broadcast rejected generations to peers.
             write_json(self.home / 'last-response.json', dict(metrics=metrics, content=self.redact(final_content(norm.content))[:65536]))
-            parsed = decision(answer)
+            parsed = decision(answer, self.policy.allowed_actions)
+            if action_format == 'schema':
+                conforming = not parsed.get('fallback_reason') and not parsed.get('prose')
+                streak = 0 if conforming else int(self.state.get('schema_failure_streak', 0)) + 1
+                self.state['schema_failure_streak'] = streak
+                if streak >= 3:
+                    self.state['schema_disabled_until'] = time.time() + 3600
+                    self.state['schema_failure_streak'] = 0
+                    self.event('action_format_fallback', 'schema output failed 3 times in a row; using text protocol for 1 hour', True)
             if not parsed.get('fallback_reason'):
                 self.state['seen_board_epoch'] = self.pending_cursor
                 self.state['seen_organic_epoch'] = self.pending_organic_cursor
                 # P09: Explicitly acknowledge messages delivered in this successful turn
                 if getattr(self, 'delivered_inbox_ids', None) and hasattr(self.tasks, 'store'):
-                    self.tasks.store.acknowledge_messages(self.id, self.delivered_inbox_ids)
+                    try:
+                        self.tasks.store.acknowledge_messages(self.id, self.delivered_inbox_ids)
+                    except sqlite3.Error as exc:
+                        self.event('inbox_ack_error', f'{type(exc).__name__}: {exc}', True)
                     self.delivered_inbox_ids = []
                 self.state['auth_failure'] = False
                 self.state['transient_failure_streak'] = 0
@@ -769,6 +869,9 @@ class Resident:
                     error_detail=err_detail,
                 )
                 detail = exc.read(2048).decode(errors='replace') if isinstance(exc, urllib.error.HTTPError) else str(exc)
+                if action_format == 'schema' and isinstance(exc, urllib.error.HTTPError) and exc.code in (400, 422, 501):
+                    self.state['schema_disabled_until'] = time.time() + 6 * 3600
+                    self.event('action_format_fallback', f'endpoint rejected structured output (HTTP {exc.code}); using text protocol for 6 hours', True)
                 self.feedback('inference_error', detail, False)
                 self.event('inference_error', f'request_id={req_record.request_id} error_class={err_class} detail={detail}', True)
                 # P11: Classify error cause and update state with appropriate backoff category
@@ -824,6 +927,9 @@ class Resident:
                 # P12: Event-driven wakeup: sleep in short intervals up to delay, waking early on
                 # new unacknowledged inbox messages or active job completion
                 slept = 0.0
+                min_wake = float(self.env.get('VILLAGE_MIN_WAKE_SECONDS', '2'))
+                # Backoff states (invalid streak, auth failure) must not be defeated by wakeups.
+                wake_allowed = not (self.state.get('auth_failure') or self.state.get('invalid_streak', 0) >= 3)
                 had_active_job = bool(self.jobs.get_active_job(self.id))
                 while slept < delay and not self.stopping:
                     if is_paused(self.pause_marker):
@@ -832,10 +938,13 @@ class Resident:
                     time.sleep(interval)
                     slept += interval
                     # Wakeup check: inbox message arrival
-                    if hasattr(self.tasks, 'store'):
-                        unacked = self.tasks.store.fetch_unacknowledged_messages(self.id, limit=1)
-                        if unacked:
-                            self.event('event_wakeup', f'Waking early from sleep: unacknowledged message {unacked[0]["id"]} received', True)
+                    if wake_allowed and slept >= min_wake and hasattr(self.tasks, 'store'):
+                        try:
+                            pending = self.tasks.store.fetch_undelivered_wakeups(self.id, limit=1)
+                        except sqlite3.Error:
+                            pending = []
+                        if pending:
+                            self.event('event_wakeup', f'Waking early from sleep: undelivered message {pending[0]["id"]} from {pending[0]["sender"]}', True)
                             break
                     # Wakeup check: active background job finished
                     if had_active_job:

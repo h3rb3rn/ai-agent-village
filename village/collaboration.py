@@ -79,7 +79,11 @@ def assess(
         return CooperationCheckpoint("idle", None, "No active project requires a checkpoint.")
 
     searches = [x for x in recent if x.get("event") == "memory_result" and "action=memory_search" in str(x.get("detail", "")) and "result=success" in str(x.get("detail", ""))]
-    consultations = [x for x in recent if x.get("event") == "board_message" and "to=ALL" not in str(x.get("detail", ""))]
+    consultations = [
+        x for x in recent
+        if (x.get("event") == "board_message" and "to=ALL" not in str(x.get("detail", "")))
+        or (x.get("event") == "direct_message" and "to=ALL" not in str(x.get("detail", "")))
+    ]
     records = [x for x in recent if x.get("event") == "memory_result" and "action=memory_remember" in str(x.get("detail", "")) and "result=success" in str(x.get("detail", ""))]
     work = [x for x in recent if x.get("event") in {"command_result", "job_finished", "research_result", "task_result"}]
 
