@@ -778,7 +778,20 @@ class Resident:
                 if is_paused(self.pause_marker):
                     time.sleep(2)
                     continue
-                self.cycle()
+                try:
+                    self.cycle()
+                    self.state['runtime_exception_streak'] = 0
+                except Exception as exc:
+                    # Keep a malformed model response or local integration
+                    # defect from becoming an opaque systemd restart loop.
+                    streak = self.state.get('runtime_exception_streak', 0) + 1
+                    self.state['runtime_exception_streak'] = streak
+                    detail = self.redact(f'{type(exc).__name__}: {exc}')[:1200]
+                    self.event('runtime_exception', f'streak={streak}; detail={detail}', True)
+                    self.feedback('runtime_exception', detail, False)
+                    write_json(self.path, self.state)
+                    time.sleep(min(900, max(15, 15 * (2 ** min(streak - 1, 5)))))
+                    continue
                 delay = self.compute_cycle_delay()
                 # P12: Event-driven wakeup: sleep in short intervals up to delay, waking early on
                 # new unacknowledged inbox messages or active job completion
