@@ -417,7 +417,7 @@ class Resident:
             preview=read_json(self.home/'last-response.json',{}).get('content','')[-1200:]
             meeting_hint = ''
             pending = next((m for m in self.meetings.active()
-                            if not self.meetings.has_report(m['id'], self.agent_id)), None)
+                            if not self.meetings.has_report(m['id'], self.id)), None)
             if pending:
                 meeting_hint = (f' An open meeting ({pending["id"]}) requires exactly one '
                                 'meeting_operation report first; use operation report with '
