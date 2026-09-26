@@ -49,12 +49,17 @@ RELEASE_FILES = [
     ("village/jobs.py", "lib/village/jobs.py", 0o644),
     ("village/artifacts.py", "lib/village/artifacts.py", 0o644),
     ("village/containers.py", "lib/village/containers.py", 0o644),
+    ("village/meetings.py", "lib/village/meetings.py", 0o644),
+    ("village/research.py", "lib/village/research.py", 0o644),
+    ("village/firewatch.py", "lib/village/firewatch.py", 0o644),
+    ("village/teams.py", "lib/village/teams.py", 0o644),
     ("village/__init__.py", "lib/village/__init__.py", 0o644),
     ("village/authority.py", "lib/authority.py", 0o750),
     # Scripts & runners
     ("scripts/agent-runner", "lib/agent-runner", 0o755),
     ("scripts/village-resume", "sbin/village-resume", 0o755),
     ("scripts/village-update", "sbin/village-update", 0o755),
+    ("scripts/authority-server.py", "lib/authority-entrypoint.py", 0o755),
     # Shared prompt constitution
     ("prompts/resident-system.txt", "share/system-prompt.txt", 0o644),
     # Observatory web UI assets
