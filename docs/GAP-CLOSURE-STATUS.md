@@ -16,7 +16,7 @@ Pro Paket Nachweis unter `docs/evidence/Pxx.md` anlegen, sobald tatsächlich dar
 |---|---|---|---|---|
 | P00 | Baseline und Übergabe | – | LOCAL_VERIFIED | [docs/evidence/P00.md](evidence/P00.md) |
 | P01 | Persistente Pause | P00 | HOST_VERIFIED | [docs/evidence/P01.md](evidence/P01.md) |
-| P02 | Quellen und Release | P00, P01 | PARTIAL / LOCAL_VERIFIED | [docs/evidence/P02.md](evidence/P02.md), [P02.1](evidence/P02.1.md), [P02.2](evidence/P02.2.md) |
+| P02 | Quellen und Release | P00, P01 | PARTIAL / LOCAL_VERIFIED | [docs/evidence/P02.md](evidence/P02.md), [P02.1](evidence/P02.1.md), [P02.2](evidence/P02.2.md), [P02.3](evidence/P02.3.md) |
 | P03 | Konfigurationsvertrag | P02 | LOCAL_VERIFIED | [docs/evidence/P03.md](evidence/P03.md) |
 | P04 | Provideradapter | P03 | LOCAL_VERIFIED | [docs/evidence/P04.md](evidence/P04.md) |
 | P05 | Secrets auf allen Aufrufwegen | P04 | LOCAL_VERIFIED | [docs/evidence/P05.md](evidence/P05.md) |

@@ -363,6 +363,9 @@ while True:
         conn.close()
 AUTHORITY
 chmod 0750 /usr/local/lib/ai-village/authority.py
+# P02.3 canonical authority entrypoint. The tested AuthorityCore remains in
+# village/authority.py; this wrapper keeps the existing service path stable.
+install -m 0750 "$SCRIPT_DIR/scripts/authority-server.py" /usr/local/lib/ai-village/authority.py
 
 cat > /usr/local/bin/village-authority <<'CLIENT'
 #!/usr/bin/env python3
