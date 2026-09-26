@@ -20,7 +20,7 @@ Pro Paket Nachweis unter `docs/evidence/Pxx.md` anlegen, sobald tatsächlich dar
 | P03 | Konfigurationsvertrag | P02 | LOCAL_VERIFIED | [docs/evidence/P03.md](evidence/P03.md) |
 | P04 | Provideradapter | P03 | LOCAL_VERIFIED | [docs/evidence/P04.md](evidence/P04.md) |
 | P05 | Secrets auf allen Aufrufwegen | P04 | LOCAL_VERIFIED | [docs/evidence/P05.md](evidence/P05.md) |
-| P06 | Inferenz-Lebenszyklus | P02, P04 | LOCAL_VERIFIED | [docs/evidence/P06.md](evidence/P06.md) |
+| P06 | Inferenz-Lebenszyklus | P02, P04 | PARTIAL / LOCAL_VERIFIED | [docs/evidence/P06.md](evidence/P06.md), [P06.1](evidence/P06.1.md) |
 | P07 | Drain und Abbruch | P01, P05, P06, Proxy-Baseline | LOCAL_VERIFIED | [docs/evidence/P07.md](evidence/P07.md) |
 | P08 | Koordinationsspeicher | P02, P06 | LOCAL_VERIFIED | [docs/evidence/P08.md](evidence/P08.md) |
 | P09 | Inbox und Ack | P08 | LOCAL_VERIFIED | [docs/evidence/P09.md](evidence/P09.md) |

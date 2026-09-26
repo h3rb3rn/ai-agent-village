@@ -21,6 +21,7 @@ import sys
 from datetime import datetime, timezone
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
+EVENT_SCHEMA_VERSION = '1.0'
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 LIB_DIR = Path(__file__).resolve().parent
@@ -160,6 +161,8 @@ class Resident:
         self.home.mkdir(parents=True, exist_ok=True)
         self.path = self.home / 'runtime-state.json'
         self.state = read_json(self.path, {})
+        self.run_id = str(self.state.get('run_id') or uuid.uuid4())
+        self.state['run_id'] = self.run_id
         # P01/P07: Pause marker path override from agent environment
         self.pause_marker = Path(self.env.get('VILLAGE_PAUSE_MARKER', '/etc/ai-village/paused'))
         # P06: Track generation sequence and manage persistent inference request lifecycle
@@ -192,8 +195,9 @@ class Resident:
     def event(self, event, detail, telemetry=False):
         directory = self.root / 'telemetry' if telemetry else self.board
         path = directory / ('agent-events.jsonl' if telemetry else 'events.jsonl')
-        row = dict(timestamp=now(), agent=self.id, name=self.name, role=self.role,
-                   event=event, detail=self.redact(str(detail))[:16000])
+        row = dict(schema_version=EVENT_SCHEMA_VERSION, event_id=str(uuid.uuid4()),
+                   run_id=self.run_id, timestamp=now(), agent=self.id, name=self.name,
+                   role=self.role, event=event, detail=self.redact(str(detail))[:16000])
         try:
             with (directory / '.lock').open('a') as lock:
                 fcntl.flock(lock, fcntl.LOCK_EX | (fcntl.LOCK_NB if telemetry else 0))
