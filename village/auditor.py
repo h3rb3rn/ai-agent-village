@@ -146,6 +146,11 @@ def detect_format_violation(events: Iterable[Mapping[str, Any]]) -> List[AuditFi
     return findings
 
 
+# Exposed for village/auditor_llm.py: the LLM layer must never re-review a
+# format_violation reason the deterministic signature already explains.
+FORMAT_REASONS = _FORMAT_REASONS
+
+
 SIGNATURES: Dict[str, Callable[[Iterable[Mapping[str, Any]]], List[AuditFinding]]] = {
     "foreign_home_access": detect_foreign_home_access,
     "repeated_action": detect_repeated_action,

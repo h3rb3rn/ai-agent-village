@@ -31,7 +31,7 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional
 
-from village.auditor import AuditFinding
+from village.auditor import FORMAT_REASONS, AuditFinding, AuditStore, deliver, scan
 
 DEFAULT_URL = "http://192.168.155.231:11434"
 DEFAULT_MODEL = "qwen3.6:35b"
@@ -173,3 +173,55 @@ def review(candidate: ReviewCandidate, *, opener: Callable = urllib.request.urlo
         problem=str(verdict["problem"])[:600], solution=str(verdict["solution"])[:600],
         rejected_example=candidate.text[:1500], corrected_example=str(verdict["solution"])[:600],
     )
+
+
+# --- combined cycle: deterministic first, LLM only for what it could not explain
+
+def full_audit_cycle(events: List[Mapping[str, Any]], store: AuditStore, *, coordination_store,
+                     memory_writer: Callable[[Dict[str, Any]], Any],
+                     opener: Callable = urllib.request.urlopen, url: str = DEFAULT_URL,
+                     model: str = DEFAULT_MODEL, llm_enabled: bool = True) -> Dict[str, int]:
+    """Run the primary, free, deterministic signatures first; only spend a slow,
+    costly qwen3.6:35b call on events that catalogue could not explain, and never
+    on a format_violation reason the deterministic layer already owns. Every
+    finding - deterministic or LLM - is routed and rate-limited identically via
+    the same AuditStore, so a single low-confidence LLM misjudgement can never
+    reach shared community knowledge on its own.
+    """
+    stats = {"deterministic_findings": 0, "deterministic_delivered": 0,
+             "llm_candidates": 0, "llm_findings": 0, "llm_delivered": 0, "llm_errors": 0}
+
+    deterministic_findings = scan(events)
+    stats["deterministic_findings"] = len(deterministic_findings)
+    claimed_event_ids = set()
+    for finding in deterministic_findings:
+        claimed_event_ids.add(finding.source_event_id)
+        scope = store.route(finding)
+        if scope is None:
+            continue
+        deliver(finding, scope, coordination_store=coordination_store, memory_writer=memory_writer)
+        store.mark_delivered(finding.category, finding.source_event_id)
+        stats["deterministic_delivered"] += 1
+
+    if not llm_enabled:
+        return stats
+
+    candidates = select_candidates(events, already_classified=claimed_event_ids,
+                                   known_format_reasons=FORMAT_REASONS)
+    stats["llm_candidates"] = len(candidates)
+    for candidate in candidates:
+        try:
+            finding = review(candidate, opener=opener, url=url, model=model)
+        except JudgeError:
+            stats["llm_errors"] += 1
+            continue
+        if finding is None:
+            continue
+        stats["llm_findings"] += 1
+        scope = store.route(finding)
+        if scope is None:
+            continue
+        deliver(finding, scope, coordination_store=coordination_store, memory_writer=memory_writer)
+        store.mark_delivered(finding.category, finding.source_event_id)
+        stats["llm_delivered"] += 1
+    return stats

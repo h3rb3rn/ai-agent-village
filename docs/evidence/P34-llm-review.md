@@ -99,3 +99,30 @@ uneindeutiger Testfall („ist das ok oder nicht?“) ein reales Problem:
 
 **Tests:** 2 neue (`PromptTighteningRegressionTests`), mit den echten
 Antworten vor und nach der Korrektur als Fixtures. Gesamtsuite: 468 Tests, OK.
+
+## Nachtrag: Kombinierter Zyklus – deterministisch zuerst, LLM nur für den Rest
+
+Betreiberauftrag: „Primär das Python-Skript nutzen, nur bei unklaren Fällen
+das LLM zuschalten.“ `village/auditor_llm.py::full_audit_cycle()` verbindet
+beide Schichten:
+
+1. `village.auditor.scan()` läuft zuerst über alle Ereignisse (kostenlos,
+   augenblicklich, deterministisch).
+2. Jeder erkannte Fund wird sofort geroutet/zugestellt; seine
+   `source_event_id` gilt als „erledigt“.
+3. Nur Ereignisse, die **nicht** von Schritt 1 erklärt wurden (und kein
+   `format_violation`-Grund, den die deterministische Signatur bereits abdeckt
+   – `village.auditor.FORMAT_REASONS`, aus einer einzigen Quelle), werden dem
+   LLM als Kandidaten vorgelegt, begrenzt auf 5 pro Zyklus.
+4. Ein einzelner fehlgeschlagener LLM-Aufruf (`JudgeError`) bricht den Zyklus
+   nicht ab, sondern wird gezählt und übersprungen.
+5. `llm_enabled=False` schaltet die LLM-Schicht vollständig ab (z. B. für
+   reine Kostenkontrolle oder Tests), ohne den deterministischen Teil zu berühren.
+
+**Tests:** `FullAuditCycleTests` (5 Tests) – beweist insbesondere, dass für
+einen bekannten Format-Fehler **niemals** ein LLM-Aufruf erfolgt (der Opener
+wirft bei Aufruf eine `AssertionError`, der Test besteht nur, wenn er
+tatsächlich nie aufgerufen wird), dass ein gemischter Batch beide Schichten
+korrekt aufteilt, und dass ein einzelner Netzwerkfehler den Zyklus nicht abbricht.
+
+Gesamtsuite: 473 Tests, OK.

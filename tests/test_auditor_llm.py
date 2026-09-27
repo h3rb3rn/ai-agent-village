@@ -207,3 +207,86 @@ class RoutingReuseTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FullAuditCycleTests(unittest.TestCase):
+    """The core requirement: the deterministic script runs first and handles
+    everything it can explain for free; the slow LLM is only spent on what is
+    left over."""
+
+    def setUp(self):
+        import shutil
+        import tempfile
+        from pathlib import Path as _Path
+        from village.coordinator import CoordinationStore
+        self.tmp = _Path(tempfile.mkdtemp(prefix="village-full-audit-"))
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.store = AuditStore(self.tmp / "audit.sqlite3")
+        self.coord = CoordinationStore(self.tmp / "coordination.sqlite3", self.tmp)
+        self.memory_writer = MagicMock(return_value={"id": "mem1"})
+
+    def test_known_format_reason_is_handled_deterministically_llm_is_never_called(self):
+        events = [{"agent": "04-artisan", "event": "invalid_decision_detail", "event_id": "e1",
+                  "detail": "reason=multiple action blocks; preview=some raw text"}]
+        opener = MagicMock(side_effect=AssertionError("must not call the LLM for a known format reason"))
+        from village.auditor_llm import full_audit_cycle
+        stats = full_audit_cycle(events, self.store, coordination_store=self.coord,
+                                 memory_writer=self.memory_writer, opener=opener)
+        self.assertEqual(stats["deterministic_findings"], 1)
+        self.assertEqual(stats["deterministic_delivered"], 1)
+        self.assertEqual(stats["llm_candidates"], 0)
+        opener.assert_not_called()
+
+    def test_unclassified_case_falls_through_to_the_llm(self):
+        events = [{"agent": "09-chronicler", "event": "board_message", "event_id": "e2", "model": "llama3.2:3b",
+                  "detail": "to=ALL; reply_to=; message=The collaboration checkpoint failed due to the lack of a collaboration checkpoint."}]
+        from village.auditor_llm import full_audit_cycle
+        stats = full_audit_cycle(events, self.store, coordination_store=self.coord,
+                                 memory_writer=self.memory_writer, opener=opener_returning(CIRCULAR_MESSAGE_RESPONSE))
+        self.assertEqual(stats["deterministic_findings"], 0)
+        self.assertEqual(stats["llm_candidates"], 1)
+        self.assertEqual(stats["llm_findings"], 1)
+        self.assertEqual(stats["llm_delivered"], 1)
+        msgs = self.coord.fetch_unacknowledged_messages("09-chronicler", source="direct")
+        self.assertEqual(len(msgs), 1)
+        self.assertEqual(msgs[0]["sender"], "village-auditor")
+
+    def test_mixed_batch_deterministic_and_llm_each_handle_their_own_share(self):
+        events = [
+            {"agent": "01-king", "event": "foreign_home_blocked", "event_id": "e3",
+             "detail": "target_agent=08-logician; command_prefix=x"},
+            {"agent": "09-chronicler", "event": "board_message", "event_id": "e4", "model": "llama3.2:3b",
+             "detail": "message=The collaboration checkpoint failed due to the lack of a collaboration checkpoint."},
+        ]
+        from village.auditor_llm import full_audit_cycle
+        stats = full_audit_cycle(events, self.store, coordination_store=self.coord,
+                                 memory_writer=self.memory_writer, opener=opener_returning(CIRCULAR_MESSAGE_RESPONSE))
+        self.assertEqual(stats["deterministic_findings"], 1)
+        self.assertEqual(stats["llm_candidates"], 1)  # only the un-classified event, not e3
+
+    def test_llm_disabled_flag_skips_the_slow_layer_entirely(self):
+        events = [{"agent": "09-chronicler", "event": "board_message", "event_id": "e5",
+                  "detail": "message=Anything at all."}]
+        opener = MagicMock(side_effect=AssertionError("must not call the LLM when disabled"))
+        from village.auditor_llm import full_audit_cycle
+        stats = full_audit_cycle(events, self.store, coordination_store=self.coord,
+                                 memory_writer=self.memory_writer, opener=opener, llm_enabled=False)
+        self.assertEqual(stats["llm_candidates"], 0)
+        opener.assert_not_called()
+
+    def test_a_judge_error_on_one_candidate_does_not_abort_the_cycle(self):
+        events = [
+            {"agent": "a", "event": "board_message", "event_id": "e6", "detail": "message=first"},
+            {"agent": "b", "event": "board_message", "event_id": "e7", "detail": "message=second"},
+        ]
+        calls = {"n": 0}
+        def flaky(request, timeout=0):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise OSError("connection refused")
+            return FakeResponse(CIRCULAR_MESSAGE_RESPONSE)
+        from village.auditor_llm import full_audit_cycle
+        stats = full_audit_cycle(events, self.store, coordination_store=self.coord,
+                                 memory_writer=self.memory_writer, opener=flaky)
+        self.assertEqual(stats["llm_errors"], 1)
+        self.assertEqual(stats["llm_findings"], 1)
