@@ -554,7 +554,16 @@ class Resident:
         history = [x for x in self.state.get('recent_actions', []) if x.get('at', 0) > time.time() - 900][-24:]
         matching = [x for x in history if x.get('signature') == signature]
         limit = 1 if name == 'board_message' else 2
-        if name != 'idle' and len(matching) >= limit:
+        # Two of the runtime's own gates could otherwise deadlock each other:
+        # the collaboration checkpoint (P21.6/P31) can require memory_search for
+        # orient, and a small model may keep re-issuing the same query rather
+        # than varying it on its own - at which point this exact-repeat guard,
+        # designed to stop wasteful or harmful retries of MUTATING actions,
+        # would block the very action the checkpoint demands, with neither gate
+        # backing off. A repeated read-only search costs a little compute but
+        # changes nothing and harms nothing, unlike repeating execute_bash; it
+        # is exempt from this guard so the two mechanisms cannot deadlock.
+        if name != 'idle' and name != 'memory_search' and len(matching) >= limit:
             fps = [x.get('result_fingerprint') for x in matching if x.get('result_fingerprint')]
             # Legitimate polling progress: output changed between consecutive executions
             is_polling_progress = len(fps) >= 2 and fps[-1] != fps[-2]

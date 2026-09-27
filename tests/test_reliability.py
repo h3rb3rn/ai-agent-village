@@ -410,3 +410,61 @@ class InferenceErrorDiagnosticsTests(unittest.TestCase):
         self.assertEqual(len(errors), 1)
         self.assertIn('upstream said no', errors[0]['detail'])
         self.assertNotIn('traceback=', errors[0]['detail'])
+
+
+class CheckpointVsRepeatedActionDeadlockTests(unittest.TestCase):
+    """Board observation 2026-09-27: 05-interpreter got stuck on 'repeated action
+    blocked: memory_search' six times in a row while the mandatory knowledgebase
+    gate (P31) kept demanding memory_search for orient - two of the runtime's own
+    gates fighting each other. An agent complying with an active checkpoint must
+    never be blocked by the anti-repetition guard for doing exactly that."""
+
+    def make(self, gate='mandatory'):
+        root = Path(tempfile.mkdtemp(prefix='village-deadlock-'))
+        (root / 'board').mkdir(); (root / 'telemetry').mkdir()
+        (root / 'identity.txt').write_text('identity')
+        (root / 'policy.json').write_text(json.dumps({'defaults': {'knowledgebase_gate': gate}}))
+        env = dict(AGENT_ID='05-interpreter', AGENT_NAME='interpreter', AGENT_ROLE='resident', VILLAGE_ROOT=str(root),
+                   AGENT_IDENTITY_PROMPT=str(root / 'identity.txt'), OLLAMA_MODEL='m',
+                   VILLAGE_POLICY_FILE='/nonexistent', VILLAGE_POLICY_LOCAL_FILE=str(root / 'policy.json'))
+        agent = Resident(env)
+        patcher = patch.object(agent, 'memory', return_value={'items': [], 'id': 'mem1'})
+        patcher.start(); self.addCleanup(patcher.stop)
+        agent.tasks.operate('05-interpreter', dict(action='create', title='t', success_criterion='c'))
+        task_id = json.loads((root / 'board/work-items.json').read_text())[0]['id']
+        agent.tasks.operate('05-interpreter', dict(action='claim', task_id=task_id))
+        return agent, root
+
+    def step(self, agent, name, **args):
+        agent.snapshot()
+        agent.execute({'tool_call': {'name': name, 'arguments': args}})
+
+    def test_identical_orient_search_is_never_blocked_as_a_repeat_under_mandatory_gate(self):
+        agent, root = self.make('mandatory')
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        # The exact same query, back to back, well past the normal 2-in-15-min
+        # repeat limit - this must keep succeeding because it is what orient
+        # demands, not an aimless loop.
+        for i in range(5):
+            self.step(agent, 'memory_search', query='project status')
+            self.assertTrue(agent.state['last_result']['ok'], f"attempt {i}: {agent.state['last_result']}")
+            self.assertNotIn('Repeated action blocked', agent.state['last_result']['result'])
+
+    def test_repeating_an_unrelated_action_is_still_blocked_as_before(self):
+        agent, root = self.make('advisory')
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        self.step(agent, 'memory_search', query='clear orient first')  # satisfy orient, out of the way
+        for _ in range(2):
+            self.step(agent, 'execute_bash', command='echo hi')
+        self.step(agent, 'execute_bash', command='echo hi')
+        self.assertFalse(agent.state['last_result']['ok'])
+        self.assertIn('Repeated action blocked', agent.state['last_result']['result'])
+
+    def test_memory_search_stays_exempt_even_after_orient_is_already_satisfied(self):
+        # memory_search is harmless to repeat regardless of checkpoint state -
+        # the exemption is unconditional, not just while a checkpoint demands it.
+        agent, root = self.make('mandatory')
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        for _ in range(6):
+            self.step(agent, 'memory_search', query='project status')
+            self.assertTrue(agent.state['last_result']['ok'], agent.state['last_result'])
