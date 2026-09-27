@@ -83,3 +83,39 @@ class PostRenderingTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@unittest.skipUnless(shutil.which("node"), "Node.js not available on PATH")
+class BoardDirectMessageTransparencyTests(unittest.TestCase):
+    """2026-09-27: the operator noticed only two of nine agents ever appear on the
+    Village Board and asked what happened to the rest. Diagnosis: seven agents were
+    communicating too, but almost entirely via named direct_message (private,
+    metadata-only by design), which the Board panel never showed at all - giving a
+    false impression that most agents were silent. board-info now surfaces a count
+    of private exchanges without revealing their content."""
+
+    HARNESS = Path(__file__).resolve().parent / "fixtures" / "board_info_harness.js"
+
+    def render_info(self, events_js):
+        result = subprocess.run(
+            ["node", str(self.HARNESS), str(ROOT / "web/observatory.js"), events_js],
+            capture_output=True, text=True, timeout=10,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return result.stdout.strip()
+
+    def test_direct_message_count_is_shown_without_content(self):
+        events = """[
+          {"event":"board_message","agent":"01-king","timestamp":"2026-01-01T10:00:00Z","detail":"message=Alpha topic."},
+          {"event":"direct_message","agent":"02-explorer","timestamp":"2026-01-01T10:05:00Z","detail":"to=03-x; chars=40"},
+          {"event":"direct_message","agent":"02-explorer","timestamp":"2026-01-01T10:06:00Z","detail":"to=03-x; chars=20"}
+        ]"""
+        info = self.render_info(events)
+        self.assertIn("+2 private Direktgespräche", info)
+        self.assertNotIn("chars=", info)
+
+    def test_no_direct_messages_omits_the_clause_entirely(self):
+        events = """[{"event":"board_message","agent":"01-king","timestamp":"2026-01-01T10:00:00Z","detail":"message=Alpha topic."}]"""
+        info = self.render_info(events)
+        self.assertNotIn("private Direktgespräche", info)
+        self.assertNotIn("+0", info)
