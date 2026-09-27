@@ -42,6 +42,81 @@ class LinuxCommandTransformTests(unittest.TestCase):
             list(import_dataset.linux_command_pairs({"not": "a list"}))
 
 
+GSM8K_SAMPLE = [
+    {"question": "Natalia sold clips to 48 friends in April, then half as many in May. Total?",
+     "answer": "48/2 = <<48/2=24>>24\n48+24 = <<48+24=72>>72\n#### 72"},
+    {"question": "", "answer": "should be skipped"},
+]
+
+
+class Gsm8kTransformTests(unittest.TestCase):
+    def test_question_and_answer_become_content(self):
+        records = list(import_dataset.gsm8k_pairs(GSM8K_SAMPLE))
+        self.assertEqual(len(records), 1)
+        self.assertTrue(records[0]["content"].startswith("Question: Natalia"))
+        self.assertIn("#### 72", records[0]["content"])
+
+    def test_non_list_input_is_rejected(self):
+        with self.assertRaises(ValueError):
+            list(import_dataset.gsm8k_pairs({}))
+
+
+COMMONSENSE_QA_SAMPLE = [
+    {"question": "The sanctions seemed to what the efforts?",
+     "choices": {"label": ["A", "B", "C"], "text": ["ignore", "enforce", "avoid"]},
+     "answerKey": "A"},
+    {"question": "Missing answer key", "choices": {"label": ["A"], "text": ["x"]}, "answerKey": ""},
+    {"question": "Bad key", "choices": {"label": ["A"], "text": ["x"]}, "answerKey": "Z"},
+]
+
+
+class CommonsenseQaTransformTests(unittest.TestCase):
+    def test_correct_choice_is_resolved_by_label(self):
+        records = list(import_dataset.commonsense_qa_pairs(COMMONSENSE_QA_SAMPLE))
+        self.assertEqual(len(records), 1)
+        self.assertIn("A) ignore; B) enforce; C) avoid", records[0]["content"])
+        self.assertIn("Answer: A) ignore", records[0]["content"])
+
+    def test_non_list_input_is_rejected(self):
+        with self.assertRaises(ValueError):
+            list(import_dataset.commonsense_qa_pairs({}))
+
+
+SQUAD_SAMPLE = [
+    {"title": "University_of_Notre_Dame", "context": "Atop the Main Building is a golden statue.",
+     "question": "What is atop the Main Building?", "answers": {"text": ["a golden statue"], "answer_start": [30]}},
+    {"title": "X", "context": "", "question": "empty context", "answers": {"text": ["y"]}},
+]
+
+
+class SquadTransformTests(unittest.TestCase):
+    def test_title_underscore_becomes_space_and_answer_is_first_text(self):
+        records = list(import_dataset.squad_pairs(SQUAD_SAMPLE))
+        self.assertEqual(len(records), 1)
+        self.assertTrue(records[0]["content"].startswith("University of Notre Dame"))
+        self.assertIn("Answer: a golden statue", records[0]["content"])
+
+    def test_non_list_input_is_rejected(self):
+        with self.assertRaises(ValueError):
+            list(import_dataset.squad_pairs({}))
+
+
+class WikipediaLeadTransformTests(unittest.TestCase):
+    def test_long_article_is_truncated_not_skipped(self):
+        long_text = "x" * 20000
+        records = list(import_dataset.wikipedia_lead_pairs([{"title": "April", "text": long_text}]))
+        self.assertEqual(len(records), 1)
+        self.assertLessEqual(len(records[0]["content"]), import_dataset.WIKIPEDIA_TRUNCATE_CHARS + len("April\n\n"))
+
+    def test_missing_title_or_text_is_skipped(self):
+        records = list(import_dataset.wikipedia_lead_pairs([{"title": "", "text": "content"}]))
+        self.assertEqual(records, [])
+
+    def test_non_list_input_is_rejected(self):
+        with self.assertRaises(ValueError):
+            list(import_dataset.wikipedia_lead_pairs({}))
+
+
 class DigestVerificationTests(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())

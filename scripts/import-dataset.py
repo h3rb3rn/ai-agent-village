@@ -57,8 +57,82 @@ def linux_command_pairs(raw: Any) -> Iterator[Dict[str, str]]:
         yield {"content": f"Task: {task}\nCommand: {command}", "kind": "reference"}
 
 
+def gsm8k_pairs(raw: Any) -> Iterator[Dict[str, str]]:
+    """Transform for openai/gsm8k rows: {"question", "answer"} (answer includes
+    the worked calculator steps and a final '#### <number>' line - kept as-is,
+    it is the reasoning trace, not noise)."""
+    if not isinstance(raw, list):
+        raise ValueError("expected a JSON list of {question, answer} objects")
+    for row in raw:
+        question, answer = str(row.get("question", "")).strip(), str(row.get("answer", "")).strip()
+        if not question or not answer:
+            continue
+        yield {"content": f"Question: {question}\nAnswer: {answer}", "kind": "reference"}
+
+
+def commonsense_qa_pairs(raw: Any) -> Iterator[Dict[str, str]]:
+    """Transform for tau/commonsense_qa rows: {"question", "choices": {"label": [...],
+    "text": [...]}, "answerKey"}."""
+    if not isinstance(raw, list):
+        raise ValueError("expected a JSON list of commonsense_qa objects")
+    for row in raw:
+        question = str(row.get("question", "")).strip()
+        choices = row.get("choices") or {}
+        labels, texts = choices.get("label") or [], choices.get("text") or []
+        answer_key = str(row.get("answerKey", "")).strip()
+        if not question or not labels or not texts or not answer_key:
+            continue
+        options = "; ".join(f"{label}) {text}" for label, text in zip(labels, texts))
+        try:
+            correct_text = texts[labels.index(answer_key)]
+        except ValueError:
+            continue
+        content = (f"Question: {question}\nChoices: {options}\n"
+                  f"Answer: {answer_key}) {correct_text}")
+        yield {"content": content, "kind": "reference"}
+
+
+def squad_pairs(raw: Any) -> Iterator[Dict[str, str]]:
+    """Transform for rajpurkar/squad rows: {"title", "context", "question",
+    "answers": {"text": [...], "answer_start": [...]}}. The context repeats
+    across the several questions asked about it - accepted as-is, repetition
+    does not hurt retrieval and each row stays independently verifiable."""
+    if not isinstance(raw, list):
+        raise ValueError("expected a JSON list of squad objects")
+    for row in raw:
+        title = str(row.get("title", "")).replace("_", " ").strip()
+        context, question = str(row.get("context", "")).strip(), str(row.get("question", "")).strip()
+        answers = (row.get("answers") or {}).get("text") or []
+        if not context or not question or not answers:
+            continue
+        content = f"{title}\n\nContext: {context}\n\nQuestion: {question}\nAnswer: {answers[0]}"
+        yield {"content": content, "kind": "reference"}
+
+
+WIKIPEDIA_TRUNCATE_CHARS = 4000  # keeps almost every simple-english article under gateway.MAX_CONTENT
+
+
+def wikipedia_lead_pairs(raw: Any) -> Iterator[Dict[str, str]]:
+    """Transform for wikimedia/wikipedia rows: {"title", "text", ...}. Truncated
+    to WIKIPEDIA_TRUNCATE_CHARS - a deliberate lead-section summary, not the
+    full article, so it fits the gateway's per-entry limit instead of being
+    silently skipped as oversized."""
+    if not isinstance(raw, list):
+        raise ValueError("expected a JSON list of wikipedia objects")
+    for row in raw:
+        title, text = str(row.get("title", "")).strip(), str(row.get("text", "")).strip()
+        if not title or not text:
+            continue
+        truncated = text[:WIKIPEDIA_TRUNCATE_CHARS]
+        yield {"content": f"{title}\n\n{truncated}", "kind": "reference"}
+
+
 TRANSFORMS: Dict[str, Callable[[Any], Iterator[Dict[str, str]]]] = {
     "linux_command_pairs": linux_command_pairs,
+    "gsm8k_pairs": gsm8k_pairs,
+    "commonsense_qa_pairs": commonsense_qa_pairs,
+    "squad_pairs": squad_pairs,
+    "wikipedia_lead_pairs": wikipedia_lead_pairs,
 }
 
 
