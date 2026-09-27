@@ -551,7 +551,16 @@ class Resident:
             norm_args['command'] = normalize_command(str(norm_args['command']))
 
         signature = hashlib.sha256(json.dumps([norm_name, norm_args], sort_keys=True).encode()).hexdigest()
-        history = [x for x in self.state.get('recent_actions', []) if x.get('at', 0) > time.time() - 900][-24:]
+        # P40: widened from 900s to 3600s - observed live on N06-M10 (2026-09-28):
+        # a trivial, always-succeeding, near-constant-output command ('df -h
+        # /mnt/hdd1') was independently re-run by all 9 agents, ~15 min apart per
+        # agent, for over an hour - each agent legitimately never exceeded the old
+        # 2-per-15-min cap, so the guard never fired, yet the village-wide pattern
+        # was pure filler, not the wasteful/harmful loop this guard exists to stop.
+        # A 1-hour window quarters the rate a single agent can "farm" the exact
+        # same near-constant-output action without touching genuine polling
+        # (is_polling_progress below is exempt regardless of window length).
+        history = [x for x in self.state.get('recent_actions', []) if x.get('at', 0) > time.time() - 3600][-24:]
         matching = [x for x in history if x.get('signature') == signature]
         limit = 1 if name == 'board_message' else 2
         # Two of the runtime's own gates could otherwise deadlock each other:

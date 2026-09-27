@@ -541,3 +541,50 @@ class CheckpointVsRepeatedActionDeadlockTests(unittest.TestCase):
         for _ in range(6):
             self.step(agent, 'memory_search', query='project status')
             self.assertTrue(agent.state['last_result']['ok'], agent.state['last_result'])
+
+
+class WidenedRepeatWindowTests(unittest.TestCase):
+    """P40: observed live on N06-M10 (2026-09-28) - all 9 agents independently
+    re-ran the exact same trivial, near-constant-output command ('df -h
+    /mnt/hdd1'), each individually staying under the old 2-per-15-min cap by
+    simply waiting ~15 minutes between repeats. Widened to 1 hour so the same
+    near-constant-output action cannot be farmed 4x as often per agent, while
+    genuine polling (changing output) stays exempt regardless of window size."""
+
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp(prefix='village-window-'))
+        (self.root / 'board').mkdir(); (self.root / 'telemetry').mkdir()
+        (self.root / 'identity.txt').write_text('identity')
+        self.env = dict(AGENT_ID='05-interpreter', AGENT_NAME='interpreter', AGENT_ROLE='resident',
+                        VILLAGE_ROOT=str(self.root), AGENT_IDENTITY_PROMPT=str(self.root / 'identity.txt'), OLLAMA_MODEL='m')
+        self.agent = Resident(self.env)
+
+    def tearDown(self):
+        shutil.rmtree(self.root, ignore_errors=True)
+
+    def execute(self, name, **args):
+        self.agent.execute({'tool_call': {'name': name, 'arguments': args}})
+
+    def test_a_repeat_16_minutes_later_is_still_blocked_not_reset(self):
+        # Under the old 900s window this second call would have started a fresh
+        # count (the first fell just outside it); under the new 3600s window it
+        # is still the same window, so the pair still trips the limit=2 guard
+        # exactly like two back-to-back calls would.
+        now = time.time()
+        with patch('time.time', return_value=now - 960):
+            self.execute('execute_bash', command='echo hi')
+        with patch('time.time', return_value=now):
+            self.execute('execute_bash', command='echo hi')
+            self.assertTrue(self.agent.state['last_result']['ok'])  # 2nd occurrence still allowed
+            self.execute('execute_bash', command='echo hi')
+        self.assertFalse(self.agent.state['last_result']['ok'])
+        self.assertIn('Repeated action blocked', self.agent.state['last_result']['result'])
+
+    def test_a_repeat_past_one_hour_is_allowed_again(self):
+        now = time.time()
+        with patch('time.time', return_value=now - 3700):
+            self.execute('execute_bash', command='echo hi')
+            self.execute('execute_bash', command='echo hi')
+        with patch('time.time', return_value=now):
+            self.execute('execute_bash', command='echo hi')
+        self.assertTrue(self.agent.state['last_result']['ok'])
