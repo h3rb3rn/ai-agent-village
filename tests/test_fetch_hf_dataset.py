@@ -101,6 +101,83 @@ class FetchAllRowsTests(unittest.TestCase):
         self.assertEqual(result, [])
 
 
+class CheckpointResumeTests(unittest.TestCase):
+    """P38-continuation: a large fetch (e.g. 240k+ Wikipedia rows, ~2400
+    requests) must not lose all progress to one exhausted retry budget deep
+    into the run - this is what makes fetch_all_rows resumable."""
+
+    def setUp(self):
+        import tempfile
+        self.tmp = Path(tempfile.mkdtemp(prefix="village-checkpoint-"))
+        self.addCleanup(__import__("shutil").rmtree, self.tmp, ignore_errors=True)
+        self.checkpoint = self.tmp / "out.json.partial.jsonl"
+
+    def _call(self, opener, **kwargs):
+        import urllib.request
+        original = urllib.request.urlopen
+        urllib.request.urlopen = opener
+        try:
+            return fetch_hf_dataset.fetch_all_rows("ds", "cfg", "train", sleep_seconds=0,
+                                                    checkpoint_path=self.checkpoint, **kwargs)
+        finally:
+            urllib.request.urlopen = original
+
+    def test_successful_rows_are_written_to_the_checkpoint_as_they_arrive(self):
+        rows = [{"q": i} for i in range(150)]
+        opener = MagicMock(side_effect=[page_response(rows[0:100], 150), page_response(rows[100:150], 150)])
+        self._call(opener)
+        checkpointed = fetch_hf_dataset._load_checkpoint(self.checkpoint)
+        self.assertEqual(len(checkpointed), 150)
+        self.assertEqual(checkpointed[0], {"q": 0})
+        self.assertEqual(checkpointed[-1], {"q": 149})
+
+    def test_a_second_call_resumes_from_the_checkpoint_instead_of_refetching(self):
+        rows = [{"q": i} for i in range(150)]
+        first_opener = MagicMock(side_effect=[page_response(rows[0:100], 150),
+                                              RuntimeError("simulated exhaustion mid-run")])
+        with self.assertRaises(RuntimeError):
+            self._call(first_opener)
+        self.assertEqual(len(fetch_hf_dataset._load_checkpoint(self.checkpoint)), 100)
+
+        # Resume: only the remaining page should be requested, at offset=100.
+        second_opener = MagicMock(return_value=page_response(rows[100:150], 150))
+        result = self._call(second_opener)
+        self.assertEqual(len(result), 150)
+        self.assertEqual(result, rows)
+        requested_url = second_opener.call_args[0][0]
+        self.assertIn("offset=100", requested_url)
+        self.assertEqual(second_opener.call_count, 1)
+
+    def test_a_fully_checkpointed_dataset_needs_no_further_requests(self):
+        rows = [{"q": i} for i in range(50)]
+        with self.checkpoint.open("w", encoding="utf-8") as handle:
+            for row in rows:
+                handle.write(json.dumps(row) + "\n")
+        # A page request at offset=50 legitimately returns empty - already complete.
+        opener = MagicMock(return_value=page_response([], 50))
+        result = self._call(opener)
+        self.assertEqual(result, rows)
+
+    def test_main_deletes_the_checkpoint_after_a_successful_full_run(self):
+        with patch.object(fetch_hf_dataset, "fetch_all_rows", return_value=[{"q": 1}]):
+            with self.checkpoint.open("w") as handle:
+                handle.write('{"q": 1}\n')
+            out = self.tmp / "out.json"
+            sys.argv = ["fetch-hf-dataset.py", "--dataset-id", "d", "--config", "c", "--output", str(out)]
+            fetch_hf_dataset.main()
+        self.assertFalse(self.checkpoint.exists())
+        self.assertEqual(json.loads(out.read_text()), [{"q": 1}])
+
+    def test_no_checkpoint_flag_disables_checkpointing_entirely(self):
+        rows = [{"q": 1}]
+        with patch.object(fetch_hf_dataset, "fetch_all_rows", return_value=rows) as fetch:
+            out = self.tmp / "out.json"
+            sys.argv = ["fetch-hf-dataset.py", "--dataset-id", "d", "--config", "c",
+                       "--output", str(out), "--no-checkpoint"]
+            fetch_hf_dataset.main()
+        self.assertIsNone(fetch.call_args.kwargs["checkpoint_path"])
+
+
 class MainWritesDigestedFileTests(unittest.TestCase):
     def test_output_file_digest_matches_written_bytes(self):
         import hashlib
