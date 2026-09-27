@@ -330,3 +330,16 @@ class ReleaseCompletenessTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MetricsSystemSenderTests(unittest.TestCase):
+    def test_village_council_broadcast_is_not_counted_as_a_resident_speaker(self):
+        # 2026-09-27 08:04:58 UTC: the meeting scheduler posted a village-council
+        # broadcast, inflating agents_with_message to 10 for a 9-resident village.
+        from village.metrics import compute
+        activity = [
+            {"event": "board_message", "agent": "01-king", "detail": "to=ALL; message=x"},
+            {"event": "board_message", "agent": "village-council", "detail": "to=ALL; message=Meeting daily_standup is open."},
+        ]
+        m = compute(activity, [])
+        self.assertEqual(m["agents_with_message"], 1)

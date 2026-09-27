@@ -34,7 +34,10 @@ def compute(activity: Iterable[Dict[str, Any]], inference: Iterable[Dict[str, An
     directed_board = [r for r in board if "to=ALL" not in str(r.get("detail", ""))]
     messages = len(board) + len(directs)
     direct_total = len(directs) + len(directed_board)
-    speakers = {r.get("agent") for r in board + directs if r.get("agent")}
+    # Non-resident system senders (meeting scheduler broadcasts, coordination-layer
+    # metadata) must not be counted as a village resident speaking.
+    SYSTEM_SENDERS = {"village-council", "coordination"}
+    speakers = {r.get("agent") for r in board + directs if r.get("agent") and r.get("agent") not in SYSTEM_SENDERS}
     memory_writers = {r.get("agent") for r in activity
                       if (r.get("event") == "memory_result" and "action=memory_remember" in str(r.get("detail", "")) and "result=success" in str(r.get("detail", "")))
                       or r.get("event") == "memory_auto"}
