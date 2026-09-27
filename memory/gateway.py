@@ -450,6 +450,7 @@ class Handler(BaseHTTPRequestHandler):
                     FROM memories GROUP BY agent ORDER BY agent
                     """
                 ).fetchall()
+                projection = projection_stats(conn)
                 conn.close()
                 return self.send_json(
                     200,

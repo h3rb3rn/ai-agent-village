@@ -316,3 +316,31 @@ class MemoryGatewayTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MemoryStatsRouteTests(MemoryGatewayTests):
+    """Regression: 2026-09-27, N06-M10. /v1/stats crashed with an unhandled NameError
+    ('projection' referenced but never assigned in that branch), so curl saw "Empty
+    reply from server" and the telemetry collector's except-clause silently reported
+    an empty memory substrate on the dashboard - while the authoritative SQLite store
+    actually held 290 real entries, fully projected. The dashboard showing empty was a
+    monitoring bug, not reality; this exercises the real HTTP route end to end so a
+    NameError there cannot go unnoticed again (the existing ProjectionStatsTests only
+    covered the projection_stats() helper in isolation, never this route)."""
+
+    def test_stats_route_returns_projection_without_crashing(self):
+        status, item = self.call("POST", "/v1/memories", {"agent": "a", "scope": "shared", "content": "x", "kind": "note"}, token="token-a")
+        self.assertEqual(status, 201, item)
+        status, body = self.call("GET", "/v1/stats", token=None)
+        self.assertEqual(status, 200, body)
+        self.assertEqual(body["total"], 1)
+        self.assertIn("projection", body)
+        self.assertIn("max_sequence_id", body["projection"])
+        self.assertIn("backends", body["projection"])
+
+    def test_stats_route_works_with_zero_memories(self):
+        status, body = self.call("GET", "/v1/stats", token=None)
+        self.assertEqual(status, 200, body)
+        self.assertEqual(body["total"], 0)
+        self.assertEqual(body["agents"], [])
+        self.assertEqual(body["projection"]["max_sequence_id"], 0)

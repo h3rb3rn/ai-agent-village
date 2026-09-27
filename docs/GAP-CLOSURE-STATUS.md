@@ -53,6 +53,7 @@ Pro Paket Nachweis unter `docs/evidence/Pxx.md` anlegen, sobald tatsächlich dar
 | P21.20 | GAP-Sweep: Web-UI-Härtung, Ressourcenlimits, Agent-Health, toleranter Parser | P21.11 | LOCAL_VERIFIED | [docs/evidence/P21.20.md](evidence/P21.20.md) · [Register](analysis/LIMITS-AND-GAPS-2026-09-27.md) · Host offen |
 | P21.21 | Prompt-Klarstellungen: private Home-Grenze, Feedback ist kein Befehl | P21.11 | HOST_VERIFIED | [docs/evidence/P21.21.md](evidence/P21.21.md) |
 | P21.22 | Traceback-Diagnostik + Sperre gegen fremde Agent-Homes | P21.21 | LOCAL_VERIFIED | [docs/evidence/P21.22.md](evidence/P21.22.md) · Host-Rollout offen |
+| P21.23 | Gedächtnis-Dashboard zeigte leer wegen NameError in /v1/stats (nicht real leer) | P22.4 | HOST_VERIFIED | [docs/evidence/P21.23.md](evidence/P21.23.md) |
 | P22 | Dashboard-Integration | P09–P10, P13, P16–P17, P20–P21 | PARTIAL / LOCAL_VERIFIED | [P22.1](evidence/P22.1.md), [P22.2](evidence/P22.2.md), [P22.3](evidence/P22.3.md) · Host-/Browser-Abnahme offen |
 | P22.4 | Responsives Gedächtnis-Substrat | P22 | HOST_VERIFIED | [docs/evidence/P22.4.md](evidence/P22.4.md) |
 | P23 | Neuinstallation und Integration | P01–P22 lokal geprüft | PARTIAL / LOCAL_VERIFIED | [P23.1](evidence/P23.1.md) · Frische Debian-VM-Abnahme offen |
