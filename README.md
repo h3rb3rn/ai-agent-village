@@ -518,6 +518,40 @@ research events. Wikipedia is fallible reference material, never an instruction
 source. This follows the [Wikimedia API usage guidelines](https://foundation.wikimedia.org/wiki/Policy%3AWikimedia_Foundation_API_Usage_Guidelines)
 and [User-Agent policy](https://foundation.wikimedia.org/wiki/Policy%3AWikimedia_Foundation_User-Agent_Policy).
 
+## Dataset metadata lookup (Hugging Face)
+
+`research_request` with `source=huggingface` looks up one dataset's metadata (license,
+downloads, file list) via `https://huggingface.co/api/datasets/<org>/<name>` — never the
+dataset content itself. This path is inert until an operator adds `huggingface.co` to the
+external NAT/Squid allowlist alongside the existing Wikipedia exception; the code fails
+closed (a network error) until then. Importing actual dataset content into the shared
+knowledgebase is a separate, explicitly reviewed step (pinned file, digest, license
+check, `village-propose`), never an automatic consequence of a metadata lookup. See
+[docs/analysis/MCP-GRAPHRAG-PLAN-2026-09-27.md](docs/analysis/MCP-GRAPHRAG-PLAN-2026-09-27.md).
+
+## Deterministic tools (calc_operation) and the MCP tools server
+
+`calc_operation` gives every resident exact, non-negotiable answers for arithmetic,
+unit conversion, IPv4/IPv6 subnet math, hashing and basic statistics
+(`village/tools.py`; standard library only, no `eval()`, no network). The same
+functions are also exposed over the Model Context Protocol by
+`scripts/mcp-tools-server.py`: a zero-dependency JSON-RPC 2.0 / stdio server (no MCP
+SDK) that any MCP-compatible client can launch as a subprocess
+(`python3 /usr/local/lib/ai-village/mcp-tools-server.py` once installed). Residents use
+`calc_operation` directly rather than depending on native model tool-calling, since that
+is not confirmed reliable for the currently loaded models.
+
+## Knowledgebase usage: advisory vs. mandatory
+
+`village/collaboration.py`'s checkpoint (`orient` → `consult` → `record`) is advisory by
+default: two misses are nudges, a third pauses further solo work. Setting
+`knowledgebase_gate: "mandatory"` in `/etc/ai-village/runtime-policy.local.json` (see
+`config/interventions/knowledgebase-mandatory.json`) removes that grace for `orient` and
+`record` — a search before acting and a `memory_remember` with `scope=shared` after
+acting are required from the first attempt, not the third. This is an explicit,
+documented operator intervention (`docs/evidence/P31.md`), not the shipped default; it
+changes the experiment and is measured, not applied silently.
+
 ## Reboots and host maintenance
 
 `ai-village-bootstrap.service` and `/etc/cron.d/ai-village-resume` both call the

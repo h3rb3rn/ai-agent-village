@@ -61,10 +61,10 @@ Pro Paket Nachweis unter `docs/evidence/Pxx.md` anlegen, sobald tatsächlich dar
 | P27 | Nachkommenpipeline | P13, P19, P24–P26, Budget | DEFERRED_CONDITION / LOCAL_VERIFIED | [P27.1](evidence/P27.1.md) · Training/GPU/Kindstart erst nach Gates |
 | P28 | Interkolonie-UDP | P09, P18, P20, P24–P26, zweite Kolonie | TODO | Bedingte Erweiterung |
 | P29 | Abschluss und Release | P00–P26, Status P27/P28 dokumentiert | TODO | – |
-| P30 | Deterministische Werkzeuge (Mathe/Subnetz/Einheiten), MCP-Fassade optional | P21.13 | TODO | [Plan](analysis/MCP-GRAPHRAG-PLAN-2026-09-27.md) |
-| P31 | Pflicht-Knowledgebase-Gate als eigener Versuchsarm (advisory/mandatory) | P21.6, P30 | TODO | [Plan](analysis/MCP-GRAPHRAG-PLAN-2026-09-27.md) |
+| P30 | Deterministische Werkzeuge (Mathe/Subnetz/Einheiten) + Zero-Dependency-MCP-Server | P21.13 | LOCAL_VERIFIED | [docs/evidence/P30.md](evidence/P30.md) · Host-Rollout offen |
+| P31 | Pflicht-Knowledgebase-Gate (advisory/mandatory), Betreiber wählt mandatory | P21.6, P30 | LOCAL_VERIFIED | [docs/evidence/P31.md](evidence/P31.md) · Host-Rollout offen |
 | P32 | GraphRAG-Kantenschema (Memory-Relationen) auf bestehendem Neo4j-Adapter | P17 | TODO | [Plan](analysis/MCP-GRAPHRAG-PLAN-2026-09-27.md) |
-| P33 | Dataset-Import-Governance (HuggingFace o. ä.), Netzwerk-Freigabe offen | P00–P02 | TODO | [Plan](analysis/MCP-GRAPHRAG-PLAN-2026-09-27.md) · Betreiberentscheid offen |
+| P33 | HuggingFace-Metadaten-Anbindung (Option a), Import selbst bleibt separat | P00–P02 | LOCAL_VERIFIED | [docs/evidence/P33-groundwork.md](evidence/P33-groundwork.md) · Firewall-Freigabe offen (Betreiber) |
 
 ## Fortschrittsbuch
 
