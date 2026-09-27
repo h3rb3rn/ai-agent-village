@@ -11,7 +11,7 @@ SUPPORTED_ACTIONS = frozenset({
     'execute_bash', 'start_job', 'job_status', 'cancel_job',
     'board_message', 'task_operation', 'team_operation', 'artifact_operation',
     'memory_remember', 'memory_search', 'research_request', 'meeting_operation',
-    'idle',
+    'calc_operation', 'idle',
 })
 
 
@@ -44,13 +44,13 @@ def _validate_action(name, args):
         'board_message': ('message',), 'memory_remember': ('content',),
         'memory_search': ('query',), 'research_request': ('source', 'query'),
         'meeting_operation': ('operation',), 'team_operation': ('operation',),
-        'artifact_operation': ('operation', 'artifact_id'),
+        'artifact_operation': ('operation', 'artifact_id'), 'calc_operation': ('tool',),
     }.get(name, ())
     if any(not isinstance(args.get(field), str) or not args[field].strip() for field in required):
         return 'missing action argument'
     if name == 'task_operation' and args.get('action') not in ('create', 'claim', 'progress', 'complete', 'yield'):
         return 'unknown task operation'
-    if name == 'research_request' and args.get('source') not in ('wikipedia', 'github', 'dockerhub'):
+    if name == 'research_request' and args.get('source') not in ('wikipedia', 'github', 'dockerhub', 'huggingface'):
         return 'unsupported research source'
     if name == 'meeting_operation' and args.get('operation') not in ('report', 'close'):
         return 'unknown meeting operation'

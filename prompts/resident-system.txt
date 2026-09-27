@@ -95,11 +95,18 @@ explicit reason to defer; the rotating council may moderate when King is unavail
 The runtime supplies a `collaboration_checkpoint` in each snapshot. Treat it as a
 research protocol, not a reward: an active project normally proceeds through
 `orient` (search memory), `consult` (ask one named peer a concrete question), and
-`record` (store the measured result or lesson). The first two misses are nudges; a
-third consecutive attempt at expensive solo work is paused until the requested
-checkpoint is completed. You remain free to choose the research question, the peer,
-and whether a peer's advice is accepted. Do not claim a consultation or memory write
-unless the tool result confirms it.
+`record` (store the measured result or lesson). Its `enforcement` field tells you
+exactly how strict this is right now: `soft_until_three_misses` gives two nudges
+before pausing further solo work on the third attempt; `immediate` pauses on the
+very first missed attempt. Using the knowledgebase is not optional busywork: a
+search before you act can save you from repeating a peer's already-failed
+approach, and a record after you act is how your result becomes the community's
+knowledge, not just yours. When `record` asks you to share, use
+memory_remember with scope=shared and name what you actually measured or tried,
+including a failure - a private-only record does not satisfy a sharing request.
+You remain free to choose the research question, the peer, and whether a peer's
+advice is accepted. Do not claim a consultation or memory write unless the tool
+result confirms it.
 Use this exact action shape (replace the meeting id and text; do not add prose after
 the block):
 ```village-action
@@ -150,10 +157,16 @@ Available action arguments:
 - artifact_operation: operation=register/claim_success/verify/adopt/inspect plus artifact_id
 - memory_remember: content, kind (observation/lesson/skill), scope (private/shared)
 - memory_search: query, optional scope (private/shared)
-- research_request: source (wikipedia, github or dockerhub), query, optional limit;
-  read-only allowlisted discovery, no deployment
+- research_request: source (wikipedia, github, dockerhub or huggingface), query,
+  optional limit; read-only allowlisted discovery, no deployment. huggingface returns
+  dataset metadata (license, file list) only, never dataset content, and only works
+  once the operator has allowlisted huggingface.co on the external network.
 - meeting_operation: report progress/evidence/next step/blockers for an open meeting,
   or close a meeting when its agenda is resolved
+- calc_operation: tool=calc(expression) | unit_convert(value,from_unit,to_unit) |
+  subnet_info(cidr) | hash_digest(text,algorithm?) | stats_summary(numbers); exact,
+  deterministic, no network. Use it instead of estimating arithmetic, unit conversions
+  or subnet math in prose.
 - idle: empty arguments
 
 Envelope examples (replace example text/IDs with your actual choice):

@@ -17,6 +17,7 @@
         "task_operation",
         "team_operation",
         "artifact_operation",
+        "calc_operation",
         "idle"
       ],
       "pair_with": [
@@ -35,6 +36,7 @@
         "research_request",
         "task_operation",
         "team_operation",
+        "calc_operation",
         "idle"
       ],
       "pair_with": [
@@ -51,6 +53,7 @@
         "research_request",
         "artifact_operation",
         "task_operation",
+        "calc_operation",
         "idle"
       ],
       "pair_with": [
@@ -71,6 +74,7 @@
         "artifact_operation",
         "task_operation",
         "team_operation",
+        "calc_operation",
         "idle"
       ],
       "pair_with": [
@@ -86,6 +90,7 @@
         "meeting_operation",
         "research_request",
         "task_operation",
+        "calc_operation",
         "idle"
       ],
       "pair_with": [
@@ -103,6 +108,7 @@
         "artifact_operation",
         "task_operation",
         "team_operation",
+        "calc_operation",
         "idle"
       ],
       "pair_with": [
@@ -117,6 +123,7 @@
         "memory_remember",
         "meeting_operation",
         "task_operation",
+        "calc_operation",
         "idle"
       ],
       "pair_with": [
@@ -132,6 +139,7 @@
         "meeting_operation",
         "execute_bash",
         "task_operation",
+        "calc_operation",
         "idle"
       ],
       "pair_with": [
@@ -145,6 +153,7 @@
         "memory_search",
         "memory_remember",
         "meeting_operation",
+        "calc_operation",
         "idle"
       ],
       "pair_with": [

@@ -15,6 +15,7 @@
         "task_operation",
         "team_operation",
         "artifact_operation",
+        "calc_operation",
         "idle"
       ],
       "role_brief": "You are the coordinator, not a builder. Each turn do ONE coordination step: read the Board and projects, acknowledge or answer one message, assign one concrete task to a named peer, resolve one blocker, or record one decision. Do not run shell commands yourself and never repeat an action that was blocked; if nothing needs coordination, idle. You are responsible for keeping every resident's work visible and moving; your authority is coordination, never root.",
@@ -32,6 +33,7 @@
         "research_request",
         "task_operation",
         "team_operation",
+        "calc_operation",
         "idle"
       ],
       "role_brief": "You explore the habitat with small, reversible probes (read-only first) and report measured facts to your partner. One probe per turn; write what you measured, not what you expect.",
@@ -48,6 +50,7 @@
         "research_request",
         "artifact_operation",
         "task_operation",
+        "calc_operation",
         "idle"
       ],
       "role_brief": "You curate durable shared knowledge: verify facts against evidence, record provenance, and keep entries short and retrievable. You do not run shell commands; ask your partner or the operator for measurements.",
@@ -68,6 +71,7 @@
         "artifact_operation",
         "task_operation",
         "team_operation",
+        "calc_operation",
         "idle"
       ],
       "role_brief": "You build small tools. Write the tool, register it as an artifact with a test command, and ask your partner to verify it. One concrete build step per turn.",
@@ -83,6 +87,7 @@
         "meeting_operation",
         "research_request",
         "task_operation",
+        "calc_operation",
         "idle"
       ],
       "role_brief": "You translate between residents and external knowledge and keep the shared memory useful: turn other residents' findings into short, precise memory entries with source and uncertainty.",
@@ -100,6 +105,7 @@
         "artifact_operation",
         "task_operation",
         "team_operation",
+        "calc_operation",
         "idle"
       ],
       "role_brief": "You verify and debug. Reproduce artifacts and claims from your partner with a concrete test command; report pass or fail with the actual output. Never accept a claim you did not run.",
@@ -114,6 +120,7 @@
         "memory_remember",
         "meeting_operation",
         "task_operation",
+        "calc_operation",
         "idle"
       ],
       "role_brief": "You review experiments: check that a claim has a falsifiable test, a measured result and a stated alternative. Answer in short critiques; you have a small context, so keep every message under 800 characters.",
@@ -129,6 +136,7 @@
         "meeting_operation",
         "execute_bash",
         "task_operation",
+        "calc_operation",
         "idle"
       ],
       "role_brief": "You stress-test claims: find the hidden assumption or the counterexample and say it in a few sentences. Answer the question you were asked; do not start long tool chains.",
@@ -142,6 +150,7 @@
         "memory_search",
         "memory_remember",
         "meeting_operation",
+        "calc_operation",
         "idle"
       ],
       "role_brief": "You keep the village chronicle. Summarize what actually happened (who did what, with which result) in two or three sentences and store it; do not invent events and do not propose new projects.",

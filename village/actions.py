@@ -63,14 +63,22 @@ ACTION_SPECS: Dict[str, Dict[str, Any]] = {
         "doc": "query, scope? (private|shared) -> search stored memories",
         "properties": {"query": _s(300), "scope": {"enum": ["private", "shared"]}}, "required": ["query"]},
     "research_request": {
-        "doc": "source (wikipedia|github|dockerhub), query, limit? -> read-only discovery",
-        "properties": {"source": {"enum": ["wikipedia", "github", "dockerhub"]}, "query": _s(300), "limit": {"type": "integer", "minimum": 1, "maximum": 10}},
+        "doc": "source (wikipedia|github|dockerhub|huggingface), query, limit? -> read-only discovery; huggingface returns dataset metadata (license/files) only, never dataset content",
+        "properties": {"source": {"enum": ["wikipedia", "github", "dockerhub", "huggingface"]}, "query": _s(300), "limit": {"type": "integer", "minimum": 1, "maximum": 10}},
         "required": ["source", "query"]},
     "meeting_operation": {
         "doc": "operation=report(meeting_id,achieved,evidence,next_step,blockers) | close(meeting_id)",
         "properties": {"operation": {"enum": ["report", "close"]}, "meeting_id": _s(120), "achieved": _s(600),
                        "evidence": _s(600), "next_step": _s(400), "blockers": _s(400)},
         "required": ["operation", "meeting_id"]},
+    "calc_operation": {
+        "doc": "tool=calc(expression)|unit_convert(value,from_unit,to_unit)|subnet_info(cidr)|hash_digest(text,algorithm?)|stats_summary(numbers); deterministic, exact, no network",
+        "properties": {
+            "tool": {"enum": ["calc", "unit_convert", "subnet_info", "hash_digest", "stats_summary"]},
+            "expression": _s(200), "value": {"type": "number"}, "from_unit": _s(20), "to_unit": _s(20),
+            "cidr": _s(60), "text": _s(2000), "algorithm": {"enum": ["sha256", "sha512"]},
+            "numbers": {"type": "array", "items": {"type": "number"}, "maxItems": 256}},
+        "required": ["tool"]},
     "idle": {"doc": "no arguments -> deliberate rest", "properties": {}, "required": []},
 }
 

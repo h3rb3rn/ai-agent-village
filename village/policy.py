@@ -33,6 +33,7 @@ class AgentPolicy:
     dm_per_peer_per_hour: int = 6
     auto_memory: bool = False
     task_templates: bool = False
+    knowledgebase_gate: str = "advisory"
 
 
 def _read(path: Optional[Path]) -> Dict[str, Any]:
@@ -85,4 +86,5 @@ def agent_policy(name: str, policy: Optional[Dict[str, Any]] = None) -> AgentPol
         dm_per_peer_per_hour=max(1, cap),
         auto_memory=bool(values.get("auto_memory", False)),
         task_templates=bool(values.get("task_templates", False)),
+        knowledgebase_gate=(values.get("knowledgebase_gate") if values.get("knowledgebase_gate") in ("advisory", "mandatory") else "advisory"),
     )

@@ -1,0 +1,6 @@
+{
+  "_comment": "P31 operator intervention, decided 2026-09-27: knowledgebase usage is mandatory, not advisory. Deploy as /etc/ai-village/runtime-policy.local.json. Documented in docs/evidence/P31.md. Does not change action_format, prompt_profile, allowed_actions or pairing (those remain the shipped neutral default unless a separate M-stage override is also installed).",
+  "defaults": {
+    "knowledgebase_gate": "mandatory"
+  }
+}

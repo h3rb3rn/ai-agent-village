@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import time
 import urllib.parse
 import urllib.request
@@ -25,7 +26,13 @@ ALLOWED_HOSTS = {
     "wikipedia": ("en.wikipedia.org", "de.wikipedia.org"),
     "github": ("api.github.com", "github.com"),
     "dockerhub": ("hub.docker.com", "registry-1.docker.io"),
+    # P33: dataset METADATA lookup only (license, size, tags) - never the dataset content
+    # itself. Requires the operator to add huggingface.co to the external NAT/Squid
+    # allowlist (README's documented allowlist); this code path is inert until then.
+    "huggingface": ("huggingface.co",),
 }
+
+_DATASET_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*(/[A-Za-z0-9][A-Za-z0-9_.-]*)?$")
 
 
 def _allowed(url: str, source: str) -> urllib.parse.ParseResult:
@@ -60,10 +67,19 @@ class ResearchBroker:
     def search(self, source: str, query: str, limit: int = 5) -> dict[str, Any]:
         source, query = str(source).strip().lower(), str(query).strip()
         if source not in ALLOWED_HOSTS:
-            raise ResearchError("source must be wikipedia, github or dockerhub")
+            raise ResearchError("source must be wikipedia, github, dockerhub or huggingface")
         if not query or len(query) > 240:
             raise ResearchError("query must contain 1-240 characters")
         limit = max(1, min(int(limit), 10))
+        if source == "huggingface":
+            if not _DATASET_ID_RE.match(query):
+                raise ResearchError("huggingface query must be a dataset id, e.g. 'org/name'")
+            url = "https://huggingface.co/api/datasets/" + urllib.parse.quote(query, safe="/")
+            payload, digest = self._get_json(url, source)
+            return {"source": source, "query": query, "url": url, "fetched_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    "sha256": digest, "read_only": True, "deployment_performed": False,
+                    "note": "dataset metadata only (license/size/tags); no dataset content was fetched or imported",
+                    "results": self._normalize(source, payload)}
         if source == "wikipedia":
             params = urllib.parse.urlencode({"action": "opensearch", "search": query, "limit": limit, "namespace": 0, "format": "json"})
             url = f"https://en.wikipedia.org/w/api.php?{params}"
@@ -77,6 +93,18 @@ class ResearchBroker:
 
     @staticmethod
     def _normalize(source: str, payload: Any) -> list[dict[str, Any]]:
+        if source == "huggingface":
+            if not isinstance(payload, dict):
+                return []
+            card = payload.get("cardData") or {}
+            siblings = payload.get("siblings") or []
+            return [{
+                "id": payload.get("id"), "license": card.get("license") or payload.get("license"),
+                "downloads": payload.get("downloads"), "likes": payload.get("likes"),
+                "tags": (payload.get("tags") or [])[:20],
+                "files": [s.get("rfilename") for s in siblings if isinstance(s, dict)][:20],
+                "gated": payload.get("gated", False), "private": payload.get("private", False),
+            }]
         if source == "wikipedia":
             titles = payload[1] if isinstance(payload, list) and len(payload) > 1 else []
             urls = payload[3] if isinstance(payload, list) and len(payload) > 3 else []

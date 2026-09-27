@@ -7,6 +7,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from village.collaboration import CooperationCheckpoint, assess
 from village.coordinator import CoordinationStore
@@ -207,3 +208,104 @@ class HostObservedAliasTests(unittest.TestCase):
     def test_unrelated_unknown_action_name_is_not_silently_aliased(self):
         parsed = decision({'message': {'content': '{"name":"send_message","arguments":{"content":"x"}}'}})
         self.assertIn('unknown action', parsed['fallback_reason'])
+
+
+class CalcOperationRuntimeTests(unittest.TestCase):
+    """P30: calc_operation wires village/tools.py into the resident action contract."""
+
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp(prefix='village-calc-'))
+        (self.root / 'board').mkdir(); (self.root / 'telemetry').mkdir()
+        (self.root / 'identity.txt').write_text('identity')
+        self.env = dict(AGENT_ID='08-logician', AGENT_NAME='logician', AGENT_ROLE='resident', VILLAGE_ROOT=str(self.root),
+                        AGENT_IDENTITY_PROMPT=str(self.root / 'identity.txt'), OLLAMA_MODEL='m')
+        self.agent = Resident(self.env)
+
+    def tearDown(self):
+        shutil.rmtree(self.root, ignore_errors=True)
+
+    def test_subnet_info_via_action_contract(self):
+        self.agent.execute({'tool_call': {'name': 'calc_operation', 'arguments': {'tool': 'subnet_info', 'cidr': '10.10.10.0/28'}}})
+        self.assertTrue(self.agent.state['last_result']['ok'], self.agent.state['last_result'])
+        self.assertIn('"usable_hosts": 14', self.agent.state['last_result']['result'])
+
+    def test_invalid_tool_argument_is_reported_not_crashed(self):
+        self.agent.execute({'tool_call': {'name': 'calc_operation', 'arguments': {'tool': 'subnet_info', 'cidr': 'garbage'}}})
+        self.assertFalse(self.agent.state['last_result']['ok'])
+        self.assertIn('invalid CIDR', self.agent.state['last_result']['result'])
+
+    def test_unexpected_argument_name_is_reported_not_crashed(self):
+        self.agent.execute({'tool_call': {'name': 'calc_operation', 'arguments': {'tool': 'calc', 'expr': '1+1'}}})
+        self.assertFalse(self.agent.state['last_result']['ok'])
+        self.assertIn('invalid arguments', self.agent.state['last_result']['result'])
+
+    def test_calc_operation_parses_through_decision(self):
+        content = '{"name":"calc_operation","arguments":{"tool":"unit_convert","value":13216,"from_unit":"mib","to_unit":"gib"}}'
+        parsed = decision({'message': {'content': content}})
+        self.assertNotIn('fallback_reason', parsed, parsed)
+        self.agent.execute(parsed)
+        self.assertTrue(self.agent.state['last_result']['ok'])
+        self.assertIn('12.906', self.agent.state['last_result']['result'])
+
+
+class MandatoryKnowledgebaseGateTests(unittest.TestCase):
+    """P31: knowledgebase_gate=mandatory is an explicit, documented operator
+    intervention (docs/evidence/P31.md), not a silent default. Default policy
+    (advisory) must be byte-for-byte unaffected."""
+
+    def make(self, gate):
+        root = Path(tempfile.mkdtemp(prefix='village-kb-'))
+        (root / 'board').mkdir(); (root / 'telemetry').mkdir()
+        (root / 'identity.txt').write_text('identity')
+        (root / 'policy.json').write_text(json.dumps({'defaults': {'knowledgebase_gate': gate}}))
+        env = dict(AGENT_ID='02-explorer', AGENT_NAME='explorer', AGENT_ROLE='resident', VILLAGE_ROOT=str(root),
+                   AGENT_IDENTITY_PROMPT=str(root / 'identity.txt'), OLLAMA_MODEL='m',
+                   VILLAGE_POLICY_FILE='/nonexistent', VILLAGE_POLICY_LOCAL_FILE=str(root / 'policy.json'))
+        agent = Resident(env)
+        patcher = patch.object(agent, 'memory', return_value={'items': [], 'id': 'mem1'})
+        patcher.start(); self.addCleanup(patcher.stop)
+        agent.tasks.operate('02-explorer', dict(action='create', title='t', success_criterion='c'))
+        task_id = json.loads((root / 'board/work-items.json').read_text())[0]['id']
+        agent.tasks.operate('02-explorer', dict(action='claim', task_id=task_id))
+        return agent, root
+
+    def step(self, agent, name, **args):
+        agent.snapshot()  # recompute current_collaboration_checkpoint from real board events, like cycle() does
+        agent.execute({'tool_call': {'name': name, 'arguments': args}})
+
+    def test_advisory_default_still_allows_three_attempts_before_blocking(self):
+        agent, root = self.make('advisory')
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        for i in range(2):
+            self.step(agent, 'execute_bash', command=f'echo {i}')
+            self.assertTrue(agent.state['last_result']['ok'], agent.state['last_result'])
+        self.step(agent, 'execute_bash', command='echo third')
+        self.assertFalse(agent.state['last_result']['ok'])
+
+    def test_mandatory_blocks_on_first_attempt_without_orient(self):
+        agent, root = self.make('mandatory')
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        self.step(agent, 'execute_bash', command='echo hi')
+        self.assertFalse(agent.state['last_result']['ok'], agent.state['last_result'])
+        self.assertIn('memory_search', agent.state['last_result']['result'])
+
+    def test_mandatory_record_requires_shared_scope_not_private(self):
+        agent, root = self.make('mandatory')
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        self.step(agent, 'memory_search', query='x')
+        self.step(agent, 'execute_bash', command='echo done')
+        self.assertTrue(agent.state['last_result']['ok'], agent.state['last_result'])
+        # Private record does not satisfy the mandatory (shared) record checkpoint.
+        self.step(agent, 'memory_remember', content='x', scope='private')
+        self.step(agent, 'execute_bash', command='echo again')
+        self.assertFalse(agent.state['last_result']['ok'], agent.state['last_result'])
+        self.assertIn('share', agent.state['last_result']['result'].lower())
+        # A shared record does satisfy it.
+        self.step(agent, 'memory_remember', content='x', scope='shared')
+        self.step(agent, 'execute_bash', command='echo third')
+        self.assertTrue(agent.state['last_result']['ok'], agent.state['last_result'])
+
+    def test_invalid_gate_value_falls_back_to_advisory(self):
+        agent, root = self.make('bogus-value')
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        self.assertEqual(agent.policy.knowledgebase_gate, 'advisory')

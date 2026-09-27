@@ -307,6 +307,7 @@ chmod 0755 /usr/local/lib/ai-village/agent-runner
 # P02.2 canonical helper overlay.
 install -m 0755 "$SCRIPT_DIR/scripts/agent-runner" /usr/local/lib/ai-village/agent-runner
 install -m 0755 "$SCRIPT_DIR/scripts/append-event.py" /usr/local/lib/ai-village/append-event.py
+install -m 0755 "$SCRIPT_DIR/scripts/mcp-tools-server.py" /usr/local/lib/ai-village/mcp-tools-server.py
 
 cat > /usr/local/lib/ai-village/authority.py <<'AUTHORITY'
 #!/usr/bin/env python3

@@ -66,6 +66,7 @@ RELEASE_FILES = [
     ("village/collaboration.py", "lib/village/collaboration.py", 0o644),
     ("village/policy.py", "lib/village/policy.py", 0o644),
     ("village/prompting.py", "lib/village/prompting.py", 0o644),
+    ("village/tools.py", "lib/village/tools.py", 0o644),
     ("village/__init__.py", "lib/village/__init__.py", 0o644),
     ("village/authority.py", "lib/authority.py", 0o750),
     # Scripts & runners
@@ -74,6 +75,7 @@ RELEASE_FILES = [
     ("scripts/village-update", "sbin/village-update", 0o755),
     ("scripts/authority-server.py", "lib/authority-entrypoint.py", 0o755),
     ("scripts/append-event.py", "lib/append-event.py", 0o755),
+    ("scripts/mcp-tools-server.py", "lib/mcp-tools-server.py", 0o755),
     # Shared prompt constitution
     ("prompts/resident-system.txt", "share/system-prompt.txt", 0o644),
     ("prompts/resident-core.txt", "share/system-prompt-core.txt", 0o644),

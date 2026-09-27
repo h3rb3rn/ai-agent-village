@@ -47,6 +47,7 @@ from village.collaboration import assess as assess_collaboration, is_checkpoint_
 from village.lifecycle import InferenceState, InferenceTracker, classify_error
 from village.security import redact_text, sanitize_tool_env
 from village.actions import action_schema
+from village.tools import call_tool
 from village.policy import agent_policy, load_policy
 from village.prompting import build_system_prompt, compact_context, user_suffix
 
@@ -320,6 +321,7 @@ class Resident:
             self.id,
             has_active_task=bool(own_project),
             peer_id=(partner or (discussion_target.get('agent') if discussion_target else None)),
+            require_shared_record=(self.policy.knowledgebase_gate == 'mandatory'),
         )
         self.current_collaboration_checkpoint = collaboration_checkpoint
         active_job = self.jobs.get_active_job(self.id)
@@ -492,9 +494,13 @@ class Resident:
             pressure = int(self.state.get('collaboration_pressure', 0)) + 1
             self.state['collaboration_pressure'] = pressure
             self.event('collaboration_nudge', f'stage={checkpoint.stage}; required={checkpoint.required_action}; pressure={pressure}')
-            if pressure >= 3 and name in ('execute_bash', 'start_job', 'task_operation', 'team_operation'):
+            # P31: knowledgebase_gate=mandatory removes the three-miss grace specifically for
+            # orient (search before acting) and record (share what you learned); consult keeps
+            # its grace, since peer availability is a social, not a knowledge, precondition.
+            threshold = 1 if checkpoint.hard else 3
+            if pressure >= threshold and name in ('execute_bash', 'start_job', 'task_operation', 'team_operation'):
                 self.feedback(name, f'Collaboration checkpoint required before more solo work: use {checkpoint.required_action}. {checkpoint.rationale}', False)
-                self.event('collaboration_gate', f'stage={checkpoint.stage}; required={checkpoint.required_action}; pressure={pressure}')
+                self.event('collaboration_gate', f'stage={checkpoint.stage}; required={checkpoint.required_action}; pressure={pressure}; mode={"mandatory" if checkpoint.hard else "advisory"}')
                 return False
         elif checkpoint and checkpoint.required_action and is_checkpoint_action(checkpoint, name):
             self.state['collaboration_pressure'] = 0
@@ -714,12 +720,21 @@ class Resident:
                          'scope':args.get('scope','private'), 'source_event': self.state.get('updated_at',''),
                          'query':args.get('query','')}
                 result=self.memory('/v1/memories' if name=='memory_remember' else '/v1/search',value)
-                self.event('memory_result',f'result=success; action={name}; id={result.get("id", "")}; matches={len(result.get("items",[]))}')
+                self.event('memory_result',f'result=success; action={name}; id={result.get("id", "")}; scope={args.get("scope","private")}; matches={len(result.get("items",[]))}')
                 self.feedback(name,json.dumps(result),True)
             elif name == 'research_request':
                 result = self.research.search(args.get('source'), args.get('query'), args.get('limit', 5))
                 self.event('research_result', json.dumps({k: result.get(k) for k in ('source', 'query', 'sha256', 'results')}, ensure_ascii=False))
                 self.feedback(name, json.dumps(result, ensure_ascii=False), True)
+            elif name == 'calc_operation':
+                tool = args.get('tool')
+                tool_args = {k: v for k, v in args.items() if k != 'tool'}
+                try:
+                    res = call_tool(tool, tool_args)
+                except TypeError as exc:
+                    raise ValueError(f'invalid arguments for {tool}: {exc}') from exc
+                self.event('calc_result', f'tool={tool}; result={json.dumps(res, ensure_ascii=False)}')
+                self.feedback(name, json.dumps(res, ensure_ascii=False), True)
             elif name == 'meeting_operation':
                 op = args.get('operation') or args.get('action')
                 if op == 'report':

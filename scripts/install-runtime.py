@@ -108,6 +108,7 @@ def main():
         Path('/usr/local/lib/ai-village/decision.py'):source/'web/decision.py',
         Path('/usr/local/lib/ai-village/memory-gateway.py'):source/'memory/gateway.py',
         Path('/usr/local/lib/ai-village/append-event.py'):source/'scripts/append-event.py',
+        Path('/usr/local/lib/ai-village/mcp-tools-server.py'):source/'scripts/mcp-tools-server.py',
         Path('/usr/local/share/ai-village/system-prompt.txt'):source/'prompts/resident-system.txt',
         Path('/usr/local/share/ai-village/system-prompt-core.txt'):source/'prompts/resident-core.txt',
         Path('/usr/local/share/ai-village/runtime-policy.json'):source/'config/runtime-policy.json',
@@ -115,7 +116,7 @@ def main():
     # Runtime imports are installed as a self-contained package.  Keeping these
     # modules in the targeted release prevents a live host from running a newer
     # runtime with an older, incomplete import tree.
-    for module in ('__init__.py', 'actions.py', 'collaboration.py', 'policy.py', 'prompting.py', 'artifacts.py', 'authority.py', 'config.py',
+    for module in ('__init__.py', 'actions.py', 'collaboration.py', 'policy.py', 'prompting.py', 'tools.py', 'artifacts.py', 'authority.py', 'config.py',
                    'containers.py', 'control.py', 'coordinator.py', 'inference.py',
                    'events.py', 'event_retention.py', 'firewatch.py', 'jobs.py', 'lifecycle.py', 'meetings.py', 'research.py', 'research_protocol.py', 'interventions.py', 'research_tasks.py', 'rollout.py', 'lineage.py', 'recovery.py', 'security.py', 'teams.py'):
         targets[Path('/usr/local/lib/ai-village/village') / module] = source / 'village' / module

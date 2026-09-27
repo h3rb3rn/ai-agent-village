@@ -35,6 +35,7 @@ class CooperationCheckpoint:
     rationale: str
     peer_id: str | None = None
     pressure: int = 0
+    hard: bool = False
 
     @property
     def satisfied(self) -> bool:
@@ -48,7 +49,7 @@ class CooperationCheckpoint:
             "peer_id": self.peer_id,
             "pressure": self.pressure,
             "satisfied": self.satisfied,
-            "enforcement": "soft_until_three_misses",
+            "enforcement": "immediate" if self.hard else "soft_until_three_misses",
         }
 
 
@@ -60,6 +61,7 @@ def assess(
     peer_id: str | None = None,
     now: float | None = None,
     window_seconds: int = 6 * 60 * 60,
+    require_shared_record: bool = False,
 ) -> CooperationCheckpoint:
     """Assess the next checkpoint from observable local event history.
 
@@ -84,18 +86,25 @@ def assess(
         if (x.get("event") == "board_message" and "to=ALL" not in str(x.get("detail", "")))
         or (x.get("event") == "direct_message" and "to=ALL" not in str(x.get("detail", "")))
     ]
-    records = [x for x in recent if x.get("event") == "memory_result" and "action=memory_remember" in str(x.get("detail", "")) and "result=success" in str(x.get("detail", ""))]
+    records = [
+        x for x in recent
+        if x.get("event") == "memory_result" and "action=memory_remember" in str(x.get("detail", "")) and "result=success" in str(x.get("detail", ""))
+        and (not require_shared_record or "scope=shared" in str(x.get("detail", "")))
+    ]
     work = [x for x in recent if x.get("event") in {"command_result", "job_finished", "research_result", "task_result"}]
 
     # A record after the latest piece of work closes the current checkpoint.
     latest_work = max((_timestamp(x) for x in work), default=0.0)
     latest_record = max((_timestamp(x) for x in records), default=0.0)
     if not searches:
-        return CooperationCheckpoint("orient", "memory_search", "Search private/shared memory before repeating or extending the project.")
+        return CooperationCheckpoint("orient", "memory_search", "Search private/shared memory before repeating or extending the project.", hard=require_shared_record)
     if peer_id and not consultations:
         return CooperationCheckpoint("consult", "board_message", "Ask one named peer a concrete, reproducible question before proceeding.", peer_id=peer_id)
     if latest_work > latest_record:
-        return CooperationCheckpoint("record", "memory_remember", "Record the measured result, failure, or reusable lesson before the next work step.")
+        rationale = ("Share the measured result, failure, or reusable lesson with the community before the next "
+                    "work step: memory_remember with scope=shared." if require_shared_record else
+                    "Record the measured result, failure, or reusable lesson before the next work step.")
+        return CooperationCheckpoint("record", "memory_remember", rationale, hard=require_shared_record)
     return CooperationCheckpoint("complete", None, "Knowledge and cooperation checkpoints are current.")
 
 
