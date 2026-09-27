@@ -15,6 +15,14 @@ SUPPORTED_ACTIONS = frozenset({
 })
 
 
+# Small models consistently confuse board_message with the *_operation actions:
+# they either use the generic chat-API field name "content" instead of "message",
+# or append an "_operation" suffix to the action name itself. Observed independently
+# on N06-M10 from three different model families (llama3.2, granite4.2, qwen3.5) for
+# the field, and from nemotron-3-nano for the name. Alias only; never invent content.
+NAME_ALIASES = {'board_operation': 'board_message', 'message_operation': 'board_message'}
+
+
 def _normalize_action(name, args):
     """Normalize documented legacy aliases without interpreting free prose."""
     normalized = dict(args)
@@ -23,6 +31,8 @@ def _normalize_action(name, args):
             normalized['operation'] = normalized['action']
         elif name == 'team_operation' and all(normalized.get(k) for k in ('project', 'goal', 'role')):
             normalized['operation'] = 'create'
+    if name == 'board_message' and not normalized.get('message') and normalized.get('content'):
+        normalized['message'] = normalized.pop('content')
     return normalized
 
 
@@ -131,6 +141,7 @@ def decision(response, allowed=None):
     tool = obj.get('tool_call', obj)
     if not isinstance(tool, dict): return fallback('invalid action envelope', content)
     name, args = tool.get('name'), tool.get('arguments', {})
+    name = NAME_ALIASES.get(name, name)
     args = _normalize_action(name, args)
     reason = _validate_action(name, args)
     if reason:

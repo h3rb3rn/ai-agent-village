@@ -159,3 +159,51 @@ class TolerantParsingTests(unittest.TestCase):
 
     def test_truncated_object_is_still_rejected(self):
         self.assertIn('fallback_reason', self.content('{"name":"board_message","arguments":{"message":"hi'))
+
+
+class HostObservedAliasTests(unittest.TestCase):
+    """Regression fixtures captured verbatim from N06-M10 on 2026-09-27 during the M1
+    measurement window. Three model families (llama3.2, granite4.2, qwen3.5) used
+    "content" instead of "message" for board_message; nemotron-3-nano used the
+    action name "board_operation". These were the dominant cause of invalid_decision
+    in that window and must be aliased, never silently dropped."""
+
+    def test_chronicler_content_field_is_accepted_as_message(self):
+        content = '{"name":"board_message","arguments":{"recipient":"03-librarian","content":"Librarian, I\'d like to start by asking about the host memory reserve and possible solutions to ensure the recommended reserve of 4096 MiB is met."}}'
+        parsed = decision({'message': {'content': content}})
+        self.assertNotIn('fallback_reason', parsed, parsed)
+        self.assertEqual(parsed['tool_call']['name'], 'board_message')
+        self.assertIn('memory reserve', parsed['tool_call']['arguments']['message'])
+        self.assertNotIn('content', parsed['tool_call']['arguments'])
+
+    def test_librarian_pretty_printed_content_field_is_accepted(self):
+        content = '{\n  "name": "board_message",\n  "arguments": {\n    "recipient": "05-interpreter",\n    "content": "Please provide the exact ChromaDB version requirement."\n  }\n}'
+        parsed = decision({'message': {'content': content}})
+        self.assertNotIn('fallback_reason', parsed, parsed)
+        self.assertEqual(parsed['tool_call']['arguments']['message'], 'Please provide the exact ChromaDB version requirement.')
+
+    def test_explorer_content_field_inside_action_block_is_accepted(self):
+        content = '```village-action\n{"name":"board_message","arguments":{"recipient":"07-methodologist","content":"Methodologist: proceeding with install.","reply_to":"msg_1"}}\n```'
+        parsed = decision({'message': {'content': content}})
+        self.assertNotIn('fallback_reason', parsed, parsed)
+        self.assertEqual(parsed['tool_call']['arguments']['message'], 'Methodologist: proceeding with install.')
+        self.assertEqual(parsed['tool_call']['arguments']['reply_to'], 'msg_1')
+
+    def test_operator_board_operation_name_is_aliased(self):
+        content = '{\n  "name": "board_operation",\n  "arguments": {\n    "recipient": "05-interpreter",\n    "content": "Could you please provide the exact ChromaDB version requirement?"\n  }\n}'
+        parsed = decision({'message': {'content': content}})
+        self.assertNotIn('fallback_reason', parsed, parsed)
+        self.assertEqual(parsed['tool_call']['name'], 'board_message')
+        self.assertEqual(parsed['tool_call']['arguments']['recipient'], '05-interpreter')
+
+    def test_real_message_field_still_wins_over_content_if_both_present(self):
+        parsed = decision({'message': {'content': '{"name":"board_message","arguments":{"message":"real","content":"decoy"}}'}})
+        self.assertEqual(parsed['tool_call']['arguments']['message'], 'real')
+
+    def test_empty_content_does_not_fabricate_a_message(self):
+        parsed = decision({'message': {'content': '{"name":"board_message","arguments":{"content":""}}'}})
+        self.assertEqual(parsed['fallback_reason'], 'missing action argument')
+
+    def test_unrelated_unknown_action_name_is_not_silently_aliased(self):
+        parsed = decision({'message': {'content': '{"name":"send_message","arguments":{"content":"x"}}'}})
+        self.assertIn('unknown action', parsed['fallback_reason'])
