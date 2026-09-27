@@ -791,6 +791,39 @@ class Resident:
             self.feedback(name,f'{type(exc).__name__}: {exc}',False)
             self.event('action_error',f'action={name}; error={exc}')
 
+    def capability_summary(self, ttl_seconds: float = 1800.0) -> str:
+        """Cached, human-readable summary of what this agent can actually do in
+        its own environment - private/shared storage, available CLI tools,
+        rootless-container and GPU readiness, how to request more via
+        village-authority. village/containers.py::describe_agent_capabilities()
+        (P19) computed exactly this but was never surfaced to a resident's own
+        prompt before this; an agent cannot use a habitat it does not know it
+        has. Re-audited at most every ttl_seconds (host audits run real
+        subprocesses - nvidia-smi, podman - not worth repeating every cycle),
+        and any audit failure degrades to an honest "unknown", never a crash."""
+        cached_at = self.state.get('capabilities_at', 0)
+        if time.time() - cached_at < ttl_seconds and self.state.get('capabilities_summary'):
+            return self.state['capabilities_summary']
+        try:
+            import getpass
+            from village.containers import audit_host_environment, describe_agent_capabilities
+            audit = audit_host_environment()
+            desc = describe_agent_capabilities(self.id, getpass.getuser(), {}, audit)
+            tools = sorted(name for name, path in desc['tools'].items() if path)
+            summary = (
+                f"Your habitat: private storage {desc['storage']['private_directory']}, "
+                f"shared storage {desc['storage']['shared_directory']} (read-write, all agents). "
+                f"CLI tools available to you: {', '.join(tools) or 'none detected'}. "
+                f"Rootless containers: {'ready' if desc['containers']['rootless_supported'] else 'not ready yet'}. "
+                f"GPU compute: {'ready' if desc['gpu']['gpu_compute_ready'] else 'not ready yet'}. "
+                f"Request more capability via: {desc['authority']['request_channel']}."
+            )
+        except Exception as exc:
+            summary = f"Habitat capabilities unknown this cycle ({type(exc).__name__}: {exc})."
+        self.state['capabilities_summary'] = summary
+        self.state['capabilities_at'] = time.time()
+        return summary
+
     def cycle(self):
         # P01/P07: Respect persistent pause marker and drain/abort modes
         if is_paused(self.pause_marker):
@@ -806,7 +839,9 @@ class Resident:
         full_text = '' if compact else Path(f'{share}/system-prompt.txt').read_text()
         core_text = Path(f'{share}/system-prompt-core.txt').read_text() if compact else ''
         # Older founding profiles may name a previous model: current environment wins.
-        live = f'Current runtime model={self.env["OLLAMA_MODEL"]}, context={self.env.get("OLLAMA_NUM_CTX")}, role={self.role}. These override stale model details in founding identity.'
+        live = (f'Current runtime model={self.env["OLLAMA_MODEL"]}, context={self.env.get("OLLAMA_NUM_CTX")}, '
+               f'role={self.role}. These override stale model details in founding identity. '
+               + self.capability_summary())
         action_format = self.effective_action_format()
         checkpoint = getattr(self, 'current_collaboration_checkpoint', None)
         consult_peer = checkpoint.peer_id if (checkpoint and checkpoint.stage == 'consult' and 'board_message' in self.policy.allowed_actions) else None

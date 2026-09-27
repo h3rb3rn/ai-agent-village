@@ -251,6 +251,79 @@ class CalcOperationRuntimeTests(unittest.TestCase):
         self.assertIn('12.906', self.agent.state['last_result']['result'])
 
 
+class CapabilitySummaryTests(unittest.TestCase):
+    """P38: village/containers.py::describe_agent_capabilities() (P19) existed
+    but was never surfaced to a resident's own prompt - an agent cannot use a
+    habitat it does not know it has. capability_summary() closes that gap."""
+
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp(prefix='village-caps-'))
+        (self.root / 'board').mkdir(); (self.root / 'telemetry').mkdir()
+        (self.root / 'identity.txt').write_text('identity')
+        (self.root / 'system-prompt.txt').write_text('FULL')
+        self.env = dict(AGENT_ID='02-explorer', AGENT_NAME='explorer', AGENT_ROLE='resident', VILLAGE_ROOT=str(self.root),
+                        AGENT_IDENTITY_PROMPT=str(self.root / 'identity.txt'), OLLAMA_MODEL='m',
+                        OLLAMA_URL='http://127.0.0.1:1', VILLAGE_SHARE_DIR=str(self.root))
+        self.agent = Resident(self.env)
+
+    def tearDown(self):
+        shutil.rmtree(self.root, ignore_errors=True)
+
+    def _fake_desc(self, **overrides):
+        desc = {
+            'agent': '02-explorer', 'user': 'village_explorer',
+            'storage': {'private_directory': '/priv', 'shared_directory': '/shared', 'shared_access': 'read-write'},
+            'tools': {'curl': '/usr/bin/curl', 'python3': None},
+            'containers': {'rootless_supported': True},
+            'gpu': {'gpu_compute_ready': False},
+            'authority': {'request_channel': "village-authority request <capability> --reason '<reason>'"},
+        }
+        desc.update(overrides)
+        return desc
+
+    def test_summary_reports_storage_tools_and_readiness(self):
+        with patch('village.containers.audit_host_environment', return_value=object()), \
+             patch('village.containers.describe_agent_capabilities', return_value=self._fake_desc()):
+            summary = self.agent.capability_summary()
+        self.assertIn('/priv', summary)
+        self.assertIn('/shared', summary)
+        self.assertIn('curl', summary)
+        self.assertNotIn('python3', summary)  # tools with no resolved path are excluded
+        self.assertIn('Rootless containers: ready', summary)
+        self.assertIn('GPU compute: not ready yet', summary)
+        self.assertIn('village-authority request', summary)
+
+    def test_summary_is_cached_within_the_ttl(self):
+        with patch('village.containers.audit_host_environment', return_value=object()) as audit, \
+             patch('village.containers.describe_agent_capabilities', return_value=self._fake_desc()):
+            first = self.agent.capability_summary(ttl_seconds=1800)
+            second = self.agent.capability_summary(ttl_seconds=1800)
+        self.assertEqual(first, second)
+        audit.assert_called_once()
+
+    def test_audit_failure_degrades_to_an_honest_unknown_not_a_crash(self):
+        with patch('village.containers.audit_host_environment', side_effect=OSError('nvidia-smi missing')):
+            summary = self.agent.capability_summary()
+        self.assertIn('unknown this cycle', summary)
+        self.assertIn('OSError', summary)
+
+    def test_summary_reaches_the_actual_outgoing_prompt(self):
+        captured = {}
+
+        def fake_urlopen(request, timeout=0):
+            captured['request'] = request
+            raise OSError('blocked for test - only the outgoing request matters here')
+
+        with patch('village.containers.audit_host_environment', return_value=object()), \
+             patch('village.containers.describe_agent_capabilities', return_value=self._fake_desc()), \
+             patch.object(self.agent, 'memory', return_value={'items': [], 'id': 'mem1'}), \
+             patch('urllib.request.urlopen', side_effect=fake_urlopen):
+            self.agent.cycle()
+        prompt = json.loads(captured['request'].data)['messages'][0]['content']
+        self.assertIn('/priv', prompt)
+        self.assertIn('village-authority request', prompt)
+
+
 class MandatoryKnowledgebaseGateTests(unittest.TestCase):
     """P31: knowledgebase_gate=mandatory is an explicit, documented operator
     intervention (docs/evidence/P31.md), not a silent default. Default policy
