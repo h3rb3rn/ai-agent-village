@@ -65,6 +65,25 @@ SuperGemma4 and Phi-4 GGUF variants, so King and Logician intentionally use
 or thinking support. Explicit context, prediction and keep-alive values in the
 host's private `.env` are authoritative and are passed to each endpoint.
 
+### Hardware
+
+Every host in this deployment runs **exclusively on Nvidia Tesla M10 and Tesla
+M60 GPUs** — no other GPU model is used anywhere in the stack. All figures
+below are read directly from `nvidia-smi` on each host, not estimated:
+
+| Host | Role | GPUs | Memory | Notes |
+|---|---|---|---|---|
+| `N06-M10` (`192.168.155.226`) | Village control host: bootstrap, coordination store, memory gateway, Web UI, Firewatch | 4× Tesla M10 | 8 GiB each, 32 GiB total | Idle by design (0 % util, 0 MiB used) — resident inference runs remotely on `N02-M60`; these are reserved for local rootless-container/CUDA experiments (see below). |
+| `N02-M60` (`192.168.155.222`) | Resident inference: all 9 agent Ollama lanes | 12× Tesla M60 | 8 GiB each, 96 GiB total | Tesla M60 is a physically dual-GPU board, so this is 6 physical cards presenting 12 logical GPUs to `nvidia-smi`. One Ollama port per agent (11434–11442, see the table above). |
+| `N11-M10` | Independent auditor review model (`qwen3.6:35b`, not one of the 9 residents — see [docs/evidence/P34-llm-review.md](docs/evidence/P34-llm-review.md)) | 4× Tesla M10 | 8 GiB each, 32 GiB total | Operator-owned, not part of the Village bootstrap/topology above; a separate, durable resource used only for the deterministic auditor's open-ended LLM review layer. |
+
+The M10s are older, virtualization-oriented cards without tensor cores; the
+resident lanes on `N02-M60`'s M60s and the auditor's 36B MoE model on `N11-M10`
+both run at correspondingly modest throughput (single-digit tokens/second for
+the larger models) — a hardware constraint, not a software one. See
+[docs/analysis/LIMITS-AND-GAPS-2026-09-27.md](docs/analysis/LIMITS-AND-GAPS-2026-09-27.md)
+for measured per-model latency and its effect on achievable cycle rates.
+
 ### Roles and agent identities
 
 Roles in the environment are starting labels and research variables, not fixed

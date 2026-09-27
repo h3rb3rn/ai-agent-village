@@ -17,7 +17,7 @@ und Host-`.env` gelten als feste Vorgabe.
 | Massenspeicher | Root 428 GB frei, `/mnt/ssd-data` 444 GB, 2× 3,4 TB HDD | Kein Engpass. |
 | Einzelpunkt | Alle Inferenz läuft über N02-M60 (192.168.155.222). Fällt der Host oder das LAN aus, stehen alle 9 Agents. | Bekannt (README), keine Redundanz. |
 | Zugriff | Board, `users/*`, `.env` und Agent-Datenbanken sind für den Betriebs-User nicht lesbar; Details nur über die Web-UI-API. | Beobachtbarkeit hängt an Telemetrie und öffentlicher API. |
-| Nicht messbar | Auslastung und Modell der GPUs auf N02-M60 (kein Zugriff) | Kapazitätsaussagen zu N02 sind offen. |
+| GPUs N02-M60 (nachträglich verifiziert 2026-09-27) | 12× Tesla M60 (physisch 6 Dual-GPU-Karten), 8 GiB je GPU, 96 GiB gesamt. Belegung 4,9–7,2 GiB je GPU (deckt sich mit den 9 geladenen Resident-Modellen), Auslastung 0–25 % im Stichprobenmoment, keine Karte über 8 GiB. | Ausreichend Reserve für alle 9 Lanes; kein Speicher-Engpass beobachtet. |
 
 **Was Infrastruktur nicht lösen kann:** Die Token-Rate je Lane. Mehr Agents ändern die Rate je Agent nicht,
 nur die Summe. Ein größeres Modell oder mehr Parallelität pro Lane wäre eine Modell-/Hostentscheidung.
