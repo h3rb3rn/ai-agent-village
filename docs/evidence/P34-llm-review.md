@@ -29,7 +29,8 @@ ist komplett unabhängig.
 |---|---|---|
 | 1 | `num_ctx=4096`, kein `think`-Feld gesetzt | **Fehlgeschlagen**: `done_reason=length`, das Modell verbrauchte das gesamte Token-Budget im Thinking, `content` blieb leer – exakt das bekannte Methodologist-Muster (Denkbudget vor Antwort erschöpft). |
 | 2 | `num_ctx=190000`, `think=false`, `keep_alive=96h` | Erfolg: gültiges JSON, `done_reason=stop`. Load-Zeit 145 s (Kontextwechsel erzwingt Neuladen). |
-| 3 (final) | `num_ctx=131072` (Betreiber-Reduktion), `think=false`, `keep_alive=96h` | Erfolg. Erkannte **korrekt einen echten semantischen Fehler**: Chroniclers zirkuläre Aussage „failed due to the lack of a collaboration checkpoint“ wurde als nichtssagend/tautologisch identifiziert (`category=hallucination`, `confidence=1.0`) – ein Fehler, den die deterministische Schicht nicht erkennen kann. |
+| 3 | `num_ctx=131072` (Zwischenschritt) | Erfolg. Erkannte **korrekt einen echten semantischen Fehler**: Chroniclers zirkuläre Aussage „failed due to the lack of a collaboration checkpoint“ wurde als nichtssagend/tautologisch identifiziert (`category=hallucination`, `confidence=1.0`) – ein Fehler, den die deterministische Schicht nicht erkennen kann. |
+| 4 (final) | `num_ctx=190000` (Betreiber-Entscheidung, dauerhaft) | Neu geladen (90,5 s), als endgültiger Wert festgelegt. Dritter Realtest: Operator/`nemotron-3-nano` mit einem echten JSON-Syntaxfehler (fehlende schließende Anführungszeichen/Klammer) – korrekt diagnostiziert und exakte Reparatur vorgeschlagen, `confidence=1.0`. **Nicht mehr ändern (Betreiberanweisung).** |
 
 Gemessene Laufzeit warm (Parametersatz 3): Prompt-Auswertung 6,5 s (123 Token),
 Generierung 20,9 s (137 Token) ≈ 6,5 Token/s – deckt sich mit der
@@ -39,7 +40,7 @@ Betreiber-Schätzung von 5 Token/s. Erster Ladevorgang mit neuem Kontext:
 ## Umsetzung
 
 `village/auditor_llm.py`:
-- Feste, validierte Produktionsparameter (`NUM_CTX=131072`, `KEEP_ALIVE="96h"`,
+- Feste, validierte Produktionsparameter (`NUM_CTX=190000`, `KEEP_ALIVE="96h"`,
   `think=False` explizit als Bool, nicht nur weggelassen – das Weglassen allein
   reichte beim Modell nicht, Thinking blieb an).
 - `RESPONSE_SCHEMA`: erzwungenes JSON-Format (`has_issue`, `category`,

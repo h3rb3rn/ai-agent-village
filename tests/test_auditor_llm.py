@@ -69,7 +69,7 @@ class RequestBuildingTests(unittest.TestCase):
         payload = json.loads(request.data)
         self.assertEqual(payload["keep_alive"], "96h")
         self.assertIs(payload["think"], False)
-        self.assertEqual(payload["options"]["num_ctx"], 131072)
+        self.assertEqual(payload["options"]["num_ctx"], 190000)
         self.assertIn("format", payload)
         self.assertEqual(payload["model"], "qwen3.6:35b")
 

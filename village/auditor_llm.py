@@ -16,7 +16,7 @@ village/auditor.py already enforces for every finding regardless of origin:
      second, different agent - exactly like a deterministic finding.
 
 Confirmed operating parameters (2026-09-27, real calls against the live
-endpoint, not assumed): num_ctx=131072, think=false (thinking otherwise
+endpoint, not assumed): num_ctx=190000 (operator-fixed final value), think=false (thinking otherwise
 consumes the entire output budget before any answer, mirroring the
 Methodologist's own budget-exhaustion failure mode), keep_alive=96h (the
 operator's proven value - a fresh load on this M10 multi-GPU host takes
@@ -35,7 +35,7 @@ from village.auditor import AuditFinding
 
 DEFAULT_URL = "http://192.168.155.231:11434"
 DEFAULT_MODEL = "qwen3.6:35b"
-NUM_CTX = 131072
+NUM_CTX = 190000  # operator-fixed final value, do not change again
 KEEP_ALIVE = "96h"
 DEFAULT_TIMEOUT_SECONDS = 300  # generation alone measured at ~20-40s; large margin for a cold/slow cycle
 CONFIDENCE_THRESHOLD = 0.7
