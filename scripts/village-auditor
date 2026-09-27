@@ -50,7 +50,27 @@ def memory_writer(payload: dict) -> dict:
         return json.load(response)
 
 
+def memory_reader(query: str) -> list:
+    """Retrieval for the independent LLM review: lets it draw on what the
+    village has already learned (shared knowledge, e.g. prior corrections),
+    not just its own frozen weights. Read-only, scope defaults to shared
+    community knowledge (village-auditor has no private memories of its own).
+    A failure here must never abort a review - the caller already treats
+    this as best-effort."""
+    import json
+    import urllib.request
+
+    request = urllib.request.Request(
+        gateway_url + "/v1/search",
+        data=json.dumps({"query": query, "scope": "shared", "limit": 3}).encode(),
+        headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(request, timeout=10) as response:
+        return json.load(response).get("items", [])
+
+
 coordination_store = CoordinationStore(args.coordination_db, args.board_dir)
 run(args.interval, args.agent_events, args.db,
     coordination_store=coordination_store, memory_writer=memory_writer,
+    memory_reader=memory_reader,
     url=args.url, model=args.model, llm_enabled=not args.no_llm)

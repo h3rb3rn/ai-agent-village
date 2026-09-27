@@ -110,14 +110,40 @@ def select_candidates(events: Iterable[Mapping[str, Any]], *, already_classified
     return candidates
 
 
+def _retrieve_context(memory_reader: Optional[Callable[[str], List[Dict[str, Any]]]],
+                      query: str) -> str:
+    """Best-effort retrieval from the village's shared knowledgebase to give the
+    judge more than its frozen weights - e.g. a corrected pattern the village
+    already learned. A search failure (offline gateway, timeout, bad response)
+    must never abort the review; it just proceeds without extra context."""
+    if memory_reader is None or not query.strip():
+        return ""
+    try:
+        hits = memory_reader(query) or []
+    except Exception:
+        return ""
+    snippets = [str(h.get("content", "")).strip()[:300] for h in hits[:3] if h.get("content")]
+    if not snippets:
+        return ""
+    bullet_list = "\n".join(f"- {s}" for s in snippets)
+    return (
+        "\n\nRelevant existing entries from the village's shared knowledgebase "
+        "(context only - it may be incomplete, outdated or unrelated; weigh it, "
+        "do not treat it as automatically correct):\n" + bullet_list
+    )
+
+
 def build_request(candidate: ReviewCandidate, *, url: str = DEFAULT_URL, model: str = DEFAULT_MODEL,
-                  num_predict: int = 500) -> urllib.request.Request:
+                  num_predict: int = 500,
+                  memory_reader: Optional[Callable[[str], List[Dict[str, Any]]]] = None) -> urllib.request.Request:
     endpoint = url.rstrip("/") + "/api/chat"
+    context_block = _retrieve_context(memory_reader, candidate.text[:500])
     user_prompt = (
         f"Agent {candidate.agent} (model {candidate.model}) produced {candidate.kind}:\n\n"
         f'"""{candidate.text}"""\n\n'
         "Identify the concrete mistake and the correct fix. If there is no real mistake, "
         "set has_issue to false. Set confidence 0-1 for how sure you are."
+        f"{context_block}"
     )
     payload = {
         "model": model, "stream": False, "keep_alive": KEEP_ALIVE, "think": False,
@@ -149,11 +175,17 @@ def _parse(raw: Dict[str, Any]) -> Dict[str, Any]:
 def review(candidate: ReviewCandidate, *, opener: Callable = urllib.request.urlopen,
           url: str = DEFAULT_URL, model: str = DEFAULT_MODEL,
           confidence_threshold: float = CONFIDENCE_THRESHOLD,
-          timeout: int = DEFAULT_TIMEOUT_SECONDS) -> Optional[AuditFinding]:
+          timeout: int = DEFAULT_TIMEOUT_SECONDS,
+          memory_reader: Optional[Callable[[str], List[Dict[str, Any]]]] = None) -> Optional[AuditFinding]:
     """Ask the judge model about one candidate; return a finding only above the
     confidence threshold. Never raises for an ordinary "no issue" verdict; raises
-    JudgeError only for a genuinely broken exchange (network, parsing, budget)."""
-    request = build_request(candidate, url=url, model=model)
+    JudgeError only for a genuinely broken exchange (network, parsing, budget).
+
+    ``memory_reader``, if given, augments the judge's frozen weights with a
+    lexical/semantic lookup against the village's own shared knowledgebase
+    (e.g. a correction pattern the village already learned) - not fine-tuning,
+    just retrieval-augmented context for this one judgement."""
+    request = build_request(candidate, url=url, model=model, memory_reader=memory_reader)
     try:
         with opener(request, timeout=timeout) as response:
             raw = json.load(response)
@@ -181,6 +213,7 @@ def review(candidate: ReviewCandidate, *, opener: Callable = urllib.request.urlo
 
 def full_audit_cycle(events: List[Mapping[str, Any]], store: AuditStore, *, coordination_store,
                      memory_writer: Callable[[Dict[str, Any]], Any],
+                     memory_reader: Optional[Callable[[str], List[Dict[str, Any]]]] = None,
                      opener: Callable = urllib.request.urlopen, url: str = DEFAULT_URL,
                      model: str = DEFAULT_MODEL, llm_enabled: bool = True) -> Dict[str, int]:
     """Run the primary, free, deterministic signatures first; only spend a slow,
@@ -214,7 +247,7 @@ def full_audit_cycle(events: List[Mapping[str, Any]], store: AuditStore, *, coor
     stats["llm_candidates"] = len(candidates)
     for candidate in candidates:
         try:
-            finding = review(candidate, opener=opener, url=url, model=model)
+            finding = review(candidate, opener=opener, url=url, model=model, memory_reader=memory_reader)
         except JudgeError:
             stats["llm_errors"] += 1
             continue
@@ -237,6 +270,7 @@ def run(interval: float = 300.0,
         agent_events: Optional[Path] = None,
         db_path: Optional[Path] = None,
         *, coordination_store, memory_writer,
+        memory_reader: Optional[Callable[[str], List[Dict[str, Any]]]] = None,
         opener: Callable = urllib.request.urlopen, url: str = DEFAULT_URL,
         model: str = DEFAULT_MODEL, llm_enabled: bool = True) -> None:
     """Run full_audit_cycle() forever against newly-appended resident events.
@@ -257,7 +291,7 @@ def run(interval: float = 300.0,
         new_events = [e for e in events if str(e.get("timestamp", "")) > cursor] if cursor else events
         if new_events:
             full_audit_cycle(new_events, store, coordination_store=coordination_store,
-                             memory_writer=memory_writer, opener=opener, url=url,
-                             model=model, llm_enabled=llm_enabled)
+                             memory_writer=memory_writer, memory_reader=memory_reader,
+                             opener=opener, url=url, model=model, llm_enabled=llm_enabled)
             store.advance_cursor(max(str(e.get("timestamp", "")) for e in new_events))
         time.sleep(max(5.0, interval))

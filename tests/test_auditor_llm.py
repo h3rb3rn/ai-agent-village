@@ -111,6 +111,37 @@ class RequestBuildingTests(unittest.TestCase):
         self.assertIn("llama3.2:3b", prompt)
         self.assertIn(CANDIDATE.text, prompt)
 
+    def test_without_a_memory_reader_the_prompt_is_unchanged(self):
+        request = build_request(CANDIDATE)
+        prompt = json.loads(request.data)["messages"][1]["content"]
+        self.assertNotIn("shared knowledgebase", prompt)
+
+    def test_memory_reader_hits_are_woven_into_the_prompt_as_context_not_fact(self):
+        reader = MagicMock(return_value=[{"content": "Collaboration checkpoints need memory_search first."}])
+        request = build_request(CANDIDATE, memory_reader=reader)
+        prompt = json.loads(request.data)["messages"][1]["content"]
+        reader.assert_called_once()
+        self.assertIn("Collaboration checkpoints need memory_search first.", prompt)
+        self.assertIn("do not treat it as automatically correct", prompt)
+
+    def test_memory_reader_failure_never_breaks_request_building(self):
+        reader = MagicMock(side_effect=OSError("gateway unreachable"))
+        request = build_request(CANDIDATE, memory_reader=reader)  # must not raise
+        self.assertNotIn("shared knowledgebase", json.loads(request.data)["messages"][1]["content"])
+
+    def test_memory_reader_with_no_hits_adds_no_empty_section(self):
+        reader = MagicMock(return_value=[])
+        request = build_request(CANDIDATE, memory_reader=reader)
+        self.assertNotIn("shared knowledgebase", json.loads(request.data)["messages"][1]["content"])
+
+    def test_at_most_three_hits_are_included(self):
+        reader = MagicMock(return_value=[{"content": f"fact {i}"} for i in range(10)])
+        request = build_request(CANDIDATE, memory_reader=reader)
+        prompt = json.loads(request.data)["messages"][1]["content"]
+        self.assertIn("fact 0", prompt)
+        self.assertIn("fact 2", prompt)
+        self.assertNotIn("fact 3", prompt)
+
 
 class ReviewParsingTests(unittest.TestCase):
     def test_thinking_exhausted_response_raises_judge_error_not_a_crash(self):
@@ -203,6 +234,43 @@ class RoutingReuseTests(unittest.TestCase):
         finding = review(CANDIDATE, opener=opener_returning(CIRCULAR_MESSAGE_RESPONSE))
         self.assertEqual(store.route(finding), "private")
         self.assertIsNone(store.route(finding))  # same source_event_id + category: never duplicated
+
+    def test_review_passes_the_memory_reader_through_to_the_request(self):
+        reader = MagicMock(return_value=[{"content": "prior correction"}])
+        opener = opener_returning(CIRCULAR_MESSAGE_RESPONSE)
+        review(CANDIDATE, opener=opener, memory_reader=reader)
+        reader.assert_called_once()
+
+
+class FullAuditCycleMemoryReaderTests(unittest.TestCase):
+    """The auditor's LLM layer should draw on the village's own shared
+    knowledgebase, not only the judge model's frozen weights."""
+
+    def setUp(self):
+        import shutil
+        import tempfile
+        from pathlib import Path as _Path
+        from village.coordinator import CoordinationStore
+        self.tmp = _Path(tempfile.mkdtemp(prefix="village-audit-memreader-"))
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.store = AuditStore(self.tmp / "audit.sqlite3")
+        self.coord = CoordinationStore(self.tmp / "coordination.sqlite3", self.tmp)
+        self.memory_writer = MagicMock(return_value={"id": "mem1"})
+
+    def test_memory_reader_reaches_the_judge_prompt_via_full_audit_cycle(self):
+        events = [{"agent": "09-chronicler", "event": "board_message", "event_id": "e20", "model": "llama3.2:3b",
+                  "detail": "message=The collaboration checkpoint failed due to the lack of a collaboration checkpoint."}]
+        seen_prompts = []
+
+        def opener(request, timeout=0):
+            seen_prompts.append(json.loads(request.data)["messages"][1]["content"])
+            return FakeResponse(CIRCULAR_MESSAGE_RESPONSE)
+
+        reader = MagicMock(return_value=[{"content": "Village rule: always orient before consulting."}])
+        from village.auditor_llm import full_audit_cycle
+        full_audit_cycle(events, self.store, coordination_store=self.coord,
+                         memory_writer=self.memory_writer, memory_reader=reader, opener=opener)
+        self.assertIn("Village rule: always orient before consulting.", seen_prompts[0])
 
 
 if __name__ == "__main__":
