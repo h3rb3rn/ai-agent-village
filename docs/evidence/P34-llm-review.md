@@ -78,3 +78,24 @@ Gesamtsuite: 466 Tests, OK.
   damit Format-Fehler mit Volltext für Auditor/LLM verfügbar sind).
 - systemd-Dienst, Memory-Gateway-Token für den Auditor, Prompt-Hinweis für die
   Agents, dass `village-auditor` eine System-Rolle ist.
+
+## Nachtrag: Grübel-Problem bei mehrdeutigen/unproblematischen Fällen gefunden und behoben
+
+Nach Bestätigung, dass `keep_alive=96h` korrekt funktioniert (Ladezeit im
+warmen Zustand: 2,8–3,2 ms statt 60–150 s), zeigte ein absichtlich
+uneindeutiger Testfall („ist das ok oder nicht?“) ein reales Problem:
+
+- Mit dem ursprünglichen Prompt/Schema (600 Zeichen Feldlänge, keine
+  Entscheidungsanweisung) geriet das Modell trotz `think:false` in
+  ausuferndes, sich selbst widersprechendes Grübeln **innerhalb des
+  `problem`-Feldstrings** – 400 Token verbraucht, `done_reason=length`,
+  niemals eine schließende Klammer erreicht. Mein Code hätte das korrekt als
+  `JudgeError` abgefangen (kein Absturz, kein Fund), aber ~70 s ohne Ergebnis.
+- Fix: Feldlänge auf 300 Zeichen verschärft, Prompt um „Give ONE final verdict
+  immediately, do not deliberate or second-guess yourself … Keep problem and
+  solution to one short sentence each“ ergänzt.
+- Mit dem geschärften Prompt/Schema lieferte derselbe Testfall in **18,4 s**
+  eine saubere, korrekte `has_issue: false`-Antwort.
+
+**Tests:** 2 neue (`PromptTighteningRegressionTests`), mit den echten
+Antworten vor und nach der Korrektur als Fixtures. Gesamtsuite: 468 Tests, OK.

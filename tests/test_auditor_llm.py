@@ -45,6 +45,34 @@ NO_ISSUE_RESPONSE = {
     "done": True, "done_reason": "stop",
 }
 
+# Captured verbatim from N11-M10, 2026-09-27, with the FIRST (looser, 600-char,
+# no anti-deliberation instruction) prompt: a genuinely fine action sent the
+# model into open-ended, self-contradicting deliberation inside the "problem"
+# string itself (think=false did not stop this - it just moved the rambling
+# from the thinking channel into the answer channel), never reaching a closing
+# brace. 400 tokens burned in ~70s for no usable verdict.
+RAMBLING_NO_VERDICT_RESPONSE = {
+    "message": {"role": "assistant", "content": (
+        '{\n  "has_issue": true,\n  "category": "Logical/Practical Error",\n  "problem": '
+        '"The agent claims to have measured free disk space... However, the most definitive '
+        'error here is likely **none** if we assume the df output was accurate... Wait, '
+        'let\'s re-read carefully... So the'
+    )},
+    "done": True, "done_reason": "length",
+}
+
+# Captured verbatim after tightening the prompt (explicit "one verdict immediately,
+# no deliberation") and the schema (maxLength 300, not 600) for the SAME input as
+# above: clean, correct, complete in 18.4s instead of ~70s.
+CONCISE_NO_ISSUE_RESPONSE = {
+    "message": {"role": "assistant", "content": json.dumps({
+        "has_issue": False, "category": "none",
+        "problem": "The agent correctly reports available disk space and states a logical next step without factual or procedural errors.",
+        "solution": "No correction needed; the action is valid.", "confidence": 1.0,
+    })},
+    "done": True, "done_reason": "stop",
+}
+
 
 class FakeResponse:
     def __init__(self, payload):
@@ -70,6 +98,8 @@ class RequestBuildingTests(unittest.TestCase):
         self.assertEqual(payload["keep_alive"], "96h")
         self.assertIs(payload["think"], False)
         self.assertEqual(payload["options"]["num_ctx"], 190000)
+        self.assertLessEqual(payload["format"]["properties"]["problem"]["maxLength"], 300)
+        self.assertIn("do not", payload["messages"][0]["content"].lower())
         self.assertIn("format", payload)
         self.assertEqual(payload["model"], "qwen3.6:35b")
 
@@ -116,6 +146,18 @@ class ReviewParsingTests(unittest.TestCase):
         def boom(request, timeout=0): raise OSError("connection refused")
         with self.assertRaises(JudgeError):
             review(CANDIDATE, opener=boom)
+
+
+class PromptTighteningRegressionTests(unittest.TestCase):
+    """A genuinely ambiguous-but-fine case must not burn the whole budget on
+    open-ended deliberation and return nothing usable."""
+
+    def test_rambling_unterminated_response_raises_judge_error(self):
+        with self.assertRaises(JudgeError):
+            review(CANDIDATE, opener=opener_returning(RAMBLING_NO_VERDICT_RESPONSE))
+
+    def test_tightened_prompt_yields_a_clean_no_issue_verdict(self):
+        self.assertIsNone(review(CANDIDATE, opener=opener_returning(CONCISE_NO_ISSUE_RESPONSE)))
 
 
 class CandidateSelectionTests(unittest.TestCase):

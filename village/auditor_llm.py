@@ -44,7 +44,10 @@ MAX_CANDIDATES_PER_CYCLE = 5  # bounded: ~30-40s each, serialized, must fit well
 SYSTEM_PROMPT = (
     "You are a strict, evidence-only reviewer of a small local LLM resident agent's "
     "output in a multi-agent research system. Judge only from the given text. Never "
-    "invent facts not present in it. Respond with the required JSON only."
+    "invent facts not present in it. Give ONE final verdict immediately, do not "
+    "deliberate or second-guess yourself in the output. If nothing is clearly wrong, "
+    "set has_issue to false right away. Keep problem and solution to one short "
+    "sentence each. Respond with the required JSON only."
 )
 
 RESPONSE_SCHEMA = {
@@ -52,8 +55,8 @@ RESPONSE_SCHEMA = {
     "properties": {
         "has_issue": {"type": "boolean"},
         "category": {"type": "string", "maxLength": 60},
-        "problem": {"type": "string", "maxLength": 600},
-        "solution": {"type": "string", "maxLength": 600},
+        "problem": {"type": "string", "maxLength": 300},
+        "solution": {"type": "string", "maxLength": 300},
         "confidence": {"type": "number"},
     },
     "required": ["has_issue", "category", "problem", "solution", "confidence"],
