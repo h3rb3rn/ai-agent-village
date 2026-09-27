@@ -67,6 +67,8 @@ RELEASE_FILES = [
     ("village/policy.py", "lib/village/policy.py", 0o644),
     ("village/prompting.py", "lib/village/prompting.py", 0o644),
     ("village/tools.py", "lib/village/tools.py", 0o644),
+    ("village/auditor.py", "lib/village/auditor.py", 0o644),
+    ("village/auditor_llm.py", "lib/village/auditor_llm.py", 0o644),
     ("village/__init__.py", "lib/village/__init__.py", 0o644),
     ("village/authority.py", "lib/authority.py", 0o750),
     # Scripts & runners
