@@ -15,6 +15,7 @@ import selectors
 import sqlite3
 import subprocess
 import time
+import traceback
 import urllib.error
 import urllib.request
 import uuid
@@ -441,6 +442,27 @@ class Resident:
         except (OSError, ValueError) as exc:
             self.event('memory_auto_error', str(exc)[:200], True)
 
+    def targets_foreign_home(self, command):
+        """Exact peer name whose private home this command's path targets, or None.
+
+        Observed live on N06-M10 (2026-09-27, docs/evidence/P21.21.md and the
+        2026-09-27 board review): King, Operator and Methodologist each tried to run
+        `cd /var/lib/ai-village/users/logician/... && pip install ...` from their OWN
+        account to "fix" a peer's problem, and Librarian repeatedly announced writing
+        a file under .../users/operator/schema.md. Every one of those always fails on
+        Unix permissions (each home is 0700); the prompt clarification (P21.21) did
+        not stop every model from trying it, so this rejects it before exec, cheaply
+        and deterministically, without touching commands that only reference the
+        agent's own home.
+        """
+        others = {p.get('name') for p in read_json(Path('/etc/ai-village/runtime-peers.json'), [])
+                  if isinstance(p, dict) and p.get('name') and p.get('name') != self.name}
+        if not others:
+            return None
+        home_root = re.escape(str(self.root / 'users'))
+        match = re.search(home_root + r'/(' + '|'.join(re.escape(n) for n in others) + r')(?![\w-])', command)
+        return match.group(1) if match else None
+
     def peer_ids(self, peers=None):
         peers = read_json(Path('/etc/ai-village/runtime-peers.json'), []) if peers is None else peers
         return [p['id'] for p in peers if isinstance(p, dict) and p.get('id') and p['id'] != self.id]
@@ -466,6 +488,15 @@ class Resident:
         if is_paused(self.pause_marker) and name in ('execute_bash', 'start_job'):
             self.feedback(name, 'Execution blocked: simulation is paused ("pausiert startet nichts").', False)
             return False
+
+        if name in ('execute_bash', 'start_job') and isinstance(args.get('command'), str):
+            other = self.targets_foreign_home(args['command'])
+            if other:
+                self.feedback(name, f"Blocked: that path is inside {other}'s private home (0700), not yours. "
+                                     f"You cannot read, write or run anything there even to help — ask {other} "
+                                     "to run it themselves in their own account, or state the general recipe instead.", False)
+                self.event('foreign_home_blocked', f'target_agent={other}; command_prefix={args["command"][:160]}')
+                return False
 
         if name not in self.policy.allowed_actions:
             self.feedback(name, f'Action {name} is not available to you. Choose one of: {", ".join(self.policy.allowed_actions)}.', False)
@@ -876,19 +907,29 @@ class Resident:
                 )
                 self.event('inference_aborted', f'request_id={req_record.request_id} reason={meta.get("reason", "abort")}', True)
             else:
-                err_class, err_detail = classify_error(exc)
+                # An HTTPError's body is a stream that can only be read once; read it
+                # here and hand the same text to classify_error instead of letting it
+                # read the (by then exhausted) stream a second time.
+                detail = exc.read(2048).decode(errors='replace') if isinstance(exc, urllib.error.HTTPError) else str(exc)
+                err_class, err_detail = classify_error(exc, body=detail if isinstance(exc, urllib.error.HTTPError) else None)
                 self.tracker.fail_request(
                     req_record.request_id,
                     duration_ms=elapsed_ms,
                     error_class=err_class,
                     error_detail=err_detail,
                 )
-                detail = exc.read(2048).decode(errors='replace') if isinstance(exc, urllib.error.HTTPError) else str(exc)
                 if action_format == 'schema' and isinstance(exc, urllib.error.HTTPError) and exc.code in (400, 422, 501):
                     self.state['schema_disabled_until'] = time.time() + 6 * 3600
                     self.event('action_format_fallback', f'endpoint rejected structured output (HTTP {exc.code}); using text protocol for 6 hours', True)
                 self.feedback('inference_error', detail, False)
-                self.event('inference_error', f'request_id={req_record.request_id} error_class={err_class} detail={detail}', True)
+                # Telemetry only (never fed back into the agent's own prompt): a full
+                # traceback for anything not already explained by an HTTP status body,
+                # so a recurring error_class=unknown_error can actually be root-caused
+                # instead of only re-showing the same one-line str(exc) every time.
+                diagnostic = f'request_id={req_record.request_id} error_class={err_class} detail={detail}'
+                if not isinstance(exc, urllib.error.HTTPError):
+                    diagnostic += ' traceback=' + traceback.format_exc().replace('\n', ' | ')
+                self.event('inference_error', diagnostic, True)
                 # P11: Classify error cause and update state with appropriate backoff category
                 if err_class == 'auth_error':
                     self.state['auth_failure'] = True

@@ -61,11 +61,13 @@ class InferenceRecord:
         return asdict(self)
 
 
-def classify_error(exc: Exception) -> Tuple[str, str]:
+def classify_error(exc: Exception, body: Optional[str] = None) -> Tuple[str, str]:
     """Classify an inference exception into a standardized error category and detail.
 
     Args:
         exc: Caught exception.
+        body: Pre-read HTTPError response body, if the caller already consumed the
+            stream (an HTTPError's file-like object can only be read once).
 
     Returns:
         Tuple[str, str]: (error_class, detailed_message)
@@ -74,11 +76,12 @@ def classify_error(exc: Exception) -> Tuple[str, str]:
         return "timeout", str(exc)
     if isinstance(exc, urllib.error.HTTPError):
         code = exc.code
-        body = ""
-        try:
-            body = exc.read(512).decode("utf-8", errors="replace")
-        except Exception:
-            pass
+        if body is None:
+            body = ""
+            try:
+                body = exc.read(512).decode("utf-8", errors="replace")
+            except Exception:
+                pass
         if code == 401:
             return "http_401_unauthorized", body or str(exc)
         if code == 403:

@@ -1,4 +1,5 @@
 """P21.11: runtime reliability (wakeups, receipts, rejected output, prose routing)."""
+import io
 import json
 import os
 import shutil
@@ -6,9 +7,11 @@ import sqlite3
 import tempfile
 import time
 import unittest
+import urllib.error
 from pathlib import Path
 from unittest.mock import patch
 
+import web.runtime as rt
 from village.collaboration import CooperationCheckpoint, assess
 from village.coordinator import CoordinationStore
 from web.decision import decision
@@ -309,3 +312,101 @@ class MandatoryKnowledgebaseGateTests(unittest.TestCase):
         agent, root = self.make('bogus-value')
         self.addCleanup(shutil.rmtree, root, ignore_errors=True)
         self.assertEqual(agent.policy.knowledgebase_gate, 'advisory')
+
+
+class ForeignHomeGuardTests(unittest.TestCase):
+    """Board review 2026-09-27: King/Operator/Methodologist tried to fix 08-logician's
+    venv by running commands against his private path from their OWN account, and
+    03-librarian repeatedly announced writing to .../users/operator/schema.md. Both
+    always fail on Unix permissions; this rejects it before exec instead."""
+
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp(prefix='village-home-'))
+        (self.root / 'board').mkdir(); (self.root / 'telemetry').mkdir()
+        (self.root / 'identity.txt').write_text('identity')
+        self.peers = [{'id': '01-king', 'name': 'king'}, {'id': '08-logician', 'name': 'logician'},
+                      {'id': '03-librarian', 'name': 'librarian'}]
+        self.env = dict(AGENT_ID='01-king', AGENT_NAME='king', AGENT_ROLE='king', VILLAGE_ROOT=str(self.root),
+                        AGENT_IDENTITY_PROMPT=str(self.root / 'identity.txt'), OLLAMA_MODEL='m')
+        self.agent = Resident(self.env)
+        real = rt.read_json
+        patcher = patch.object(rt, 'read_json', lambda path, d: self.peers if str(path).endswith('runtime-peers.json') else real(path, d))
+        patcher.start(); self.addCleanup(patcher.stop)
+
+    def tearDown(self):
+        shutil.rmtree(self.root, ignore_errors=True)
+
+    def test_command_against_peer_home_is_blocked_before_exec(self):
+        cmd = f'cd {self.root}/users/logician/venv && pip install chromadb --quiet'
+        self.assertEqual(self.agent.targets_foreign_home(cmd), 'logician')
+        self.agent.execute({'tool_call': {'name': 'execute_bash', 'arguments': {'command': cmd}}})
+        self.assertFalse(self.agent.state['last_result']['ok'])
+        self.assertIn("logician's private home", self.agent.state['last_result']['result'])
+
+    def test_command_against_own_home_is_allowed(self):
+        cmd = f'ls -la {self.agent.home}'
+        self.assertIsNone(self.agent.targets_foreign_home(cmd))
+
+    def test_unrelated_command_is_allowed(self):
+        self.assertIsNone(self.agent.targets_foreign_home('echo hello'))
+
+    def test_start_job_is_also_guarded(self):
+        self.agent.execute({'tool_call': {'name': 'start_job', 'arguments': {
+            'command': f'cat {self.root}/users/librarian/schema.md'}}})
+        self.assertFalse(self.agent.state['last_result']['ok'])
+        self.assertIn('librarian', self.agent.state['last_result']['result'])
+
+    def test_substring_name_collision_does_not_false_positive(self):
+        # a peer literally named "log" would collide with "logician" via naive substring
+        # matching; the real fixture only has "logician", so a related but different
+        # path segment must not match.
+        self.assertIsNone(self.agent.targets_foreign_home(f'cat {self.root}/users/logician-archive/notes.md'))
+
+    def test_no_peers_file_never_crashes(self):
+        with patch.object(rt, 'read_json', lambda path, d: d):
+            self.assertIsNone(self.agent.targets_foreign_home(f'cat {self.root}/users/logician/x'))
+
+
+class InferenceErrorDiagnosticsTests(unittest.TestCase):
+    """Board review 2026-09-27: a recurring 06-operator inference_error only ever showed
+    'dictionary update sequence element #0 has length 1; 2 is required' with no traceback,
+    so it could not be root-caused. Non-HTTP exceptions now carry a full traceback in the
+    telemetry event (never in agent-facing feedback, so it cannot pollute the next prompt)."""
+
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp(prefix='village-diag-'))
+        (self.root / 'board').mkdir(); (self.root / 'telemetry').mkdir()
+        (self.root / 'identity.txt').write_text('identity')
+        (self.root / 'system-prompt.txt').write_text('FULL')
+        self.env = dict(AGENT_ID='06-operator', AGENT_NAME='operator', AGENT_ROLE='builder', VILLAGE_ROOT=str(self.root),
+                        AGENT_IDENTITY_PROMPT=str(self.root / 'identity.txt'), OLLAMA_MODEL='m', OLLAMA_URL='http://fake:1',
+                        VILLAGE_SHARE_DIR=str(self.root))
+        self.agent = Resident(self.env)
+
+    def tearDown(self):
+        shutil.rmtree(self.root, ignore_errors=True)
+
+    def test_non_http_error_gets_a_traceback_in_telemetry_not_in_agent_feedback(self):
+        def boom(req, timeout=0):
+            raise ValueError("dictionary update sequence element #0 has length 1; 2 is required")
+        with patch('web.runtime.urllib.request.urlopen', boom):
+            self.agent.cycle()
+        self.assertFalse(self.agent.state['last_result']['ok'])
+        self.assertNotIn('Traceback', self.agent.state['last_result']['result'])  # agent feedback stays short
+        tele = tail(self.root / 'telemetry/agent-events.jsonl', 50)
+        errors = [e for e in tele if e['event'] == 'inference_error']
+        self.assertEqual(len(errors), 1)
+        self.assertIn('traceback=', errors[0]['detail'])
+        self.assertIn('ValueError', errors[0]['detail'])
+        self.assertIn('dictionary update sequence', errors[0]['detail'])
+
+    def test_http_error_still_uses_the_response_body_not_a_traceback(self):
+        def boom(req, timeout=0):
+            raise urllib.error.HTTPError(req.full_url, 500, 'server error', {}, io.BytesIO(b'upstream said no'))
+        with patch('web.runtime.urllib.request.urlopen', boom):
+            self.agent.cycle()
+        tele = tail(self.root / 'telemetry/agent-events.jsonl', 50)
+        errors = [e for e in tele if e['event'] == 'inference_error']
+        self.assertEqual(len(errors), 1)
+        self.assertIn('upstream said no', errors[0]['detail'])
+        self.assertNotIn('traceback=', errors[0]['detail'])
