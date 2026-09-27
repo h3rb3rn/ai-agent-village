@@ -52,6 +52,16 @@ def memory_status():
             result['stats'] = json.loads(response.read().decode())
     except Exception: result['stats'] = {'agents': [], 'total': 0, 'chars': 0}
     return result
+def auditor_status():
+    """Read the auditor's own SQLite log directly (it has no HTTP service of its
+    own); an absent or empty database just means the auditor has not run any
+    cycle yet, which is a normal, honestly-reported state, not an error."""
+    db_path = ROOT / "telemetry" / "audit.sqlite3"
+    try:
+        from village.auditor import AuditStore
+        return AuditStore(db_path).summary()
+    except Exception as exc:
+        return {"error": str(exc), "delivered_total": 0, "cycles_run": 0, "last_cycle_at": None}
 def gpu():
     try:
         out = subprocess.run(["nvidia-smi", "--query-gpu=index,name,memory.used,memory.total,utilization.gpu,power.draw", "--format=csv,noheader,nounits"], capture_output=True, text=True, timeout=5)
@@ -120,7 +130,7 @@ def main():
                 "ollama_error": ollama_error,
                 "inference": inf_info,
             })
-        payload = {"timestamp": now(), "agents": agents, "gpu": gpu(), "host": habitat(), "hardware": inventory, "memory": memory_status(), "resources": resources.sample(agents)}
+        payload = {"timestamp": now(), "agents": agents, "gpu": gpu(), "host": habitat(), "hardware": inventory, "memory": memory_status(), "auditor": auditor_status(), "resources": resources.sample(agents)}
         encoded = json.dumps(payload, ensure_ascii=False)
         db.execute("INSERT INTO snapshots(timestamp,payload) VALUES (?,?)", (stamp, encoded)); db.commit()
         rotate_jsonl(RAW, max_bytes=ROTATION_BYTES, keep=ROTATION_KEEP,

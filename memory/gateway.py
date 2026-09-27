@@ -450,14 +450,22 @@ class Handler(BaseHTTPRequestHandler):
                     FROM memories GROUP BY agent ORDER BY agent
                     """
                 ).fetchall()
+                scope_rows = conn.execute(
+                    "SELECT scope, count(*) AS n FROM memories GROUP BY scope"
+                ).fetchall()
                 projection = projection_stats(conn)
                 conn.close()
+                by_scope = {"private": 0, "shared": 0}
+                for r in scope_rows:
+                    if r["scope"] in by_scope:
+                        by_scope[r["scope"]] = r["n"]
                 return self.send_json(
                     200,
                     {
                         "agents": [dict(r) for r in rows],
                         "total": sum(r["memories"] for r in rows),
                         "chars": sum(r["chars"] for r in rows),
+                        "by_scope": by_scope,
                         "projection": projection,
                     },
                 )

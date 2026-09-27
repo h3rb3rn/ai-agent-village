@@ -1,0 +1,23 @@
+[Unit]
+Description=AI Village error auditor (deterministic first, independent-LLM review for the rest)
+After=local-fs.target ai-village-telemetry.service ai-village-memory-gateway.service
+Wants=ai-village-telemetry.service ai-village-memory-gateway.service
+
+[Service]
+Type=simple
+User=root
+Group=root
+EnvironmentFile=/etc/ai-village/credentials/village-auditor.env
+ExecStart=/usr/local/lib/ai-village/village-auditor --interval=300
+Restart=always
+RestartSec=15
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/ai-village/telemetry /var/lib/ai-village/board
+# Unlike the firewatch guard, this needs real network reach: the memory
+# gateway (127.0.0.1:8090) and the independent review model on N11-M10.
+
+[Install]
+WantedBy=multi-user.target

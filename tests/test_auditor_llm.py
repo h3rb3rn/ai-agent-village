@@ -290,3 +290,26 @@ class FullAuditCycleTests(unittest.TestCase):
                                  memory_writer=self.memory_writer, opener=flaky)
         self.assertEqual(stats["llm_errors"], 1)
         self.assertEqual(stats["llm_findings"], 1)
+
+    def test_deterministic_and_llm_deliveries_are_tagged_by_source_in_the_summary(self):
+        events = [
+            {"agent": "01-king", "event": "foreign_home_blocked", "event_id": "e8",
+             "detail": "target_agent=08-logician; command_prefix=x"},
+            {"agent": "09-chronicler", "event": "board_message", "event_id": "e9", "model": "llama3.2:3b",
+             "detail": "message=The collaboration checkpoint failed due to the lack of a collaboration checkpoint."},
+        ]
+        from village.auditor_llm import full_audit_cycle
+        full_audit_cycle(events, self.store, coordination_store=self.coord,
+                         memory_writer=self.memory_writer, opener=opener_returning(CIRCULAR_MESSAGE_RESPONSE))
+        summary = self.store.summary()
+        self.assertEqual(summary["delivered_by_source"], {"deterministic": 1, "llm": 1})
+
+    def test_every_cycle_call_is_persisted_even_with_llm_disabled(self):
+        events = [{"agent": "01-king", "event": "foreign_home_blocked", "event_id": "e10",
+                  "detail": "target_agent=08-logician; command_prefix=x"}]
+        from village.auditor_llm import full_audit_cycle
+        full_audit_cycle(events, self.store, coordination_store=self.coord,
+                         memory_writer=self.memory_writer, opener=MagicMock(), llm_enabled=False)
+        summary = self.store.summary()
+        self.assertEqual(summary["cycles_run"], 1)
+        self.assertEqual(summary["deterministic_delivered"], 1)

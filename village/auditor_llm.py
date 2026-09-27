@@ -26,9 +26,11 @@ audit cycles, not reload each time). Once warm, one judged call took ~27-40s.
 from __future__ import annotations
 
 import json
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional
 
 from village.auditor import FORMAT_REASONS, AuditFinding, AuditStore, deliver, scan
@@ -196,7 +198,7 @@ def full_audit_cycle(events: List[Mapping[str, Any]], store: AuditStore, *, coor
     claimed_event_ids = set()
     for finding in deterministic_findings:
         claimed_event_ids.add(finding.source_event_id)
-        scope = store.route(finding)
+        scope = store.route(finding, source="deterministic")
         if scope is None:
             continue
         deliver(finding, scope, coordination_store=coordination_store, memory_writer=memory_writer)
@@ -204,6 +206,7 @@ def full_audit_cycle(events: List[Mapping[str, Any]], store: AuditStore, *, coor
         stats["deterministic_delivered"] += 1
 
     if not llm_enabled:
+        store.record_cycle(stats)
         return stats
 
     candidates = select_candidates(events, already_classified=claimed_event_ids,
@@ -218,10 +221,43 @@ def full_audit_cycle(events: List[Mapping[str, Any]], store: AuditStore, *, coor
         if finding is None:
             continue
         stats["llm_findings"] += 1
-        scope = store.route(finding)
+        scope = store.route(finding, source="llm")
         if scope is None:
             continue
         deliver(finding, scope, coordination_store=coordination_store, memory_writer=memory_writer)
         store.mark_delivered(finding.category, finding.source_event_id)
         stats["llm_delivered"] += 1
+    store.record_cycle(stats)
     return stats
+
+
+# --- periodic service loop, mirroring village/firewatch.py::run() -----------
+
+def run(interval: float = 300.0,
+        agent_events: Optional[Path] = None,
+        db_path: Optional[Path] = None,
+        *, coordination_store, memory_writer,
+        opener: Callable = urllib.request.urlopen, url: str = DEFAULT_URL,
+        model: str = DEFAULT_MODEL, llm_enabled: bool = True) -> None:
+    """Run full_audit_cycle() forever against newly-appended resident events.
+
+    Reads the same agent-events.jsonl the runtime and village/firewatch.py
+    already write to; a persisted cursor (AuditStore.cursor/advance_cursor)
+    ensures each event is only ever considered once, even across restarts.
+    Never restarts or throttles an agent itself - it only explains and routes.
+    """
+    from village.firewatch import _read_events, AGENT_EVENTS as _DEFAULT_AGENT_EVENTS
+
+    agent_events = agent_events or _DEFAULT_AGENT_EVENTS
+    db_path = db_path or Path("/var/lib/ai-village/telemetry/audit.sqlite3")
+    store = AuditStore(db_path)
+    while True:
+        events = _read_events(agent_events)
+        cursor = store.cursor()
+        new_events = [e for e in events if str(e.get("timestamp", "")) > cursor] if cursor else events
+        if new_events:
+            full_audit_cycle(new_events, store, coordination_store=coordination_store,
+                             memory_writer=memory_writer, opener=opener, url=url,
+                             model=model, llm_enabled=llm_enabled)
+            store.advance_cursor(max(str(e.get("timestamp", "")) for e in new_events))
+        time.sleep(max(5.0, interval))

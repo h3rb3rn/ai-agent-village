@@ -199,9 +199,23 @@ class AuditStore:
             )
             conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_audit_source ON audit_log(source_event_id, category)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_category_agent ON audit_log(category, agent)")
+            existing_columns = {row["name"] for row in conn.execute("PRAGMA table_info(audit_log)")}
+            if "source" not in existing_columns:
+                # 'deterministic' (village/auditor.py signatures, free) or 'llm' (the
+                # independent qwen3.6:35b review, only for what the signatures could
+                # not explain) - see village/auditor_llm.py::full_audit_cycle.
+                conn.execute("ALTER TABLE audit_log ADD COLUMN source TEXT NOT NULL DEFAULT 'deterministic'")
             conn.execute(
                 """CREATE TABLE IF NOT EXISTS audit_cursor (
                     id INTEGER PRIMARY KEY CHECK (id = 1), last_timestamp TEXT NOT NULL
+                )"""
+            )
+            conn.execute(
+                """CREATE TABLE IF NOT EXISTS audit_cycle_log (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT, created_at TEXT NOT NULL,
+                    deterministic_findings INTEGER NOT NULL, deterministic_delivered INTEGER NOT NULL,
+                    llm_candidates INTEGER NOT NULL, llm_findings INTEGER NOT NULL,
+                    llm_delivered INTEGER NOT NULL, llm_errors INTEGER NOT NULL
                 )"""
             )
 
@@ -234,9 +248,15 @@ class AuditStore:
             ).fetchone()
             return row["created_at"] if row else None
 
-    def route(self, finding: AuditFinding, *, now: Optional[str] = None) -> Optional[str]:
+    def route(self, finding: AuditFinding, *, now: Optional[str] = None,
+              source: str = "deterministic") -> Optional[str]:
         """Decide scope for a finding and persist it; return the scope, or None if
-        rate-limited (already corrected this agent for this category recently)."""
+        rate-limited (already corrected this agent for this category recently).
+
+        ``source`` records which layer produced the finding - the free, primary
+        ``village/auditor.py`` signatures, or the independent LLM review that only
+        ever runs on what the signatures left unclassified - purely for later
+        dashboard/export accounting, never for routing or rate-limit decisions."""
         now = now or utc_now()
         last = self.last_written_at(finding.category, finding.agent)
         if last and _seconds_between(last, now) < RATE_LIMIT_SECONDS:
@@ -249,15 +269,74 @@ class AuditStore:
                 conn.execute(
                     """INSERT INTO audit_log(
                         id, created_at, category, agent, model, source_event_id, scope,
-                        problem, solution, rejected_example, corrected_example, delivered
-                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,0)""",
+                        problem, solution, rejected_example, corrected_example, delivered, source
+                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,0,?)""",
                     (record_id, now, finding.category, finding.agent, finding.model,
                      finding.source_event_id, scope, finding.problem, finding.solution,
-                     finding.rejected_example, finding.corrected_example),
+                     finding.rejected_example, finding.corrected_example, source),
                 )
         except sqlite3.IntegrityError:
             return None  # this exact (source_event_id, category) was already audited
         return scope
+
+    def record_cycle(self, stats: Dict[str, int], *, now: Optional[str] = None) -> None:
+        """Persist one full_audit_cycle() run's counters for dashboard history."""
+        now = now or utc_now()
+        with self._conn() as conn:
+            conn.execute(
+                """INSERT INTO audit_cycle_log(
+                    created_at, deterministic_findings, deterministic_delivered,
+                    llm_candidates, llm_findings, llm_delivered, llm_errors
+                ) VALUES (?,?,?,?,?,?,?)""",
+                (now, stats.get("deterministic_findings", 0), stats.get("deterministic_delivered", 0),
+                 stats.get("llm_candidates", 0), stats.get("llm_findings", 0),
+                 stats.get("llm_delivered", 0), stats.get("llm_errors", 0)),
+            )
+
+    def summary(self) -> Dict[str, Any]:
+        """Dashboard-ready aggregate: how much the auditor has ever intervened,
+        and how much of that was resolved by the free deterministic layer versus
+        the independent LLM - and how often the LLM was consulted but produced
+        no usable verdict (llm_errors: neither resolved nor delivered)."""
+        with self._conn() as conn:
+            # every audit_log row is a finding that was routed and persisted (route()
+            # already dropped rate-limited/duplicate ones before this point); `delivered`
+            # tracks whether the in-village side-effect (inbox message / memory write)
+            # was confirmed afterwards, which the caller sets via mark_delivered().
+            by_source = {
+                row["source"]: row["n"]
+                for row in conn.execute("SELECT source, count(*) AS n FROM audit_log GROUP BY source")
+            }
+            by_scope = {
+                row["scope"]: row["n"]
+                for row in conn.execute("SELECT scope, count(*) AS n FROM audit_log GROUP BY scope")
+            }
+            by_category = {
+                row["category"]: row["n"]
+                for row in conn.execute("SELECT category, count(*) AS n FROM audit_log GROUP BY category")
+            }
+            totals = conn.execute(
+                """SELECT count(*) AS cycles, coalesce(sum(deterministic_findings),0) AS det_f,
+                          coalesce(sum(deterministic_delivered),0) AS det_d,
+                          coalesce(sum(llm_candidates),0) AS llm_c, coalesce(sum(llm_findings),0) AS llm_f,
+                          coalesce(sum(llm_delivered),0) AS llm_d, coalesce(sum(llm_errors),0) AS llm_e,
+                          max(created_at) AS last_cycle_at
+                   FROM audit_cycle_log"""
+            ).fetchone()
+        return {
+            "delivered_total": sum(by_source.values()),
+            "delivered_by_source": {"deterministic": by_source.get("deterministic", 0), "llm": by_source.get("llm", 0)},
+            "delivered_by_scope": {"private": by_scope.get("private", 0), "shared": by_scope.get("shared", 0)},
+            "delivered_by_category": by_category,
+            "cycles_run": totals["cycles"] if totals else 0,
+            "deterministic_findings": totals["det_f"] if totals else 0,
+            "deterministic_delivered": totals["det_d"] if totals else 0,
+            "llm_candidates": totals["llm_c"] if totals else 0,
+            "llm_findings": totals["llm_f"] if totals else 0,
+            "llm_delivered": totals["llm_d"] if totals else 0,
+            "llm_unresolved": totals["llm_e"] if totals else 0,
+            "last_cycle_at": totals["last_cycle_at"] if totals else None,
+        }
 
     def mark_delivered(self, category: str, source_event_id: str) -> None:
         with self._conn() as conn:

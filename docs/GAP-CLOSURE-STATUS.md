@@ -70,6 +70,8 @@ Pro Paket Nachweis unter `docs/evidence/Pxx.md` anlegen, sobald tatsächlich dar
 | P31 | Pflicht-Knowledgebase-Gate (advisory/mandatory), Betreiber wählt mandatory | P21.6, P30 | LOCAL_VERIFIED | [docs/evidence/P31.md](evidence/P31.md) · Host-Rollout offen |
 | P32 | GraphRAG-Kantenschema (Memory-Relationen) auf bestehendem Neo4j-Adapter | P17 | TODO | [Plan](analysis/MCP-GRAPHRAG-PLAN-2026-09-27.md) |
 | P33 | HuggingFace-Metadaten-Anbindung (Option a), Import selbst bleibt separat | P00–P02 | LOCAL_VERIFIED | [docs/evidence/P33-groundwork.md](evidence/P33-groundwork.md) · Firewall-Freigabe offen (Betreiber) |
+| P35 | Wissensbasis-Verhältnis (persönlich/Gemeinschaft) im Dashboard | P14 | HOST_VERIFIED | [docs/evidence/P35.md](evidence/P35.md) |
+| P36 | Auditor-Statistik im Dashboard (Python vs. LLM, unresolved) + Dienst-Verkabelung | P21.25, P34 | HOST_VERIFIED (Dashboard) / TODO (Dienststart) | [docs/evidence/P36.md](evidence/P36.md) · Aktivierung braucht Betreiberfreigabe |
 
 ## Fortschrittsbuch
 

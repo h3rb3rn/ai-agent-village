@@ -344,3 +344,14 @@ class MemoryStatsRouteTests(MemoryGatewayTests):
         self.assertEqual(body["total"], 0)
         self.assertEqual(body["agents"], [])
         self.assertEqual(body["projection"]["max_sequence_id"], 0)
+        self.assertEqual(body["by_scope"], {"private": 0, "shared": 0})
+
+    def test_stats_route_breaks_down_private_versus_shared_knowledge(self):
+        s1, r1 = self.call("POST", "/v1/memories", {"agent": "a", "scope": "private", "content": "note a", "kind": "note"}, token="token-a")
+        s2, r2 = self.call("POST", "/v1/memories", {"agent": "b", "scope": "private", "content": "note b", "kind": "note"}, token="token-b")
+        s3, r3 = self.call("POST", "/v1/memories", {"agent": "artisan", "scope": "shared", "content": "fact c", "kind": "reference"}, token="token-artisan")
+        self.assertEqual((s1, s2, s3), (201, 201, 201), (r1, r2, r3))
+        status, body = self.call("GET", "/v1/stats", token=None)
+        self.assertEqual(status, 200, body)
+        self.assertEqual(body["total"], 3)
+        self.assertEqual(body["by_scope"], {"private": 2, "shared": 1})

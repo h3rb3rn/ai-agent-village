@@ -114,6 +114,51 @@ class RoutingAndRateLimitTests(unittest.TestCase):
         self.assertIn("08-logician", pair["chosen"])
         self.assertEqual(pair["category"], "foreign_home_access")
 
+    def test_source_defaults_to_deterministic_and_is_recorded(self):
+        self.store.route(self.make("01-king", event_id="e1"))
+        summary = self.store.summary()
+        self.assertEqual(summary["delivered_by_source"], {"deterministic": 1, "llm": 0})
+
+    def test_source_llm_is_recorded_distinctly(self):
+        self.store.route(self.make("01-king", event_id="e1"), source="llm")
+        summary = self.store.summary()
+        self.assertEqual(summary["delivered_by_source"], {"deterministic": 0, "llm": 1})
+
+    def test_summary_breaks_down_by_scope_and_category(self):
+        self.store.route(self.make("01-king", event_id="e1"))  # private
+        self.store.route(self.make("06-operator", event_id="e2"))  # shared
+        summary = self.store.summary()
+        self.assertEqual(summary["delivered_total"], 2)
+        self.assertEqual(summary["delivered_by_scope"], {"private": 1, "shared": 1})
+        self.assertEqual(summary["delivered_by_category"], {"foreign_home_access": 2})
+
+    def test_rate_limited_finding_is_not_counted_in_summary(self):
+        self.store.route(self.make("01-king", event_id="e1"), now="2026-09-27T20:00:00+00:00")
+        self.store.route(self.make("01-king", event_id="e2"), now="2026-09-27T20:10:00+00:00")  # rate-limited
+        self.assertEqual(self.store.summary()["delivered_total"], 1)
+
+    def test_record_cycle_accumulates_across_calls(self):
+        self.store.record_cycle({"deterministic_findings": 3, "deterministic_delivered": 2,
+                                  "llm_candidates": 1, "llm_findings": 1, "llm_delivered": 1, "llm_errors": 0})
+        self.store.record_cycle({"deterministic_findings": 1, "deterministic_delivered": 0,
+                                  "llm_candidates": 2, "llm_findings": 0, "llm_delivered": 0, "llm_errors": 2})
+        summary = self.store.summary()
+        self.assertEqual(summary["cycles_run"], 2)
+        self.assertEqual(summary["deterministic_findings"], 4)
+        self.assertEqual(summary["deterministic_delivered"], 2)
+        self.assertEqual(summary["llm_candidates"], 3)
+        self.assertEqual(summary["llm_findings"], 1)
+        self.assertEqual(summary["llm_delivered"], 1)
+        self.assertEqual(summary["llm_unresolved"], 2)
+        self.assertIsNotNone(summary["last_cycle_at"])
+
+    def test_summary_on_a_fresh_store_is_all_zero_not_an_error(self):
+        fresh = AuditStore(self.tmp / "fresh.sqlite3")
+        summary = fresh.summary()
+        self.assertEqual(summary["delivered_total"], 0)
+        self.assertEqual(summary["cycles_run"], 0)
+        self.assertIsNone(summary["last_cycle_at"])
+
 
 class DeliveryTests(unittest.TestCase):
     def setUp(self):

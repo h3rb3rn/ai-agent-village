@@ -1,0 +1,56 @@
+#!/usr/bin/env python3
+"""Run the AI Village error auditor as a periodic background service.
+
+Deterministic first, always free (village/auditor.py); the independent
+qwen3.6:35b review on N11-M10 only for what those signatures could not
+explain (village/auditor_llm.py). Never restarts or throttles an agent -
+it only explains a detected mistake and routes it privately or, once the
+same category recurs for a second distinct agent, into shared community
+knowledge. See docs/evidence/P36.md for the operator's activation decision.
+"""
+from pathlib import Path
+import argparse
+import os
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from village.auditor_llm import DEFAULT_MODEL, DEFAULT_URL, run
+from village.coordinator import CoordinationStore
+
+ROOT = Path(os.environ.get("VILLAGE_ROOT", "/var/lib/ai-village"))
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--interval", type=float, default=300.0,
+                    help="seconds between cycles (default 300s = 5 min)")
+parser.add_argument("--agent-events", type=Path, default=ROOT / "telemetry" / "agent-events.jsonl")
+parser.add_argument("--db", type=Path, default=ROOT / "telemetry" / "audit.sqlite3")
+parser.add_argument("--board-dir", type=Path, default=ROOT / "board")
+parser.add_argument("--coordination-db", type=Path, default=ROOT / "board" / "coordination.sqlite3")
+parser.add_argument("--url", default=DEFAULT_URL, help="independent review model endpoint (N11-M10)")
+parser.add_argument("--model", default=DEFAULT_MODEL)
+parser.add_argument("--no-llm", action="store_true", help="deterministic signatures only, never call the LLM")
+args = parser.parse_args()
+
+gateway_url = os.environ.get("MEMORY_GATEWAY_URL", "http://127.0.0.1:8090")
+token = os.environ.get("MEMORY_AGENT_TOKEN", "")
+if not token:
+    sys.exit("MEMORY_AGENT_TOKEN missing from the service environment; this is configuration, "
+             "not a transient fault - see docs/evidence/P36.md for the 'village-auditor' credential.")
+
+
+def memory_writer(payload: dict) -> dict:
+    import json
+    import urllib.request
+
+    request = urllib.request.Request(
+        gateway_url + "/v1/memories", data=json.dumps(payload).encode(),
+        headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(request, timeout=10) as response:
+        return json.load(response)
+
+
+coordination_store = CoordinationStore(args.coordination_db, args.board_dir)
+run(args.interval, args.agent_events, args.db,
+    coordination_store=coordination_store, memory_writer=memory_writer,
+    url=args.url, model=args.model, llm_enabled=not args.no_llm)
