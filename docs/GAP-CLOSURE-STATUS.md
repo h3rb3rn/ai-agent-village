@@ -73,7 +73,7 @@ Pro Paket Nachweis unter `docs/evidence/Pxx.md` anlegen, sobald tatsächlich dar
 | P35 | Wissensbasis-Verhältnis (persönlich/Gemeinschaft) im Dashboard | P14 | HOST_VERIFIED | [docs/evidence/P35.md](evidence/P35.md) |
 | P36 | Auditor-Statistik im Dashboard (Python vs. LLM, unresolved) + produktiver Dienst | P21.25, P34 | HOST_VERIFIED | [docs/evidence/P36.md](evidence/P36.md) · Dienst aktiv seit 2026-09-27 22:33 UTC |
 | P37 | Auditor-LLM nutzt die geteilte Knowledgebase als Zusatzkontext (Retrieval, kein Fine-Tuning) | P34, P36 | HOST_VERIFIED | [docs/evidence/P37.md](evidence/P37.md) |
-| P38 | HuggingFace-Mehrfach-Import (GSM8K, CommonsenseQA, SQuAD, Simple-Wikipedia) | P33 | HOST_VERIFIED (GSM8K, CommonsenseQA) / in Arbeit (SQuAD, Wikipedia) | [docs/evidence/P38.md](evidence/P38.md) |
+| P38 | HuggingFace-Mehrfach-Import (GSM8K, CommonsenseQA, SQuAD, Simple-Wikipedia) | P33 | HOST_VERIFIED | [docs/evidence/P38.md](evidence/P38.md) · 355.664 Einträge gesamt |
 | P39 | Fähigkeiten sichtbar für Agents im Prompt (`describe_agent_capabilities`) | P19, VISION.md | HOST_VERIFIED | [docs/evidence/P39.md](evidence/P39.md) · alle 9 Agenten aktiv, 0 Neustarts |
 | P40 | Wiederholungssperre 15min→1h (village-weites df-h-Füllverhalten gemildert) | VISION.md | LOCAL_VERIFIED | [docs/evidence/P40.md](evidence/P40.md) · Host-Rollout mit P39 zusammen |
 
