@@ -251,6 +251,75 @@ class CalcOperationRuntimeTests(unittest.TestCase):
         self.assertIn('12.906', self.agent.state['last_result']['result'])
 
 
+class ResearchProposalRuntimeTests(unittest.TestCase):
+    """P41: VISION.md - a research topic becomes real work only once the
+    community (distinct agents), not one agent, has endorsed it."""
+
+    def make(self, agent_id, name):
+        root = Path(tempfile.mkdtemp(prefix='village-research-'))
+        (root / 'board').mkdir(); (root / 'telemetry').mkdir()
+        (root / 'identity.txt').write_text('identity')
+        env = dict(AGENT_ID=agent_id, AGENT_NAME=name, AGENT_ROLE='resident', VILLAGE_ROOT=str(root),
+                   AGENT_IDENTITY_PROMPT=str(root / 'identity.txt'), OLLAMA_MODEL='m')
+        return Resident(env), root
+
+    def setUp(self):
+        self.agent, self.root = self.make('01-king', 'king')
+        self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
+
+    def test_propose_via_the_action_contract(self):
+        self.agent.execute({'tool_call': {'name': 'research_proposal',
+                                          'arguments': {'operation': 'propose', 'topic': 'Why is the GPU idle?'}}})
+        self.assertTrue(self.agent.state['last_result']['ok'], self.agent.state['last_result'])
+        result = json.loads(self.agent.state['last_result']['result'])
+        self.assertEqual(result['status'], 'open')
+        self.assertEqual(result['endorsers'], ['01-king'])
+
+    def test_propose_without_a_topic_is_reported_not_crashed(self):
+        self.agent.execute({'tool_call': {'name': 'research_proposal', 'arguments': {'operation': 'propose'}}})
+        self.assertFalse(self.agent.state['last_result']['ok'])
+        self.assertIn('topic', self.agent.state['last_result']['result'])
+
+    def test_three_distinct_agents_endorsing_adopts_a_real_task_other_agents_can_claim(self):
+        self.agent.execute({'tool_call': {'name': 'research_proposal',
+                                          'arguments': {'operation': 'propose', 'topic': 'Map the M10 GPU compute path'}}})
+        proposal_id = json.loads(self.agent.state['last_result']['result'])['id']
+
+        # A separate resident, sharing the same board/coordination store, endorses.
+        second, _ = self.make('02-explorer', 'explorer')
+        second.env['VILLAGE_ROOT'] = self.agent.env['VILLAGE_ROOT']
+        second.root = self.agent.root; second.board = self.agent.board
+        second.tasks = self.agent.tasks  # same underlying CoordinationStore/db
+        second.execute({'tool_call': {'name': 'research_proposal',
+                                      'arguments': {'operation': 'endorse', 'proposal_id': proposal_id}}})
+        self.assertTrue(second.state['last_result']['ok'], second.state['last_result'])
+
+        third, _ = self.make('03-librarian', 'librarian')
+        third.tasks = self.agent.tasks
+        result = third.execute({'tool_call': {'name': 'research_proposal',
+                                              'arguments': {'operation': 'endorse', 'proposal_id': proposal_id}}})
+        adopted = json.loads(third.state['last_result']['result'])
+        self.assertEqual(adopted['status'], 'adopted')
+        self.assertIsNotNone(adopted['adopted_task_id'])
+
+        # The adopted proposal is now an ordinary task a fourth agent can claim.
+        claim = self.agent.tasks.operate('04-artisan', {'action': 'claim', 'task_id': adopted['adopted_task_id']})
+        self.assertEqual(claim['owner'], '04-artisan')
+
+    def test_list_via_the_action_contract(self):
+        self.agent.execute({'tool_call': {'name': 'research_proposal',
+                                          'arguments': {'operation': 'propose', 'topic': 'topic a'}}})
+        self.agent.execute({'tool_call': {'name': 'research_proposal', 'arguments': {'operation': 'list'}}})
+        self.assertTrue(self.agent.state['last_result']['ok'])
+        listed = json.loads(self.agent.state['last_result']['result'])
+        self.assertEqual(len(listed), 1)
+        self.assertEqual(listed[0]['topic'], 'topic a')
+
+    def test_unknown_operation_is_reported_not_crashed(self):
+        self.agent.execute({'tool_call': {'name': 'research_proposal', 'arguments': {'operation': 'vote'}}})
+        self.assertFalse(self.agent.state['last_result']['ok'])
+
+
 class CapabilitySummaryTests(unittest.TestCase):
     """P38: village/containers.py::describe_agent_capabilities() (P19) existed
     but was never surfaced to a resident's own prompt - an agent cannot use a

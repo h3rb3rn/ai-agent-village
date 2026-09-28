@@ -79,6 +79,15 @@ ACTION_SPECS: Dict[str, Dict[str, Any]] = {
             "cidr": _s(60), "text": _s(2000), "algorithm": {"enum": ["sha256", "sha512"]},
             "numbers": {"type": "array", "items": {"type": "number"}, "maxItems": 256}},
         "required": ["tool"]},
+    "research_proposal": {
+        "doc": "operation=propose(topic,rationale?)|endorse(proposal_id)|list(status?) -> a topic becomes a real, "
+              "claimable task only once 3 distinct agents endorse it, chosen by the community, not by one agent; "
+              "propose counts as your own first endorsement",
+        "properties": {
+            "operation": {"enum": ["propose", "endorse", "list"]},
+            "topic": _s(200), "rationale": _s(400), "proposal_id": _s(80),
+            "status": {"enum": ["open", "adopted"]}},
+        "required": ["operation"]},
     "idle": {"doc": "no arguments -> deliberate rest", "properties": {}, "required": []},
 }
 

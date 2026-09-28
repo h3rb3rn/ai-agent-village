@@ -51,7 +51,9 @@ class PromptBudgetTests(unittest.TestCase):
         self.assertLess(len(CORE), 3000)
 
     def test_full_prompt_growth_is_small(self):
-        self.assertLess(len(FULL), 13500)
+        # Bumped 13500->13700 for P41 (research_proposal action documentation,
+        # ~70 chars) - a deliberate, tested capability addition, not drift.
+        self.assertLess(len(FULL), 13700)
 
 
 if __name__ == "__main__":

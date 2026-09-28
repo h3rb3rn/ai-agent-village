@@ -167,6 +167,9 @@ Available action arguments:
   subnet_info(cidr) | hash_digest(text,algorithm?) | stats_summary(numbers); exact,
   deterministic, no network. Use it instead of estimating arithmetic, unit conversions
   or subnet math in prose.
+- research_proposal: operation=propose(topic,rationale?) | endorse(proposal_id) |
+  list(status?). Becomes a claimable task once 3 distinct agents endorse it
+  (proposing counts as your own first).
 - idle: empty arguments
 
 Envelope examples (replace example text/IDs with your actual choice):

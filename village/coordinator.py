@@ -29,7 +29,7 @@ def utc_now() -> str:
 
 
 # Schema version managed by migrations
-LATEST_SCHEMA_VERSION = 3
+LATEST_SCHEMA_VERSION = 4
 
 
 def is_weak_criterion(criterion: str) -> bool:
@@ -221,6 +221,41 @@ class CoordinationStore:
 
                 conn.execute(
                     "INSERT INTO schema_migrations (version, applied_at) VALUES (3, ?)",
+                    (utc_now(),),
+                )
+
+            if current_version < 4:
+                # Migration 4: Community-coordinated research proposals (VISION.md -
+                # "Themen von der Gemeinschaft aller Agents abgestimmt werden", not
+                # picked by a single agent or the operator).
+                conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS research_proposals (
+                        id TEXT PRIMARY KEY,
+                        author TEXT NOT NULL,
+                        topic TEXT NOT NULL,
+                        rationale TEXT,
+                        status TEXT NOT NULL DEFAULT 'open',
+                        created_at TEXT NOT NULL,
+                        adopted_task_id TEXT,
+                        adopted_at TEXT
+                    )
+                    """
+                )
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_proposals_status ON research_proposals(status)")
+                conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS research_endorsements (
+                        proposal_id TEXT NOT NULL,
+                        agent TEXT NOT NULL,
+                        created_at TEXT NOT NULL,
+                        PRIMARY KEY (proposal_id, agent),
+                        FOREIGN KEY (proposal_id) REFERENCES research_proposals(id) ON DELETE CASCADE
+                    )
+                    """
+                )
+                conn.execute(
+                    "INSERT INTO schema_migrations (version, applied_at) VALUES (4, ?)",
                     (utc_now(),),
                 )
             conn.commit()
@@ -898,3 +933,110 @@ class CoordinationStore:
                 pass
 
         return self.fetch_unacknowledged_messages(agent_id=agent_id, source="organic", limit=limit)
+
+    # --- P41: community-coordinated research topics ------------------------
+    # VISION.md: "mit echter Forschung anfangen, bei dem Themen von der
+    # Gemeinschaft aller Agents abgestimmt werden" - a topic becomes a real
+    # task only once distinct agents (not just the proposer) have endorsed it,
+    # so research direction is chosen by the village, not by one agent or the
+    # operator picking for them.
+
+    RESEARCH_ADOPTION_THRESHOLD = 3  # distinct endorsing agents, including the proposer
+
+    def propose_research(self, author: str, topic: str, rationale: str = "") -> Dict[str, Any]:
+        """Propose a research topic. The proposer's own endorsement counts as
+        the first of RESEARCH_ADOPTION_THRESHOLD needed to adopt it."""
+        topic = str(topic).strip()[:200]
+        rationale = str(rationale).strip()[:800]
+        if not topic:
+            raise ValueError("propose_research requires a non-empty topic")
+        now_str = utc_now()
+        proposal_id = uuid.uuid4().hex[:12]
+        with self._conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(
+                "INSERT INTO research_proposals (id, author, topic, rationale, status, created_at) "
+                "VALUES (?,?,?,?,'open',?)",
+                (proposal_id, author, topic, rationale, now_str),
+            )
+            conn.execute(
+                "INSERT INTO research_endorsements (proposal_id, agent, created_at) VALUES (?,?,?)",
+                (proposal_id, author, now_str),
+            )
+            conn.commit()
+        return self.get_research_proposal(proposal_id)  # type: ignore
+
+    def endorse_research(self, proposal_id: str, agent: str) -> Dict[str, Any]:
+        """Second an open proposal. Once RESEARCH_ADOPTION_THRESHOLD distinct
+        agents have endorsed it, it is promoted into a real, claimable task via
+        the same operate('create', ...) path any other task uses - community
+        research is not a separate, second-class kind of work."""
+        now_str = utc_now()
+        with self._conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute("SELECT * FROM research_proposals WHERE id = ?", (proposal_id,)).fetchone()
+            if not row:
+                conn.rollback()
+                raise ValueError(f"unknown research proposal: {proposal_id}")
+            if row["status"] == "open":
+                conn.execute(
+                    "INSERT OR IGNORE INTO research_endorsements (proposal_id, agent, created_at) VALUES (?,?,?)",
+                    (proposal_id, agent, now_str),
+                )
+                count = conn.execute(
+                    "SELECT COUNT(DISTINCT agent) FROM research_endorsements WHERE proposal_id = ?",
+                    (proposal_id,),
+                ).fetchone()[0]
+                if count >= self.RESEARCH_ADOPTION_THRESHOLD:
+                    conn.execute("UPDATE research_proposals SET status = 'adopted' WHERE id = ?", (proposal_id,))
+            conn.commit()
+
+        proposal = self.get_research_proposal(proposal_id)
+        if proposal and proposal["status"] == "adopted" and not proposal.get("adopted_task_id"):
+            # operate() opens its own transaction; done outside the one above.
+            task = self.operate(proposal["author"], {
+                "action": "create",
+                "title": proposal["topic"][:160],
+                "success_criterion": (
+                    f"Community-endorsed research (seconded by {proposal['endorsement_count']} agents: "
+                    f"{', '.join(proposal['endorsers'])}): investigate, record findings with evidence, "
+                    "and share them on the board."
+                ),
+                "goal": proposal["topic"],
+            })
+            with self._conn() as conn:
+                conn.execute(
+                    "UPDATE research_proposals SET adopted_task_id = ?, adopted_at = ? WHERE id = ?",
+                    (task["id"], utc_now(), proposal_id),
+                )
+                conn.commit()
+            proposal = self.get_research_proposal(proposal_id)
+        return proposal  # type: ignore
+
+    def get_research_proposal(self, proposal_id: str) -> Optional[Dict[str, Any]]:
+        with self._conn() as conn:
+            row = conn.execute("SELECT * FROM research_proposals WHERE id = ?", (proposal_id,)).fetchone()
+            if not row:
+                return None
+            endorsers = [
+                r["agent"] for r in conn.execute(
+                    "SELECT agent FROM research_endorsements WHERE proposal_id = ? ORDER BY created_at",
+                    (proposal_id,),
+                )
+            ]
+        result = dict(row)
+        result["endorsers"] = endorsers
+        result["endorsement_count"] = len(endorsers)
+        return result
+
+    def list_research_proposals(self, status: Optional[str] = None) -> List[Dict[str, Any]]:
+        """All proposals (default) or only those matching ``status``, newest first."""
+        query = "SELECT id FROM research_proposals"
+        params: List[str] = []
+        if status:
+            query += " WHERE status = ?"
+            params.append(status)
+        query += " ORDER BY created_at DESC"
+        with self._conn() as conn:
+            ids = [r["id"] for r in conn.execute(query, params)]
+        return [self.get_research_proposal(i) for i in ids]  # type: ignore

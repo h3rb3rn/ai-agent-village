@@ -166,5 +166,80 @@ class TestCoordinationStore(unittest.TestCase):
         self.assertEqual(mode, 0o660)
 
 
+class ResearchProposalTests(unittest.TestCase):
+    """P41: VISION.md - research topics chosen by the community (distinct
+    agents endorsing), not by a single agent or the operator."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.board = self.root / "board"
+        self.board.mkdir(parents=True)
+        self.store = CoordinationStore(self.board / "coordination.sqlite3", self.board)
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def test_proposing_counts_as_the_proposers_own_first_endorsement(self):
+        proposal = self.store.propose_research("01-king", "Why do M10 GPUs sit idle?")
+        self.assertEqual(proposal["status"], "open")
+        self.assertEqual(proposal["endorsers"], ["01-king"])
+        self.assertEqual(proposal["endorsement_count"], 1)
+
+    def test_empty_topic_is_rejected(self):
+        with self.assertRaises(ValueError):
+            self.store.propose_research("01-king", "   ")
+
+    def test_stays_open_below_the_adoption_threshold(self):
+        proposal = self.store.propose_research("01-king", "topic")
+        proposal = self.store.endorse_research(proposal["id"], "02-explorer")
+        self.assertEqual(proposal["status"], "open")
+        self.assertEqual(proposal["endorsement_count"], 2)
+        self.assertIsNone(proposal["adopted_task_id"])
+
+    def test_third_distinct_endorser_adopts_it_into_a_real_claimable_task(self):
+        proposal = self.store.propose_research("01-king", "Map the M10 GPU compute path")
+        self.store.endorse_research(proposal["id"], "02-explorer")
+        proposal = self.store.endorse_research(proposal["id"], "03-librarian")
+        self.assertEqual(proposal["status"], "adopted")
+        self.assertIsNotNone(proposal["adopted_task_id"])
+        task = self.store.get_task(proposal["adopted_task_id"])
+        self.assertEqual(task["title"], "Map the M10 GPU compute path")
+        self.assertEqual(task["status"], "open")  # a normal, claimable task
+        self.assertIn("02-explorer", task["success_criterion"])
+        self.assertIn("03-librarian", task["success_criterion"])
+
+    def test_the_same_agent_endorsing_twice_does_not_count_twice(self):
+        proposal = self.store.propose_research("01-king", "topic")
+        self.store.endorse_research(proposal["id"], "02-explorer")
+        self.store.endorse_research(proposal["id"], "02-explorer")  # repeat, e.g. re-reading stale state
+        proposal = self.store.get_research_proposal(proposal["id"])
+        self.assertEqual(proposal["endorsement_count"], 2)
+        self.assertEqual(proposal["status"], "open")
+
+    def test_endorsing_an_already_adopted_proposal_is_a_harmless_no_op(self):
+        proposal = self.store.propose_research("01-king", "topic")
+        self.store.endorse_research(proposal["id"], "02-explorer")
+        adopted = self.store.endorse_research(proposal["id"], "03-librarian")
+        again = self.store.endorse_research(adopted["id"], "04-artisan")
+        self.assertEqual(again["status"], "adopted")
+        self.assertEqual(again["adopted_task_id"], adopted["adopted_task_id"])
+        self.assertNotIn("04-artisan", again["endorsers"])  # never counted once already adopted
+
+    def test_endorsing_an_unknown_proposal_raises(self):
+        with self.assertRaises(ValueError):
+            self.store.endorse_research("does-not-exist", "02-explorer")
+
+    def test_list_research_proposals_filters_by_status_and_orders_newest_first(self):
+        first = self.store.propose_research("01-king", "first topic")
+        second = self.store.propose_research("02-explorer", "second topic")
+        self.store.endorse_research(second["id"], "03-librarian")
+        self.store.endorse_research(second["id"], "04-artisan")
+        open_only = self.store.list_research_proposals(status="open")
+        self.assertEqual([p["id"] for p in open_only], [first["id"]])
+        everything = self.store.list_research_proposals()
+        self.assertEqual([p["id"] for p in everything], [second["id"], first["id"]])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -793,6 +793,25 @@ class Resident:
                 else:
                     raise ValueError('meeting_operation requires report or close')
                 self.event('meeting_result', json.dumps(result, ensure_ascii=False)); self.feedback(name, json.dumps(result, ensure_ascii=False), True)
+            elif name == 'research_proposal':
+                op = args.get('operation') or args.get('action')
+                store = self.tasks.store
+                if op == 'propose':
+                    topic = str(args.get('topic', '')).strip()
+                    if not topic:
+                        raise ValueError('research_proposal propose requires a topic')
+                    result = store.propose_research(self.id, topic, args.get('rationale', ''))
+                elif op == 'endorse':
+                    proposal_id = args.get('proposal_id')
+                    if not proposal_id:
+                        raise ValueError('research_proposal endorse requires proposal_id')
+                    result = store.endorse_research(proposal_id, self.id)
+                elif op == 'list':
+                    result = store.list_research_proposals(args.get('status'))
+                else:
+                    raise ValueError('research_proposal requires operation propose, endorse, or list')
+                self.event('research_proposal_result', json.dumps(result, ensure_ascii=False)[:2000])
+                self.feedback(name, json.dumps(result, ensure_ascii=False), True)
             else:
                 self.feedback('idle','Intentional rest; next turn may resume your own project.',True)
                 self.event('idle','intentional rest')
