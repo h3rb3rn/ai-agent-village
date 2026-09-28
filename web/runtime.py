@@ -696,8 +696,20 @@ class Resident:
                 self.state['meeting_nudge_pressure'] = nudge_pressure
                 self.event('meeting_required', f"meeting_id={mid}; pressure={count}")
                 if count >= MEETING_REPORT_CEILING:
-                    self.feedback(name, f"Meeting report required before more solo work: submit meeting_operation "
-                                        f"report for {mid} (achieved, evidence, next_step, blockers).", False)
+                    # P58: naming the required fields in prose was not enough -
+                    # live observation: 09-chronicler kept producing well-formed
+                    # JSON for OTHER actions past this exact gate (proof he can
+                    # format correctly), never switching to meeting_operation,
+                    # through 12+ consecutive blocks. Same lever that already
+                    # works for format_violation (VALID_ENVELOPE_EXAMPLE): a
+                    # literal, copy-adaptable JSON example beats a field-name
+                    # description for translating an instruction into the
+                    # right envelope.
+                    example = ('{"name":"meeting_operation","arguments":{"operation":"report",'
+                               f'"meeting_id":"{mid}","achieved":"...","evidence":"...",'
+                               '"next_step":"...","blockers":"..."}}')
+                    self.feedback(name, f"Meeting report required before more solo work: submit exactly this "
+                                        f"envelope (fill in the four text fields): {example}", False)
                     self.event('meeting_gate', f"meeting_id={mid}; pressure={count}")
                     return False
                 self.feedback(name, f"Meeting report requested: {mid}. Submit one meeting_operation report when possible; continuing this reversible action.", True)

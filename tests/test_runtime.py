@@ -111,6 +111,21 @@ class RuntimeTests(unittest.TestCase):
         self.assertFalse(self.agent.state['last_result']['ok'])
         self.assertIn('Meeting report required', self.agent.state['last_result']['result'])
 
+    def test_meeting_gate_message_includes_a_copyable_json_example(self):
+        # P58: naming the required fields in prose was not enough - live
+        # observation showed 09-chronicler producing well-formed JSON for
+        # OTHER actions past this exact gate (12+ consecutive blocks), never
+        # switching to meeting_operation. Same lever already proven for
+        # format_violation (VALID_ENVELOPE_EXAMPLE): a literal, fillable JSON
+        # example instead of a field-name description.
+        self.agent.meetings.schedule('jour_fixe', 'status update', '2026-09-24T10:00:00Z', meeting_id='m1')
+        for i in range(MEETING_REPORT_CEILING):
+            self.execute('execute_bash', command=f'printf ok{i}')
+        result = self.agent.state['last_result']['result']
+        self.assertIn('"name":"meeting_operation"', result)
+        self.assertIn('"operation":"report"', result)
+        self.assertIn('"meeting_id":"m1"', result)
+
     def test_meeting_operation_itself_is_never_gated_by_its_own_nudge(self):
         self.agent.meetings.schedule('jour_fixe', 'status update', '2026-09-24T10:00:00Z', meeting_id='m1')
         for i in range(MEETING_REPORT_CEILING + 5):
