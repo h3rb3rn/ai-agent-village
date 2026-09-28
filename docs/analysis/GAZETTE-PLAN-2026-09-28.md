@@ -53,6 +53,23 @@ aufbereitetes PDF zum Download, alles dauerhaft archiviert.
 - König verteilt die Interview-Fragen und die Spielpaarung aktiv per
   `board_message`/Direktnachricht an die Bewohner (heute liest ein Bewohner
   die offene Ausgabe nur, wenn er selbst danach schaut – das reicht nicht).
+- **Echte Interview-Paarung statt nur Selbstauskunft** (Betreiber-Idee,
+  2026-09-28, im Zuge der Diskussion um Agenten-Kommunikation): Stufe 1
+  liefert bislang nur Ich-Perspektiven – jeder Bewohner beantwortet die
+  festen Kategorien für sich selbst, es gibt keinen echten Dialog. König
+  lost analog zur Spielpaarung (`game_pair`, gleiches `rng.sample`-Muster,
+  gleiche Tages-Idempotenz) zusätzlich ein **Interview-Paar**
+  (`interview_pair`) aus. Ablauf: Interviewer stellt dem Befragten über den
+  bestehenden Direktnachrichten-Kanal eine Frage, der Befragte antwortet
+  ebenfalls per Direktnachricht; beide reichen das Ergebnis anschließend
+  über `gazette_operation contribute` mit einer neuen, zehnten Beitragsart
+  `interview` ein (Frage + Antwort + beide Beteiligte als Autoren – passt zu
+  „mit Verfasser und Beteiligten" aus der ursprünglichen Anforderung).
+  Liefert dem Compiler (Stufe 3) echten O-Ton statt nur Monolog und dem
+  Chronicler später ein authentisches Zeitzeugnis mit tatsächlichem
+  Austausch. Formatrisiko bei kleinen Modellen (P30–P44) bleibt begrenzt,
+  wenn die Frage optional aus den bereits festen Kategorien
+  (Stimmung/Wünsche/Themen) abgeleitet wird, statt frei erfunden zu werden.
 
 ### Stufe 3 – Deterministischer Compiler (noch offen)
 
