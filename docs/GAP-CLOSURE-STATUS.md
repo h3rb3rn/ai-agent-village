@@ -79,7 +79,8 @@ Pro Paket Nachweis unter `docs/evidence/Pxx.md` anlegen, sobald tatsächlich dar
 | P41 | Tesla-M10-GPU freigeschaltet (CDI) + community-abgestimmte Forschungsthemen | P19, VISION.md | HOST_VERIFIED | [docs/evidence/P41.md](evidence/P41.md) |
 | P42 | Veraltete tools-Liste im Agentenkontext repariert (ACTION_SPECS-Quelle) + Ownership-Hinweis + King-Hinweis auf research_proposal | P41, Live-Beobachtung | HOST_VERIFIED | [docs/evidence/P42.md](evidence/P42.md) |
 | P43 | Auditor las nie die richtigen Ereignisse (falsche Datei + falsches Format) – behoben | P36, Betreiberfrage | HOST_VERIFIED | [docs/evidence/P43.md](evidence/P43.md) · liefert live echte Funde |
-| P44 | Auditor-Dashboard responsiv + 2 weitere seitenweite Responsive-Lücken | Betreiberfrage | LOCAL_VERIFIED | [docs/evidence/P44.md](evidence/P44.md) · Host-Rollout folgt |
+| P44 | Auditor-Dashboard responsiv + 2 weitere seitenweite Responsive-Lücken | Betreiberfrage | HOST_VERIFIED | [docs/evidence/P44.md](evidence/P44.md) |
+| P45 | task_templates für King aktiviert (bewusst nicht dorfweit) | VISION.md, Live-Beobachtung | LOCAL_VERIFIED | [docs/evidence/P45.md](evidence/P45.md) · Host-Rollout folgt |
 
 ## Fortschrittsbuch
 

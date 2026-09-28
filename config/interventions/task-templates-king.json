@@ -1,0 +1,11 @@
+{
+  "_comment": "P45 operator intervention, decided 2026-09-28: activate the 5 pre-vetted task_templates (config/task-templates.json) for 01-king only, matching the already-tested, already-designed intent in config/runtime-policy.target.json (king=true, all other agents unset/false there too - never intended village-wide). Rationale: 9 observation windows (~5h) showed agents only ever act on context already visible to them (own tasks, board, resource readings) and never on ideas from nowhere; task_templates give King - the one agent already observed spontaneously trying to coordinate/delegate (05:00 UTC 2026-09-28 disk-monitoring consolidation) - concrete, safe, already-reviewed starting points to delegate instead of everyone converging on the same self-discovered task by accident. Rolling this out to all 9 agents instead of just King was deliberately rejected: 5 templates x 9 agents would likely worsen the exact redundant-parallel-work pattern this is meant to reduce, not fix it. Merged with the existing P31 knowledgebase_gate=mandatory intervention - deploy the merged object below as /etc/ai-village/runtime-policy.local.json, replacing (not appending to) the file. Documented in docs/evidence/P45.md.",
+  "defaults": {
+    "knowledgebase_gate": "mandatory"
+  },
+  "agents": {
+    "king": {
+      "task_templates": true
+    }
+  }
+}

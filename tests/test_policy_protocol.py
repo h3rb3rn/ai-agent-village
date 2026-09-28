@@ -133,6 +133,42 @@ class PolicyTests(unittest.TestCase):
                 self.assertIn(n, target[partner]["pair_with"])
 
 
+class TaskTemplatesForKingInterventionTests(unittest.TestCase):
+    """P45 operator intervention: config/interventions/task-templates-king.json
+    activates the 5 pre-vetted task_templates for 01-king only, matching the
+    already-designed, already-tested intent in runtime-policy.target.json
+    (king=true, never set for any other agent there either) - deliberately
+    NOT village-wide, since 5 templates x 9 agents would likely worsen the
+    redundant-parallel-work pattern this is meant to reduce."""
+
+    def _policy(self):
+        data = json.loads((ROOT / "config/interventions/task-templates-king.json").read_text())
+        return {"defaults": data["defaults"], "agents": data["agents"]}
+
+    def test_file_is_valid_json_and_documents_the_decision(self):
+        raw = (ROOT / "config/interventions/task-templates-king.json").read_text()
+        data = json.loads(raw)
+        self.assertIn("_comment", data)
+        self.assertIn("P45", data["_comment"])
+
+    def test_king_gets_task_templates_other_agents_do_not(self):
+        policy = self._policy()
+        self.assertTrue(agent_policy("king", policy).task_templates)
+        for other in ("explorer", "librarian", "artisan", "interpreter", "operator",
+                     "methodologist", "logician", "chronicler"):
+            self.assertFalse(agent_policy(other, policy).task_templates, other)
+
+    def test_existing_p31_mandatory_kb_gate_is_preserved(self):
+        policy = self._policy()
+        for name in ("king", "explorer", "librarian"):
+            self.assertEqual(agent_policy(name, policy).knowledgebase_gate, "mandatory", name)
+
+    def test_matches_the_already_designed_target_intent_for_king(self):
+        target = json.loads((ROOT / "config/runtime-policy.target.json").read_text())
+        self.assertEqual(agent_policy("king", self._policy()).task_templates,
+                         agent_policy("king", target).task_templates)
+
+
 class OptionalFeatureTests(unittest.TestCase):
     def test_target_and_last_stage_agree(self):
         target = json.loads((ROOT / "config/runtime-policy.target.json").read_text())
