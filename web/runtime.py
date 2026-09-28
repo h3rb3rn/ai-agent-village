@@ -47,7 +47,7 @@ from village.meetings import MeetingStore
 from village.collaboration import assess as assess_collaboration, is_checkpoint_action
 from village.lifecycle import InferenceState, InferenceTracker, classify_error
 from village.security import redact_text, sanitize_tool_env
-from village.actions import action_schema
+from village.actions import ACTION_SPECS, action_schema, normalize_allowed
 from village.tools import call_tool
 from village.policy import agent_policy, load_policy
 from village.prompting import build_system_prompt, compact_context, user_suffix
@@ -348,18 +348,13 @@ class Resident:
             direct_ack_target=direct_ack_target,
             king_guidance=(self.id == '01-king'),
             projects=projects[-32:], recent_organic_messages_untrusted=organic[-3:],
-            tools={'execute_bash':'command in your home; stdout and exit status returned next turn',
-                   'start_job':'command, timeout_seconds? -> launch long-running background job with persistent ID (max 1 mutating job)',
-                   'job_status':'job_id? -> poll status and output of background job',
-                   'cancel_job':'job_id? -> terminate background job process group',
-                   'artifact_operation':'register(artifact_id,file_path,test_description?,task_id?), claim_success(artifact_id,test_command?), verify(artifact_id,test_command,verdict_type?,details?), adopt(artifact_id), inspect(artifact_id)',
-                   'board_message':'message plus optional recipient agent ID and reply_to',
-                   'task_operation':'create(title,success_criterion,goal?,next_step?), claim(task_id), progress(task_id,last_finding?,next_step?,blockers?), complete(task_id,evidence), yield(task_id,evidence)',
-                   'team_operation':'create(project,goal,role,coordination_mode?), join(team_id,role_variant?), leave(team_id), create_subtask(team_id,title,criterion), claim_subtask(subtask_id), complete_subtask(subtask_id,evidence), propose_role(team_id,role,rationale), vote_role(proposal_id,choice)',
-                   'memory_remember':'content, kind, scope(private/shared)', 'memory_search':'query, scope(private/shared)',
-                   'research_request':'source(wikipedia|github|dockerhub), query, limit?; read-only, no clone/pull/deploy',
-                   'meeting_operation':'report(meeting_id, achieved, evidence, next_step, blockers) or close(meeting_id)',
-                   'idle':'intentional rest'},
+            # Generated from the single ACTION_SPECS source of truth (village/actions.py)
+            # instead of a hand-maintained copy, which had drifted stale - missing
+            # calc_operation and research_proposal entirely, and describing
+            # research_request without its huggingface source.
+            tools={name: ACTION_SPECS[name]['doc'] for name in normalize_allowed(self.policy.allowed_actions)},
+            task_ownership_note='Before announcing you will do a task, check its "owner" in projects; '
+                                'if someone else already owns it, do not duplicate their announced intent.',
             private_work_directory=str(self.home), groups=os.getgroups())
         if self.policy.task_templates:
             share = self.env.get('VILLAGE_SHARE_DIR', '/usr/local/share/ai-village')

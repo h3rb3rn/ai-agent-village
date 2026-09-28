@@ -251,6 +251,47 @@ class CalcOperationRuntimeTests(unittest.TestCase):
         self.assertIn('12.906', self.agent.state['last_result']['result'])
 
 
+class SnapshotToolsSyncTests(unittest.TestCase):
+    """P42: the 'tools' listing inside the per-turn user context was a
+    hand-maintained dict that had drifted stale - missing calc_operation and
+    research_proposal entirely, describing research_request without its
+    huggingface source. Generated from village.actions.ACTION_SPECS instead,
+    the single source of truth already used for the system-prompt action
+    list, so it can never go stale again. Also adds a task-ownership
+    reminder: observed live on N06-M10 (2026-09-28) that two agents kept
+    re-announcing intent to implement a task a third agent already owned."""
+
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp(prefix='village-toolsync-'))
+        (self.root / 'board').mkdir(); (self.root / 'telemetry').mkdir()
+        (self.root / 'identity.txt').write_text('identity')
+        self.env = dict(AGENT_ID='02-explorer', AGENT_NAME='explorer', AGENT_ROLE='resident', VILLAGE_ROOT=str(self.root),
+                        AGENT_IDENTITY_PROMPT=str(self.root / 'identity.txt'), OLLAMA_MODEL='m')
+        self.agent = Resident(self.env)
+
+    def tearDown(self):
+        shutil.rmtree(self.root, ignore_errors=True)
+
+    def test_tools_listing_includes_every_currently_allowed_action(self):
+        from village.actions import normalize_allowed
+        snap = json.loads(self.agent.snapshot())
+        expected = set(normalize_allowed(self.agent.policy.allowed_actions))
+        self.assertEqual(set(snap['tools']), expected)
+        self.assertIn('calc_operation', snap['tools'])
+        self.assertIn('research_proposal', snap['tools'])
+        self.assertIn('huggingface', snap['tools']['research_request'])
+
+    def test_tools_listing_respects_a_restricted_role(self):
+        import dataclasses
+        self.agent.policy = dataclasses.replace(self.agent.policy, allowed_actions=['board_message', 'idle'])
+        snap = json.loads(self.agent.snapshot())
+        self.assertEqual(set(snap['tools']), {'board_message', 'idle'})
+
+    def test_task_ownership_note_is_present(self):
+        snap = json.loads(self.agent.snapshot())
+        self.assertIn('owner', snap['task_ownership_note'])
+
+
 class ResearchProposalRuntimeTests(unittest.TestCase):
     """P41: VISION.md - a research topic becomes real work only once the
     community (distinct agents), not one agent, has endorsed it."""
