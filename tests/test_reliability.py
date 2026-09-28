@@ -292,6 +292,55 @@ class SnapshotToolsSyncTests(unittest.TestCase):
         self.assertIn('owner', snap['task_ownership_note'])
 
 
+class BoardMessageOwnershipCheckTests(unittest.TestCase):
+    """P42-continuation: a prompt-only ownership reminder (task_ownership_note)
+    did not change observed behaviour on N06-M10 - 03-librarian kept
+    re-announcing a task 02-explorer already owned, 5x in a 30-minute
+    follow-up window. A mechanical check on the message's own text, giving
+    concrete feedback, is the deterministic-guard pattern this codebase
+    already uses (e.g. foreign-home detection) rather than another hint."""
+
+    def make(self, agent_id, name, root=None):
+        if root is None:
+            root = Path(tempfile.mkdtemp(prefix='village-ownercheck-'))
+            (root / 'board').mkdir(); (root / 'telemetry').mkdir()
+        (root / 'identity.txt').write_text('identity')
+        env = dict(AGENT_ID=agent_id, AGENT_NAME=name, AGENT_ROLE='resident', VILLAGE_ROOT=str(root),
+                   AGENT_IDENTITY_PROMPT=str(root / 'identity.txt'), OLLAMA_MODEL='m')
+        return Resident(env), root
+
+    def test_announcing_someone_elses_task_gets_a_concrete_correction(self):
+        owner, root = self.make('02-explorer', 'explorer')
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        task = owner.tasks.operate('02-explorer', {'action': 'create', 'title': 'disk usage script',
+                                                   'success_criterion': 'df -h runs cleanly'})
+        owner.tasks.operate('02-explorer', {'action': 'claim', 'task_id': task['id']})
+
+        announcer, _ = self.make('03-librarian', 'librarian', root=root)
+        announcer.tasks = owner.tasks
+        announcer.execute({'tool_call': {'name': 'board_message',
+                                         'arguments': {'message': f"I'll implement task {task['id']} now."}}})
+        self.assertTrue(announcer.state['last_result']['ok'])  # still posted, never blocked
+        self.assertIn('already owned by 02-explorer', announcer.state['last_result']['result'])
+
+    def test_announcing_your_own_task_gets_no_correction(self):
+        owner, root = self.make('02-explorer', 'explorer')
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        task = owner.tasks.operate('02-explorer', {'action': 'create', 'title': 'disk usage script',
+                                                   'success_criterion': 'df -h runs cleanly'})
+        owner.tasks.operate('02-explorer', {'action': 'claim', 'task_id': task['id']})
+        owner.execute({'tool_call': {'name': 'board_message',
+                                     'arguments': {'message': f"Progressing on task {task['id']}."}}})
+        self.assertNotIn('already owned', owner.state['last_result']['result'])
+
+    def test_message_mentioning_an_unowned_or_unknown_id_gets_no_correction(self):
+        agent, root = self.make('01-king', 'king')
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        agent.execute({'tool_call': {'name': 'board_message',
+                                     'arguments': {'message': 'Anyone seen task abcdef123456 before?'}}})
+        self.assertNotIn('already owned', agent.state['last_result']['result'])
+
+
 class ResearchProposalRuntimeTests(unittest.TestCase):
     """P41: VISION.md - a research topic becomes real work only once the
     community (distinct agents), not one agent, has endorsed it."""

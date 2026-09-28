@@ -690,7 +690,21 @@ class Resident:
                     log[recipient] = [t for t in log.get(recipient, []) if t > time.time() - 3600] + [time.time()]
                     if recipient == self.pair_partner():
                         self.state['pair_index'] = int(self.state.get('pair_index', 0)) + 1
-                self.feedback(name,'Message posted. A reply is not guaranteed; continue independent work.',True)
+                feedback_text = 'Message posted. A reply is not guaranteed; continue independent work.'
+                # P42-continuation: a prompt-only ownership reminder did not change
+                # behaviour when re-observed live (03-librarian kept re-announcing a
+                # task 02-explorer already owned, 5x in a 30-minute follow-up window).
+                # A mechanical check on the actual message text, giving concrete
+                # feedback rather than a hint, is the deterministic-guard pattern this
+                # codebase already uses elsewhere (e.g. foreign-home detection).
+                if hasattr(self.tasks, 'store'):
+                    for candidate in re.findall(r'\b[0-9a-f]{12}\b', args["message"]):
+                        owned = self.tasks.store.get_task(candidate)
+                        if owned and owned.get('owner') and owned['owner'] != self.id:
+                            feedback_text += (f" Note: task {candidate} \"{owned.get('title','')}\" is already "
+                                              f"owned by {owned['owner']}, not you - coordinate with them or work on something else.")
+                            break
+                self.feedback(name,feedback_text,True)
             elif name == 'task_operation':
                 result=self.tasks.operate(self.id,args)
                 self.event('task_result',json.dumps(result)); self.feedback(name,json.dumps(result),True)
