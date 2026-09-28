@@ -126,9 +126,16 @@ def decision(response, allowed=None):
             except ValueError: continue
             if isinstance(candidate,dict) and ('name' in candidate or 'tool_call' in candidate):
                 blocks.append(suffix)
-    if len(blocks)>1:
-        return fallback('multiple action blocks', content)
+    # P51: small models frequently narrate a multi-step plan as several
+    # sequential action blocks in one turn (see docs/evidence/P51.md - one
+    # resident repeated this exact shape 4 times over hours despite the
+    # Auditor flagging it each time). Rejecting the whole turn taught it
+    # nothing and just repeated the loop; only one action ever executes per
+    # cycle anyway, so deterministically taking the first well-formed block
+    # is unambiguous and safe - the model already ordered them as steps.
+    extra_blocks = 0
     if blocks:
+        extra_blocks = len(blocks) - 1
         try: obj = _parse_object(blocks[0])
         except ValueError: return fallback('incomplete village-action block', content)
     elif content.startswith('{'):
@@ -149,7 +156,10 @@ def decision(response, allowed=None):
         return fallback(reason, content)
     if allowed is not None and name not in allowed:
         return fallback('action ' + str(name) + ' is not available to you; choose one of: ' + ', '.join(allowed), content)
-    return {'observation': str(obj.get('observation', ''))[:2000], 'tool_call': {'name': name, 'arguments': args}}
+    result = {'observation': str(obj.get('observation', ''))[:2000], 'tool_call': {'name': name, 'arguments': args}}
+    if extra_blocks:
+        result['extra_blocks_ignored'] = extra_blocks
+    return result
 
 
 if __name__ == '__main__':

@@ -94,8 +94,12 @@ class ReliabilityTests(unittest.TestCase):
 
     # --- rejected output ----------------------------------------------
     def test_rejected_output_is_not_published(self):
+        # P51: a valid first block followed by extras now executes (see
+        # tests/test_observatory.py::test_multiple_action_blocks_executes_only_the_first)
+        # - this stays a genuine rejection because the FIRST block itself is
+        # unparseable, which leniency about extra trailing blocks never covers.
         (self.agent.home / 'last-response.json').write_text(json.dumps({'content': 'I will run ```village-action {"a"'}))
-        self.agent.execute(decision({'message': {'content': '```village-action\n{"name":"idle"}\n```\n```village-action\n{"name":"idle"}\n```'}}))
+        self.agent.execute(decision({'message': {'content': '```village-action\n{"a"\n```\n```village-action\n{"name":"idle"}\n```'}}))
         text = (self.root / 'board' / 'events.jsonl').read_text()
         self.assertNotIn('unexecuted proposal', text)
         self.assertNotIn('board_message', text)

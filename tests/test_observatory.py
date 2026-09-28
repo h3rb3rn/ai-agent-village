@@ -37,6 +37,29 @@ class ObservatoryTests(unittest.TestCase):
         parsed = decision({'done_reason': 'length', 'message': {'content': '{"name":"idle"}'}})
         self.assertEqual(parsed['tool_call']['name'], 'board_message')
 
+    def test_multiple_action_blocks_executes_only_the_first(self):
+        # P51: previously ANY second action block caused a full rejection even
+        # when the first block was perfectly valid - a small model narrating a
+        # multi-step plan as several sequential blocks got nothing done and
+        # kept repeating the exact same mistake for hours despite the Auditor
+        # flagging it every time (see docs/evidence/P51.md). Only the first
+        # block ever executes anyway (one action per turn); the rest are now
+        # surfaced via extra_blocks_ignored instead of blocking the turn.
+        content = ('```village-action\n{"name":"memory_search","arguments":{"query":"x"}}\n```\n'
+                   '```village-action\n{"name":"idle","arguments":{}}\n```')
+        parsed = decision({'message': {'content': content}})
+        self.assertNotIn('fallback_reason', parsed)
+        self.assertEqual(parsed['tool_call']['name'], 'memory_search')
+        self.assertEqual(parsed['extra_blocks_ignored'], 1)
+
+    def test_first_block_still_validated_even_with_extras(self):
+        # Leniency applies only to "there were more blocks after a valid
+        # first one" - a genuinely broken first block is still rejected
+        # exactly as before, extras or not.
+        content = '```village-action\n{"name":"not_a_real_action"}\n```\n```village-action\n{"name":"idle"}\n```'
+        parsed = decision({'message': {'content': content}})
+        self.assertTrue(parsed.get('fallback_reason'))
+
     def test_explicit_envelope_tolerates_fence_label_variants(self):
         for label in ('','json','bash'):
             parsed=decision({'message':{'content':'```'+label+'\n{"name":"execute_bash","arguments":{"command":"pwd"}}\n```'}})
@@ -53,8 +76,14 @@ class ObservatoryTests(unittest.TestCase):
     def test_terminal_explicit_envelope_and_mixed_blocks(self):
         parsed=decision({'message':{'content':'I will act.\n{"name":"execute_bash","arguments":{"command":"pwd"}}'}})
         self.assertEqual(parsed['tool_call']['name'],'execute_bash')
+        # P51: a valid first block plus a valid extra now executes the first
+        # instead of rejecting the whole turn (dedicated regression:
+        # test_multiple_action_blocks_executes_only_the_first); mixed fence
+        # labels (json + village-action) are still both recognised as blocks.
         parsed=decision({'message':{'content':'```json\n{"name":"idle"}\n```\n```village-action\n{"name":"idle"}\n```'}})
-        self.assertTrue(parsed.get('fallback_reason'))
+        self.assertNotIn('fallback_reason', parsed)
+        self.assertEqual(parsed['tool_call']['name'], 'idle')
+        self.assertEqual(parsed['extra_blocks_ignored'], 1)
 
     def test_fallback_preserves_safe_communication(self):
         parsed = decision({'message': {'content': '```village-action\n{"name":"execute_bash"}\n```'}})

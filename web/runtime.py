@@ -56,6 +56,14 @@ from village.prompting import build_system_prompt, compact_context, user_suffix
 
 VERSION = '2026-09-25-dynamic-teams-1'
 
+# P51: the collaboration-checkpoint gate below only fires for a specific list
+# of mutating actions, so an agent that only ever chooses an action outside
+# that list (e.g. memory_search) can ignore a checkpoint forever - pressure
+# climbs with zero effect (observed live: reached 41 and still counting, see
+# docs/evidence/P51.md). Past this hard ceiling, well beyond the normal
+# miss threshold, ANY solo action gets gated, not just the mutating ones.
+COLLABORATION_PRESSURE_CEILING = 10
+
 
 def now():
     return datetime.now(timezone.utc).isoformat()
@@ -583,7 +591,9 @@ class Resident:
             # orient (search before acting) and record (share what you learned); consult keeps
             # its grace, since peer availability is a social, not a knowledge, precondition.
             threshold = 1 if checkpoint.hard else 3
-            if pressure >= threshold and name in ('execute_bash', 'start_job', 'task_operation', 'team_operation'):
+            if pressure >= COLLABORATION_PRESSURE_CEILING or (
+                pressure >= threshold and name in ('execute_bash', 'start_job', 'task_operation', 'team_operation')
+            ):
                 self.feedback(name, f'Collaboration checkpoint required before more solo work: use {checkpoint.required_action}. {checkpoint.rationale}', False)
                 self.event('collaboration_gate', f'stage={checkpoint.stage}; required={checkpoint.required_action}; pressure={pressure}; mode={"mandatory" if checkpoint.hard else "advisory"}')
                 return False
@@ -663,6 +673,14 @@ class Resident:
             self.state['last_rejected_fingerprint'] = hashlib.sha256(str(preview).encode('utf-8')).hexdigest()[:16]
             return
         self.state['invalid_streak'] = 0
+        if parsed.get('extra_blocks_ignored'):
+            # P51: the model sent several action blocks in one turn (a narrated
+            # multi-step plan); only the first ever executes. Visible via the
+            # Auditor/failure-tally pipeline like any other recurring pattern,
+            # without blocking the turn the way a full rejection used to.
+            self.event('extra_action_blocks_ignored',
+                       f'ignored={parsed["extra_blocks_ignored"]}; only the first action block of a multi-block '
+                       'response executes per turn')
         checkpoint = getattr(self, 'current_collaboration_checkpoint', None)
         if (parsed.get('prose') and name == 'board_message' and 'recipient' not in args
                 and checkpoint and checkpoint.stage == 'consult' and checkpoint.peer_id):

@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'web'))
-from runtime import Resident,Tasks,resource_snapshot,tail,event_time
+from runtime import Resident,Tasks,resource_snapshot,tail,event_time,COLLABORATION_PRESSURE_CEILING
 from decision import decision
 from village.collaboration import CooperationCheckpoint
 
@@ -71,6 +71,24 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(self.agent.state['last_result']['ok'], False)
         self.assertIn('Named peer consultation required', self.agent.state['last_result']['result'])
         self.assertTrue(any(e.get('event') == 'collaboration_gate' for e in events))
+
+    def test_collaboration_pressure_ceiling_eventually_gates_any_action(self):
+        # P51 regression: the gate previously fired only for a fixed list of
+        # mutating actions (execute_bash/start_job/task_operation/team_operation),
+        # so an agent that only ever chose something outside that list (e.g.
+        # idle, memory_search) could ignore a 'consult' checkpoint forever -
+        # pressure climbed with zero effect (observed live: reached 41 and
+        # still counting, see docs/evidence/P51.md). Past
+        # COLLABORATION_PRESSURE_CEILING it must gate ANY solo action.
+        self.agent.current_collaboration_checkpoint = CooperationCheckpoint(
+            'consult', 'board_message', 'ask the named peer', peer_id='02-b'
+        )
+        for _ in range(COLLABORATION_PRESSURE_CEILING - 1):
+            self.execute('idle')
+        self.assertTrue(self.agent.state['last_result']['ok'])  # not yet gated
+        self.execute('idle')
+        self.assertFalse(self.agent.state['last_result']['ok'])
+        self.assertIn('Collaboration checkpoint required', self.agent.state['last_result']['result'])
 
     def test_resource_snapshot_is_locale_independent(self):
         with patch.dict(os.environ,{'LANG':'de_DE.UTF-8'}):
