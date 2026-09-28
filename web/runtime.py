@@ -373,18 +373,38 @@ class Resident:
             if templates:
                 context['task_templates'] = templates
                 context['task_templates_note'] = 'Optional starting points. Use task_operation create with a template title and success_criterion; assign the work to a named peer by message.'
-        # Gazette Stufe 2 (P48): a one-off organic/direct nudge proved
+        # Gazette Stufe 2 (P48/P49): a one-off organic/direct nudge proved
         # unreliable in practice (delivered and acknowledged, still never
         # acted on - see docs/evidence/P48.md). An always-visible, King-only
-        # hint replaces it; it disappears the moment today's edition exists,
-        # so it never nags after King has actually acted.
-        if self.id == '01-king' and not self.gazette.get_edition(gazette_today()):
-            context['gazette_daily_note'] = (
-                "No AI Village Gazette edition is open for today yet. As King, call "
-                "gazette_operation with operation=open once to draw today's game and "
-                "pairing, then tell every peer by board_message so they know to "
-                "contribute via gazette_operation contribute."
-            )
+        # hint replaces it. Two steps, two conditions - "open" alone was not
+        # enough: King opened an edition and then simply moved on to his own
+        # work without telling anyone, leaving 0 contributions (P49 live
+        # observation). The hint now stays until BOTH have happened.
+        if self.id == '01-king':
+            gazette_edition = self.gazette.get_edition(gazette_today())
+            if not gazette_edition:
+                context['gazette_daily_note'] = (
+                    "No AI Village Gazette edition is open for today yet. As King, call "
+                    "gazette_operation with operation=open once to draw today's game and "
+                    "pairing, then tell every peer by board_message so they know to "
+                    "contribute via gazette_operation contribute."
+                )
+            else:
+                opened_epoch = event_time({'timestamp': gazette_edition['opened_at']})
+                announced = any(
+                    e.get('event') == 'board_message' and e.get('agent') == self.id
+                    and 'gazette' in str(e.get('detail', '')).lower()
+                    and event_time(e) >= opened_epoch
+                    for e in events
+                )
+                if not announced:
+                    context['gazette_daily_note'] = (
+                        f"Today's AI Village Gazette edition is open (game: "
+                        f"{gazette_edition['game_name']}; pairing: "
+                        f"{', '.join(gazette_edition['game_pair'])}). You have not yet told "
+                        "the village: send a board_message to ALL mentioning the Gazette so "
+                        "peers know to contribute via gazette_operation contribute."
+                    )
         if own_project and own_project.get('blockers'):
             context['task_blocker_guidance'] = (
                 f"Your active task {own_project['id']} has blockers: {own_project['blockers']}. "

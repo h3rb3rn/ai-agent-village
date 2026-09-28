@@ -131,17 +131,25 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(ctx['recent_organic_messages_untrusted'], [])
         self.assertEqual(self.agent.pending_organic_cursor, self.agent.state.get('seen_organic_epoch', 0))
 
-    def test_king_sees_a_daily_gazette_hint_until_he_opens_one(self):
-        # Gazette Stufe 2 (P48): a one-off nudge proved unreliable in live
-        # observation (delivered, acknowledged, never acted on - P48.md). An
-        # always-visible King-only hint must appear while no edition is open
-        # for today, and disappear the moment King actually opens one.
+    def test_king_sees_a_daily_gazette_hint_until_opened_and_announced(self):
+        # Gazette Stufe 2 (P48/P49): a one-off nudge proved unreliable in live
+        # observation (delivered, acknowledged, never acted on - P48.md).
+        # "Open" alone was not enough either: King opened a live edition and
+        # then simply moved on without telling anyone, leaving 0 contributions
+        # (P49 live observation) - so the hint must survive the open step too,
+        # with different guidance, until King has also announced it.
         king_env = dict(self.env, AGENT_ID='01-king', AGENT_NAME='king', AGENT_ROLE='king')
         king = Resident(king_env)
         with patch.object(king, 'memory', return_value={'items': []}):
             before = json.loads(king.snapshot())
         self.assertIn('gazette_daily_note', before)
         king.gazette.open_edition('01-king', ['02-b', '03-c'])
+        with patch.object(king, 'memory', return_value={'items': []}):
+            opened_not_announced = json.loads(king.snapshot())
+        self.assertIn('gazette_daily_note', opened_not_announced)
+        self.assertIn('not yet told the village', opened_not_announced['gazette_daily_note'])
+        king.execute({'tool_call': {'name': 'board_message',
+                                     'arguments': {'message': 'The AI Village Gazette is open today, please contribute!', 'recipient': 'ALL'}}})
         with patch.object(king, 'memory', return_value={'items': []}):
             after = json.loads(king.snapshot())
         self.assertNotIn('gazette_daily_note', after)
