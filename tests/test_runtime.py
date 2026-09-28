@@ -172,10 +172,26 @@ class RuntimeTests(unittest.TestCase):
             after = json.loads(king.snapshot())
         self.assertNotIn('gazette_daily_note', after)
 
-    def test_non_king_never_sees_the_gazette_hint(self):
+    def test_non_king_sees_no_gazette_hint_before_an_edition_exists(self):
         with patch.object(self.agent, 'memory', return_value={'items': []}):
             ctx = json.loads(self.agent.snapshot())
         self.assertNotIn('gazette_daily_note', ctx)
+
+    def test_non_king_gazette_hint_until_contributed(self):
+        # A one-off village-wide King announcement has the identical problem
+        # a direct nudge to King had (P48/P49): it competes with each
+        # resident's own ongoing work and loses - live observation: all 9
+        # residents active, each on their own project, 0 contributions hours
+        # after a correct announcement. Every resident who has not yet
+        # contributed today gets the same always-visible hint King has.
+        self.agent.gazette.open_edition('01-king', ['01-a', '02-b', '03-c'])
+        with patch.object(self.agent, 'memory', return_value={'items': []}):
+            before = json.loads(self.agent.snapshot())
+        self.assertIn('gazette_daily_note', before)
+        self.agent.gazette.submit_contribution(self.agent.gazette.list_editions(1)[0]['id'], '01-a', 'mood', 'Feeling productive today.')
+        with patch.object(self.agent, 'memory', return_value={'items': []}):
+            after = json.loads(self.agent.snapshot())
+        self.assertNotIn('gazette_daily_note', after)
 
     def test_organic_message_not_reissued_every_turn(self):
         (self.root/'board/organic-inbox.jsonl').write_text(json.dumps({'timestamp':'2026-09-24T11:00:00Z','message':'A dated request'})+'\n')

@@ -87,6 +87,7 @@ Pro Paket Nachweis unter `docs/evidence/Pxx.md` anlegen, sobald tatsächlich dar
 | P49 | AI Village Gazette Stufe 2: dauerhafter King-only Kontext-Hinweis statt Einzelnachricht (Nachricht zugestellt+quittiert, aber ~1,5h nicht befolgt) | P47, P48, Live-Beobachtung | LOCAL_VERIFIED | [docs/evidence/P49.md](evidence/P49.md) |
 | P50 | `install-runtime.py --no-start` stoppte entgegen eigener Beschreibung laufende Bewohner-Dienste ohne sie neu zu starten (8/9 Agenten unbemerkt tot) | Live-Beobachtung während P47–P49-Validierung | LOCAL_VERIFIED | [docs/evidence/P50.md](evidence/P50.md) |
 | P51 | Mehrfach-Aktionsblöcke: erster gültiger Block wird ausgeführt statt Vollablehnung; Kollaborationsdruck-Deckelung gegen unbegrenztes Ignorieren | Live-Beobachtung, Auditor-Historie | LOCAL_VERIFIED | [docs/evidence/P51.md](evidence/P51.md) |
+| P52 | AI Village Gazette: dauerhafter Beitrags-Hinweis für alle Bewohner (nicht nur King) | Betreiberfrage, Live-Beobachtung | LOCAL_VERIFIED | [docs/evidence/P52.md](evidence/P52.md) |
 
 ## Fortschrittsbuch
 
