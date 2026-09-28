@@ -72,6 +72,15 @@ tatsächlichen Kapazität des jeweiligen Agenten passt.
   zusammengeführt (analog wie der Auditor Ereignisse zusammenführt, kein
   LLM-generierter Text). Verhindert, dass ein Bewohner sie vergisst oder
   wegplant.
+- **Meeting-Einträge zeigen das echte Thema, kein Platzhalter**
+  (Betreiberwunsch 2026-09-28): der Kalendereintrag zu einem Jour Fixe
+  trägt `meetings.agenda` (aktuell bei allen Terminen wortidentisch
+  templated – siehe Live-Auswertung derselben Konversation – zeigt sich
+  also erst inhaltlich reichhaltiger, sobald echte Themen statt der
+  Standard-Agenda vergeben werden) sowie, sobald abgegeben, eine kurze
+  Zusammenfassung des **eigenen** `achieved`-Feldes aus
+  `meeting_reports` für diesen Bewohner – nicht die Berichte der anderen
+  (Privatsphäre/Umfang wie bei Direktnachrichten).
 - Selbstgeplanter Freitext-Teil bleibt vollständig in der Hand des
   Bewohners; feste Einträge werden nur ergänzt, nie überschrieben.
 
@@ -83,10 +92,20 @@ tatsächlichen Kapazität des jeweiligen Agenten passt.
 - **Kein eigener Menüpunkt** (Betreiberentscheidung 2026-09-28): der
   Kalender erscheint als neuer Abschnitt/Panel **innerhalb der
   bestehenden Agenten-Seite** (`/agents`, `web/observatory.html`), nicht
-  als eigenständiger Sidebar-Eintrag wie die Gazette. Zeigt alle 9
-  Kalender (inkl. König) nebeneinander bzw. je Bewohnerkarte, inklusive
-  der festen Einträge aus Stufe 2 und optional der Kapazitätsprognose als
-  Kontextinfo je Bewohner.
+  als eigenständiger Sidebar-Eintrag wie die Gazette.
+- **Tages-/Wochen-/Monatsansicht** (Betreiberwunsch 2026-09-28):
+  umschaltbare Ansichtsgranularität, nicht nur eine feste Liste. Tag =
+  ein Bewohner-Freitext-Eintrag + feste Termine dieses Tages; Woche =
+  `calendar_weekly_plans`-Eintrag + alle Tages-/Meeting-/Gazette-Termine
+  der ISO-Woche; Monat = reine Übersichtsraster-Ansicht (welche Tage
+  haben Einträge/Termine), Detail erst per Klick auf einen Tag.
+- **Kalender mehrerer Bewohner übereinanderlegen** (Betreiberwunsch
+  2026-09-28): Vergleichs-/Overlay-Ansicht, in der mehrere ausgewählte
+  Bewohnerkalender (inkl. König) für denselben Zeitraum sichtbar
+  übereinander bzw. nebeneinander dargestellt werden – zusätzlich zur
+  Einzelansicht pro Bewohnerkarte, nicht als Ersatz dafür.
+- Zeigt außerdem optional die Kapazitätsprognose als Kontextinfo je
+  Bewohner.
 
 ## Bewusst noch offen / nicht entschieden
 
