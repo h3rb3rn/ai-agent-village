@@ -91,14 +91,18 @@ ACTION_SPECS: Dict[str, Dict[str, Any]] = {
     "gazette_operation": {
         "doc": "operation=open(King only, starts today's AI Village Gazette edition and draws the "
               "day's game+pair)|assign(King only, delegates one contribution kind to each resident)|"
-              "contribute(kind,content)|view(edition_id?) -> the daily village paper; "
-              "kind is one of state/mood/wishes/topics/suggestions/learning/outlook/game_result/village_news, "
-              "content max 400 chars - a short fact, not an essay",
+              "contribute(kind,content)|review(09-chronicler only, agent,kind,decision=approve|reject,note?)"
+              "|close(King only, compiles all approved contributions into the archived edition)"
+              "|view(edition_id?) -> the daily village paper; kind is one of "
+              "state/mood/wishes/topics/suggestions/learning/outlook/game_result/village_news, "
+              "content max 400 chars - a short fact, not an essay. Only 09-chronicler-approved "
+              "contributions ever appear in the compiled edition.",
         "properties": {
-            "operation": {"enum": ["open", "assign", "contribute", "view"]},
+            "operation": {"enum": ["open", "assign", "contribute", "review", "close", "view"]},
             "kind": {"enum": ["state", "mood", "wishes", "topics", "suggestions", "learning",
                              "outlook", "game_result", "village_news"]},
-            "content": _s(400), "edition_id": _s(20)},
+            "content": _s(400), "edition_id": _s(20), "agent": _s(40), "decision": {"enum": ["approve", "reject"]},
+            "note": _s(400)},
         "required": ["operation"]},
     "idle": {"doc": "no arguments -> deliberate rest", "properties": {}, "required": []},
 }

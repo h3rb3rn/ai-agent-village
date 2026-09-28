@@ -133,7 +133,22 @@ class RuntimeTests(unittest.TestCase):
             ctx = json.loads(self.agent.snapshot())
         self.assertEqual(len(ctx['recent_organic_messages_untrusted']), 1, ctx.get('recent_organic_messages_untrusted'))
         self.assertEqual(len(ctx['untrusted_direct_messages']), 1, ctx.get('untrusted_direct_messages'))
-        self.assertLess(len(ctx['projects']), len(big_projects))
+
+    def test_projects_trim_drops_the_tail_not_the_agents_own_active_task(self):
+        # Found via P55's added action/hint text finally crossing this
+        # test's budget threshold: the trim loop popped index 0 on every
+        # field uniformly, including 'projects' - but projects is
+        # pre-sorted highest-priority-first (own active task first, see
+        # task_priority()), so that discarded the single most important
+        # row before any of the bulky, genuinely stale ones. Must trim
+        # from the tail for this field specifically.
+        own_active = {'id': 'own-active', 'title': 'x', 'owner': '01-a', 'status': 'active'}
+        stale = [{'id': f'stale-{i}', 'title': 'x' * 700, 'owner': '02-b', 'status': 'open'} for i in range(20)]
+        self.agent.tasks.path.write_text(json.dumps([own_active] + stale))
+        with patch.object(self.agent, 'memory', return_value={'items': []}):
+            ctx = json.loads(self.agent.snapshot())
+        self.assertLess(len(ctx['projects']), 21)  # trimming did happen
+        self.assertIn('own-active', [p['id'] for p in ctx['projects']])
 
     def test_organic_cursor_does_not_advance_past_a_trimmed_out_message(self):
         # P48 regression: the cursor used to advance to cover every tailed organic
@@ -213,6 +228,55 @@ class RuntimeTests(unittest.TestCase):
         with patch.object(self.agent, 'memory', return_value={'items': []}):
             ctx = json.loads(self.agent.snapshot())
         self.assertIn(f"kind='{assigned_kind}'", ctx['gazette_daily_note'])
+
+    def test_gazette_review_is_restricted_to_chronicler(self):
+        # P55 (operator directive): "die Zeitung sollte nicht aus
+        # ungeprueften Beitraegen bestehen, es braucht eine Redaktionelle
+        # Pruefinstanz" - only 09-chronicler may approve/reject.
+        edition = self.agent.gazette.open_edition('01-king', ['01-a', '02-b'])
+        self.agent.gazette.submit_contribution(edition['id'], '01-a', 'mood', 'Feeling good.')
+        self.execute('gazette_operation', operation='review', agent='01-a', kind='mood', decision='approve')
+        self.assertFalse(self.agent.state['last_result']['ok'])
+        self.assertIn('Only 09-chronicler', self.agent.state['last_result']['result'])
+
+    def test_gazette_close_is_restricted_to_king(self):
+        self.agent.gazette.open_edition('01-king', ['01-a', '02-b'])
+        self.execute('gazette_operation', operation='close')
+        self.assertFalse(self.agent.state['last_result']['ok'])
+        self.assertIn('Only 01-king', self.agent.state['last_result']['result'])
+
+    def test_chronicler_can_review_and_king_can_close_with_archive(self):
+        chronicler_env = dict(self.env, AGENT_ID='09-chronicler', AGENT_NAME='chronicler', AGENT_ROLE='steward')
+        king_env = dict(self.env, AGENT_ID='01-king', AGENT_NAME='king', AGENT_ROLE='king')
+        chronicler = Resident(chronicler_env)
+        king = Resident(king_env)
+        edition = king.gazette.open_edition('01-king', ['01-a'])
+        edition_id = edition['id']
+        king.gazette.submit_contribution(edition_id, '01-a', 'mood', 'Feeling good.')
+        chronicler.execute({'tool_call': {'name': 'gazette_operation', 'arguments': {
+            'operation': 'review', 'agent': '01-a', 'kind': 'mood', 'decision': 'approve'}}})
+        self.assertTrue(chronicler.state['last_result']['ok'])
+        king.execute({'tool_call': {'name': 'gazette_operation', 'arguments': {'operation': 'close'}}})
+        self.assertTrue(king.state['last_result']['ok'])
+        archive_path = self.root / 'gazette' / 'archive' / edition_id / 'index.html'
+        self.assertTrue(archive_path.exists())
+        self.assertIn('Feeling good.', archive_path.read_text())
+
+    def test_chronicler_sees_pending_review_hint_until_cleared(self):
+        # The review gate itself must not become the exact reliability
+        # bottleneck this session spent P48-P54 fixing.
+        chronicler_env = dict(self.env, AGENT_ID='09-chronicler', AGENT_NAME='chronicler', AGENT_ROLE='steward')
+        chronicler = Resident(chronicler_env)
+        edition = chronicler.gazette.open_edition('01-king', ['01-a'])
+        chronicler.gazette.submit_contribution(edition['id'], '01-a', 'mood', 'Feeling good.')
+        with patch.object(chronicler, 'memory', return_value={'items': []}):
+            before = json.loads(chronicler.snapshot())
+        self.assertIn('gazette_daily_note', before)
+        self.assertIn('editorial review', before['gazette_daily_note'])
+        chronicler.gazette.review_contribution(edition['id'], '01-a', 'mood', '09-chronicler', 'approve')
+        with patch.object(chronicler, 'memory', return_value={'items': []}):
+            after = json.loads(chronicler.snapshot())
+        self.assertNotIn('editorial review', after.get('gazette_daily_note', ''))
 
     def test_organic_message_not_reissued_every_turn(self):
         (self.root/'board/organic-inbox.jsonl').write_text(json.dumps({'timestamp':'2026-09-24T11:00:00Z','message':'A dated request'})+'\n')

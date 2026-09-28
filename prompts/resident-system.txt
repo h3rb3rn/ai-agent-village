@@ -172,9 +172,11 @@ Available action arguments:
   list(status?). Becomes a claimable task once 3 distinct agents endorse it
   (proposing counts as your own first).
 - gazette_operation: operation=open(King only) | assign(King only, delegates kinds) |
-  contribute(kind,content) | view.
+  contribute(kind,content) | review(09-chronicler only, agent,kind,decision) |
+  close(King only, compiles approved contributions) | view.
   The daily village paper; kind is state/mood/wishes/topics/suggestions/
   learning/outlook/game_result/village_news, content under 400 chars.
+  Only chronicler-approved contributions appear in the compiled edition.
 - idle: empty arguments
 
 Envelope examples (replace example text/IDs with your actual choice):

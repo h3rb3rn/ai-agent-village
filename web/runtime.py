@@ -46,6 +46,7 @@ from village.research import ResearchBroker
 from village.meetings import MeetingStore
 from village.gazette import GazetteStore
 from village.gazette import today as gazette_today
+from village.gazette import REVIEWER_AGENT as GAZETTE_REVIEWER
 from village.collaboration import assess as assess_collaboration, is_checkpoint_action
 from village.lifecycle import InferenceState, InferenceTracker, classify_error
 from village.security import redact_text, sanitize_tool_env
@@ -436,7 +437,23 @@ class Resident:
             # here; falls back to an open choice only while King has not
             # yet delegated.
             gazette_edition = self.gazette.get_edition(gazette_today())
-            if gazette_edition and not any(c['agent'] == self.id for c in gazette_edition['contributions']):
+            pending_reviews = [
+                c for c in (gazette_edition['contributions'] if gazette_edition else [])
+                if c.get('review_status') == 'pending'
+            ]
+            if self.id == GAZETTE_REVIEWER and pending_reviews:
+                # P55: the editorial gate itself must not become the exact
+                # reliability bottleneck this session spent P48-P54 fixing -
+                # a persistent hint, not a message, for the one role whose
+                # inaction would silently empty the whole compiled edition.
+                names = ", ".join(f"{c['agent']}/{c['kind']}" for c in pending_reviews[:5])
+                context['gazette_daily_note'] = (
+                    f"{len(pending_reviews)} Gazette contribution(s) await your editorial review "
+                    f"as {GAZETTE_REVIEWER}: {names}. Use gazette_operation operation=review with "
+                    "agent, kind and decision=approve|reject (optional note) for each one - only "
+                    "what you approve ever appears in the compiled edition."
+                )
+            elif gazette_edition and not any(c['agent'] == self.id for c in gazette_edition['contributions']):
                 assigned_kind = gazette_edition.get('assignments', {}).get(self.id)
                 if assigned_kind:
                     context['gazette_daily_note'] = (
@@ -499,7 +516,19 @@ class Resident:
         for field in ('retrieved_memory_untrusted','untrusted_peer_messages','own_recent_results','projects',
                       'recent_organic_messages_untrusted','untrusted_direct_messages'):
             while context.get(field) and len(json.dumps(context,ensure_ascii=False))>budget:
-                context[field].pop(0)
+                # 'projects' is pre-sorted highest-priority-first
+                # (task_priority(), reverse=True) - unlike every other field
+                # here, which is chronological (oldest first, so popping
+                # index 0 correctly drops the oldest/least-relevant entry).
+                # Popping index 0 on 'projects' would discard the agent's
+                # own active task before any actually-stale, low-priority
+                # one - backwards from this loop's own stated intent
+                # ("losing a few stale task rows"). Trim from the tail
+                # instead, only for this field.
+                if field == 'projects':
+                    context[field].pop()
+                else:
+                    context[field].pop(0)
         # P09/P48: Track exactly which inbox message IDs survived context trimming to
         # mark delivered. pending_organic_cursor was set to a provisional (non-advancing)
         # default above; recompute it here from what actually survived trimming, so a
@@ -987,12 +1016,54 @@ class Resident:
                     else:
                         self.event('gazette_contribution', f'edition={edition_id}; kind={kind}')
                         self.feedback(name, json.dumps(result, ensure_ascii=False)[:2000], True)
+                elif op == 'review':
+                    # P55 (operator directive): "die Zeitung sollte nicht aus
+                    # ungeprueften Beitraegen bestehen" - only the Chronicler
+                    # may approve/reject; compile_edition() then excludes
+                    # anything not explicitly approved.
+                    if self.id != GAZETTE_REVIEWER:
+                        self.feedback(name, f'Only {GAZETTE_REVIEWER} may review gazette contributions.', False)
+                    else:
+                        edition_id = args.get('edition_id') or gazette_today()
+                        try:
+                            result = self.gazette.review_contribution(
+                                edition_id, args.get('agent'), args.get('kind'), self.id,
+                                args.get('decision'), args.get('note', ''))
+                        except ValueError as exc:
+                            self.feedback(name, str(exc), False)
+                        else:
+                            self.event('gazette_reviewed',
+                                       f'edition={edition_id}; agent={args.get("agent")}; kind={args.get("kind")}; '
+                                       f'decision={args.get("decision")}')
+                            self.feedback(name, json.dumps(result, ensure_ascii=False)[:2000], True)
+                elif op == 'close':
+                    if self.id != '01-king':
+                        self.feedback(name, "Only 01-king may close/compile today's gazette edition.", False)
+                    else:
+                        edition_id = args.get('edition_id') or gazette_today()
+                        try:
+                            result = self.gazette.close_edition(edition_id, self.id)
+                        except ValueError as exc:
+                            self.feedback(name, str(exc), False)
+                        else:
+                            # Archive is write-once: compiled_html is only present
+                            # on the first real compile (close_edition() is
+                            # idempotent), and the file itself is never overwritten.
+                            compiled_html = result.pop('compiled_html', None)
+                            if compiled_html:
+                                archive_dir = self.root / 'gazette' / 'archive' / edition_id
+                                archive_dir.mkdir(parents=True, exist_ok=True)
+                                archive_path = archive_dir / 'index.html'
+                                if not archive_path.exists():
+                                    archive_path.write_text(compiled_html, encoding='utf-8')
+                            self.event('gazette_compiled', f'edition={edition_id}')
+                            self.feedback(name, json.dumps(result, ensure_ascii=False)[:2000], True)
                 elif op == 'view':
                     edition_id = args.get('edition_id') or gazette_today()
                     result = self.gazette.get_edition(edition_id)
                     self.feedback(name, json.dumps(result, ensure_ascii=False)[:3000] if result else 'No edition yet for that date.', bool(result))
                 else:
-                    raise ValueError('gazette_operation requires operation open, assign, contribute, or view')
+                    raise ValueError('gazette_operation requires operation open, assign, contribute, review, close, or view')
             else:
                 self.feedback('idle','Intentional rest; next turn may resume your own project.',True)
                 self.event('idle','intentional rest')

@@ -9,7 +9,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from village.gazette import CONTRIBUTION_KINDS, GAME_POOL, MAX_CONTRIBUTION_CHARS, GazetteStore
+from village.gazette import CONTRIBUTION_KINDS, GAME_POOL, MAX_CONTRIBUTION_CHARS, REVIEWER_AGENT, GazetteStore
 
 PEERS = ["02-explorer", "03-librarian", "04-artisan", "05-interpreter", "06-operator",
         "07-methodologist", "08-logician", "09-chronicler"]
@@ -157,6 +157,127 @@ class ListEditionsTests(unittest.TestCase):
 
     def test_empty_store_returns_an_empty_list(self):
         self.assertEqual(self.store.list_editions(), [])
+
+
+class EditorialReviewTests(unittest.TestCase):
+    """P55 (operator directive): 'die Zeitung sollte nicht aus ungeprueften
+    Beitraegen bestehen, es braucht eine Redaktionelle Pruefinstanz'."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="village-gazette-"))
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.store = GazetteStore(self.tmp / "coordination.sqlite3")
+        self.store.open_edition("01-king", PEERS, edition_id="2026-09-28", rng=random.Random(1))
+
+    def test_a_new_contribution_starts_pending(self):
+        result = self.store.submit_contribution("2026-09-28", "02-explorer", "mood", "Feeling good.")
+        contrib = next(c for c in result["contributions"] if c["agent"] == "02-explorer")
+        self.assertEqual(contrib["review_status"], "pending")
+
+    def test_approve_and_reject_transition_review_status(self):
+        self.store.submit_contribution("2026-09-28", "02-explorer", "mood", "Feeling good.")
+        self.store.submit_contribution("2026-09-28", "03-librarian", "wishes", "More disk space please.")
+        approved = self.store.review_contribution("2026-09-28", "02-explorer", "mood", REVIEWER_AGENT, "approve")
+        rejected = self.store.review_contribution("2026-09-28", "03-librarian", "wishes", REVIEWER_AGENT, "reject", "off-topic")
+        a = next(c for c in approved["contributions"] if c["agent"] == "02-explorer")
+        r = next(c for c in rejected["contributions"] if c["agent"] == "03-librarian")
+        self.assertEqual(a["review_status"], "approved")
+        self.assertEqual(a["reviewed_by"], REVIEWER_AGENT)
+        self.assertEqual(r["review_status"], "rejected")
+        self.assertEqual(r["review_note"], "off-topic")
+
+    def test_unknown_decision_is_rejected(self):
+        self.store.submit_contribution("2026-09-28", "02-explorer", "mood", "Feeling good.")
+        with self.assertRaises(ValueError):
+            self.store.review_contribution("2026-09-28", "02-explorer", "mood", REVIEWER_AGENT, "publish")
+
+    def test_reviewing_a_nonexistent_contribution_is_rejected(self):
+        with self.assertRaises(ValueError):
+            self.store.review_contribution("2026-09-28", "02-explorer", "mood", REVIEWER_AGENT, "approve")
+
+    def test_resubmission_resets_an_approved_contribution_to_pending(self):
+        # An edit to already-approved text must not silently keep the old
+        # approval - the reviewer never saw the new content.
+        self.store.submit_contribution("2026-09-28", "02-explorer", "mood", "Feeling good.")
+        self.store.review_contribution("2026-09-28", "02-explorer", "mood", REVIEWER_AGENT, "approve")
+        result = self.store.submit_contribution("2026-09-28", "02-explorer", "mood", "Actually feeling great.")
+        contrib = next(c for c in result["contributions"] if c["agent"] == "02-explorer")
+        self.assertEqual(contrib["review_status"], "pending")
+        self.assertIsNone(contrib["reviewed_by"])
+
+    def test_pending_review_count(self):
+        self.assertEqual(self.store.pending_review_count("2026-09-28"), 0)
+        self.store.submit_contribution("2026-09-28", "02-explorer", "mood", "Feeling good.")
+        self.store.submit_contribution("2026-09-28", "03-librarian", "wishes", "More disk space please.")
+        self.assertEqual(self.store.pending_review_count("2026-09-28"), 2)
+        self.store.review_contribution("2026-09-28", "02-explorer", "mood", REVIEWER_AGENT, "approve")
+        self.assertEqual(self.store.pending_review_count("2026-09-28"), 1)
+
+
+class CompileEditionTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="village-gazette-"))
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.store = GazetteStore(self.tmp / "coordination.sqlite3")
+        self.store.open_edition("01-king", PEERS, edition_id="2026-09-28", rng=random.Random(1))
+
+    def test_unknown_edition_is_rejected(self):
+        with self.assertRaises(ValueError):
+            self.store.compile_edition("1999-01-01")
+
+    def test_only_approved_contributions_appear(self):
+        self.store.submit_contribution("2026-09-28", "02-explorer", "mood", "Approved text should show up.")
+        self.store.submit_contribution("2026-09-28", "03-librarian", "wishes", "Pending text must not show up.")
+        self.store.submit_contribution("2026-09-28", "04-artisan", "topics", "Rejected text must not show up.")
+        self.store.review_contribution("2026-09-28", "02-explorer", "mood", REVIEWER_AGENT, "approve")
+        self.store.review_contribution("2026-09-28", "04-artisan", "topics", REVIEWER_AGENT, "reject")
+        rendered = self.store.compile_edition("2026-09-28")
+        self.assertIn("Approved text should show up.", rendered)
+        self.assertNotIn("Pending text must not show up.", rendered)
+        self.assertNotIn("Rejected text must not show up.", rendered)
+
+    def test_content_is_html_escaped(self):
+        self.store.submit_contribution("2026-09-28", "02-explorer", "mood", "<script>alert(1)</script>")
+        self.store.review_contribution("2026-09-28", "02-explorer", "mood", REVIEWER_AGENT, "approve")
+        rendered = self.store.compile_edition("2026-09-28")
+        self.assertNotIn("<script>alert(1)</script>", rendered)
+        self.assertIn("&lt;script&gt;", rendered)
+
+    def test_includes_issue_number_and_previous_edition_reference(self):
+        self.store.open_edition("01-king", PEERS, edition_id="2026-09-27", rng=random.Random(1))
+        rendered = self.store.compile_edition("2026-09-28")
+        self.assertIn("Ausgabe Nr. 2", rendered)
+        self.assertIn("2026-09-27", rendered)
+
+    def test_first_edition_has_no_previous_edition_reference(self):
+        rendered = self.store.compile_edition("2026-09-28")
+        self.assertNotIn("Vorherige Ausgabe", rendered)
+
+
+class CloseEditionTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="village-gazette-"))
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.store = GazetteStore(self.tmp / "coordination.sqlite3")
+        self.store.open_edition("01-king", PEERS, edition_id="2026-09-28", rng=random.Random(1))
+        self.store.submit_contribution("2026-09-28", "02-explorer", "mood", "Feeling good.")
+        self.store.review_contribution("2026-09-28", "02-explorer", "mood", REVIEWER_AGENT, "approve")
+
+    def test_unknown_edition_is_rejected(self):
+        with self.assertRaises(ValueError):
+            self.store.close_edition("1999-01-01", "01-king")
+
+    def test_closing_sets_status_and_returns_html(self):
+        result = self.store.close_edition("2026-09-28", "01-king")
+        self.assertEqual(result["status"], "compiled")
+        self.assertIsNotNone(result["compiled_at"])
+        self.assertIn("Feeling good.", result["compiled_html"])
+
+    def test_closing_twice_is_idempotent_and_only_returns_html_once(self):
+        first = self.store.close_edition("2026-09-28", "01-king")
+        second = self.store.close_edition("2026-09-28", "01-king")
+        self.assertEqual(first["compiled_at"], second["compiled_at"])
+        self.assertNotIn("compiled_html", second)  # never re-archived
 
 
 if __name__ == "__main__":

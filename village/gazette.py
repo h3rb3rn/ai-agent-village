@@ -17,6 +17,7 @@ docs/analysis/GAZETTE-PLAN-2026-09-28.md) - kept out of this package so the
 foundation can be tested and deployed on its own.
 """
 from __future__ import annotations
+import html
 import random
 import sqlite3
 import uuid
@@ -60,6 +61,30 @@ GAME_POOL = (
     "Wortkette: abwechselnd ein Wort anhaengen, das mit dem letzten Buchstaben beginnt",
 )
 
+# German section headings for the compiled edition (P55) - the dashboard
+# and its nav are German-language; contribution CONTENT is never translated
+# or paraphrased, only these structural labels are.
+KIND_LABELS = {
+    "state": "Verfassung",
+    "mood": "Stimmung",
+    "wishes": "Wünsche an die Gemeinschaft",
+    "topics": "Bewegende Themen",
+    "suggestions": "Verbesserungsvorschläge",
+    "learning": "Erkenntnis des Tages",
+    "outlook": "Ausblick",
+    "game_result": "Spielergebnis",
+    "village_news": "Dorfmeldungen",
+}
+
+# P55: the editorial reviewer. 09-chronicler, not King - this module's own
+# original docstring already names the Gazette as meant to "serve as a
+# chronicle for 'the historian' (09-chronicler's own role)"; King already
+# carries three coordination actions (open/assign, plus announcing), and
+# curating the village's record is thematically the Chronicler's job, not
+# the King's.
+REVIEWER_AGENT = "09-chronicler"
+REVIEW_DECISIONS = ("approve", "reject")
+
 
 class GazetteStore:
     """SQLite-backed edition/contribution store, reusing coordination.sqlite3
@@ -80,6 +105,21 @@ class GazetteStore:
                 UNIQUE(edition_id, agent, kind),
                 FOREIGN KEY(edition_id) REFERENCES gazette_editions(id) ON DELETE CASCADE)""")
             c.execute("CREATE INDEX IF NOT EXISTS idx_gazette_contrib_edition ON gazette_contributions(edition_id)")
+            # P55 (operator directive): "die Zeitung sollte nicht aus
+            # ungeprueften Beitraegen bestehen" - a compiled edition must
+            # only ever contain reviewed, approved content. Migrated onto
+            # the existing table (village/coordinator.py's ALTER TABLE
+            # pattern) so the live host DB, already holding today's
+            # contributions, keeps them without data loss.
+            existing_cols = {row[1] for row in c.execute("PRAGMA table_info(gazette_contributions)").fetchall()}
+            if "review_status" not in existing_cols:
+                c.execute("ALTER TABLE gazette_contributions ADD COLUMN review_status TEXT NOT NULL DEFAULT 'pending'")
+            if "reviewed_by" not in existing_cols:
+                c.execute("ALTER TABLE gazette_contributions ADD COLUMN reviewed_by TEXT")
+            if "reviewed_at" not in existing_cols:
+                c.execute("ALTER TABLE gazette_contributions ADD COLUMN reviewed_at TEXT")
+            if "review_note" not in existing_cols:
+                c.execute("ALTER TABLE gazette_contributions ADD COLUMN review_note TEXT")
             # P53: a generic "pick any kind" hint proved too weak to actually
             # produce contributions (live observation: 0 after ~30 min
             # across all 9 residents despite a confirmed-delivered hint -
@@ -196,11 +236,133 @@ class GazetteStore:
             raise ValueError(f"only today's drawn pair {edition['game_pair']} may submit a game_result")
         ts = now()
         with self._conn() as c:
+            # P55: every (re)submission starts/returns to 'pending' - an
+            # edit to already-approved content must not silently keep the
+            # old approval, since the reviewer never saw the new text.
             c.execute(
-                "INSERT INTO gazette_contributions(edition_id,agent,kind,content,created_at,updated_at) "
-                "VALUES(?,?,?,?,?,?) "
-                "ON CONFLICT(edition_id,agent,kind) DO UPDATE SET content=excluded.content, updated_at=excluded.updated_at",
+                "INSERT INTO gazette_contributions(edition_id,agent,kind,content,created_at,updated_at,review_status) "
+                "VALUES(?,?,?,?,?,?,'pending') "
+                "ON CONFLICT(edition_id,agent,kind) DO UPDATE SET content=excluded.content, updated_at=excluded.updated_at, "
+                "review_status='pending', reviewed_by=NULL, reviewed_at=NULL, review_note=NULL",
                 (edition_id, agent, kind, content, ts, ts),
             )
             c.commit()
         return self.get_edition(edition_id)  # type: ignore
+
+    def review_contribution(self, edition_id: str, agent: str, kind: str, reviewer: str,
+                             decision: str, note: str = "") -> Dict[str, Any]:
+        """Editorial gate (P55, operator directive): unreviewed contributions
+        must never appear in a compiled edition (see compile_edition()).
+        A rejection is never a silent delete - the contribution stays in
+        the DB with its reason, just permanently excluded unless the
+        author resubmits (which resets it back to 'pending', see above)."""
+        if decision not in REVIEW_DECISIONS:
+            raise ValueError(f"unknown review decision: {decision}")
+        with self._conn() as c:
+            cur = c.execute(
+                "UPDATE gazette_contributions SET review_status=?, reviewed_by=?, reviewed_at=?, review_note=? "
+                "WHERE edition_id=? AND agent=? AND kind=?",
+                ("approved" if decision == "approve" else "rejected", reviewer, now(), str(note).strip()[:400],
+                 edition_id, agent, kind),
+            )
+            c.commit()
+            if cur.rowcount == 0:
+                raise ValueError(f"no contribution found for agent={agent} kind={kind} in edition {edition_id}")
+        return self.get_edition(edition_id)  # type: ignore
+
+    def pending_review_count(self, edition_id: str) -> int:
+        with self._conn() as c:
+            row = c.execute(
+                "SELECT COUNT(*) FROM gazette_contributions WHERE edition_id=? AND review_status='pending'",
+                (edition_id,),
+            ).fetchone()
+            return int(row[0])
+
+    def compile_edition(self, edition_id: str) -> str:
+        """Deterministically render one edition to HTML (P55/Stufe 3 of
+        docs/analysis/GAZETTE-PLAN-2026-09-28.md) - no LLM-generated
+        connective text, to avoid the hallucination/format risk documented
+        throughout P30-P44. Every section is a faithful, escaped assembly
+        of what residents actually submitted AND 09-chronicler approved
+        (see REVIEWER_AGENT/review_contribution) - a pending or rejected
+        contribution never appears here, regardless of how long ago it
+        was submitted."""
+        edition = self.get_edition(edition_id)
+        if not edition:
+            raise ValueError(f"unknown gazette edition: {edition_id}")
+        with self._conn() as c:
+            issue_number = c.execute(
+                "SELECT COUNT(*) FROM gazette_editions WHERE id <= ?", (edition_id,)
+            ).fetchone()[0]
+            prev_row = c.execute(
+                "SELECT id FROM gazette_editions WHERE id < ? ORDER BY id DESC LIMIT 1", (edition_id,)
+            ).fetchone()
+        previous_id = prev_row["id"] if prev_row else None
+
+        approved = [c_ for c_ in edition["contributions"] if c_.get("review_status") == "approved"]
+        by_kind: Dict[str, List[Dict[str, Any]]] = {}
+        for contrib in approved:
+            by_kind.setdefault(contrib["kind"], []).append(contrib)
+
+        def esc(text: Any) -> str:
+            return html.escape(str(text))
+
+        parts = [
+            "<!doctype html><html lang=\"de\"><head><meta charset=\"utf-8\">"
+            f"<title>AI Village Gazette – Ausgabe {esc(edition_id)}</title></head><body>",
+            "<h1>AI Village Gazette</h1>",
+            f'<p class="meta">Ausgabe Nr. {issue_number} &middot; {esc(edition_id)} '
+            f"&middot; eröffnet von {esc(edition['opened_by'])}</p>",
+        ]
+        if previous_id:
+            parts.append(f'<p class="prev-link">Vorherige Ausgabe: {esc(previous_id)}</p>')
+
+        if by_kind.get("village_news"):
+            parts.append("<section><h2>Dorfmeldungen</h2>")
+            for c_ in by_kind["village_news"]:
+                parts.append(f'<article><p>{esc(c_["content"])}</p><p class="byline">— {esc(c_["agent"])}</p></article>')
+            parts.append("</section>")
+
+        parts.append("<section><h2>Spiel des Tages</h2>")
+        parts.append(f'<p>{esc(edition["game_name"])}</p>')
+        if edition["game_pair"]:
+            parts.append(f'<p class="byline">Ausgelost: {esc(", ".join(edition["game_pair"]))}</p>')
+        for c_ in by_kind.get("game_result", []):
+            parts.append(f'<article><p>{esc(c_["content"])}</p><p class="byline">— {esc(c_["agent"])}</p></article>')
+        parts.append("</section>")
+
+        interview_kinds = [k for k in CONTRIBUTION_KINDS if k not in ("village_news", "game_result")]
+        agents_with_content = sorted({c_["agent"] for k in interview_kinds for c_ in by_kind.get(k, [])})
+        if agents_with_content:
+            parts.append("<section><h2>Interviews</h2>")
+            for agent in agents_with_content:
+                parts.append(f"<article><h3>{esc(agent)}</h3>")
+                for kind in interview_kinds:
+                    match = next((c_ for c_ in by_kind.get(kind, []) if c_["agent"] == agent), None)
+                    if match:
+                        parts.append(f'<p><strong>{esc(KIND_LABELS.get(kind, kind))}:</strong> {esc(match["content"])}</p>')
+                parts.append("</article>")
+            parts.append("</section>")
+
+        parts.append("</body></html>")
+        return "".join(parts)
+
+    def close_edition(self, edition_id: str, closed_by: str) -> Dict[str, Any]:
+        """King's compile trigger. Idempotent: compiling an already-compiled
+        edition returns it unchanged (compiled_at/compiled_html must not
+        drift or re-archive) rather than re-rendering."""
+        edition = self.get_edition(edition_id)
+        if not edition:
+            raise ValueError(f"unknown gazette edition: {edition_id}")
+        if edition["status"] == "compiled":
+            return edition
+        compiled_html = self.compile_edition(edition_id)
+        with self._conn() as c:
+            c.execute(
+                "UPDATE gazette_editions SET status='compiled', compiled_at=? WHERE id=?",
+                (now(), edition_id),
+            )
+            c.commit()
+        result = self.get_edition(edition_id)
+        result["compiled_html"] = compiled_html  # type: ignore
+        return result  # type: ignore
