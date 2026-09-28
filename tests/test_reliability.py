@@ -410,6 +410,60 @@ class ResearchProposalRuntimeTests(unittest.TestCase):
         self.assertFalse(self.agent.state['last_result']['ok'])
 
 
+class InvalidDecisionDetailEventTests(unittest.TestCase):
+    """P43: village/auditor.py::detect_format_violation() keys on an event
+    named 'invalid_decision_detail' with a 'reason=...; preview=...' detail -
+    but Resident.execute() only ever emitted the bare 'invalid_decision'
+    event (reason only, no preview, and the wrong name). Discovered live on
+    N06-M10 (2026-09-28): the auditor had run 82 clean cycles over 6 hours
+    with zero findings despite 140+ real invalid_decision events on the
+    board - it had never once been able to see one in the shape it needs."""
+
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp(prefix='village-invaliddetail-'))
+        (self.root / 'board').mkdir(); (self.root / 'telemetry').mkdir()
+        (self.root / 'identity.txt').write_text('identity')
+        env = dict(AGENT_ID='02-explorer', AGENT_NAME='explorer', AGENT_ROLE='resident', VILLAGE_ROOT=str(self.root),
+                   AGENT_IDENTITY_PROMPT=str(self.root / 'identity.txt'), OLLAMA_MODEL='m')
+        self.agent = Resident(env)
+
+    def tearDown(self):
+        shutil.rmtree(self.root, ignore_errors=True)
+
+    def _board_events(self):
+        raw = (self.root / 'board' / 'events.jsonl').read_text().splitlines()
+        return [json.loads(line) for line in raw if line.strip()]
+
+    def test_emits_the_exact_shape_the_auditor_signature_expects(self):
+        parsed = {'fallback_reason': 'multiple action blocks',
+                  'tool_call': {'name': 'board_message', 'arguments': {'message': 'ignored'}}}
+        self.agent.execute(parsed)
+        events = self._board_events()
+        detail_events = [e for e in events if e['event'] == 'invalid_decision_detail']
+        self.assertEqual(len(detail_events), 1)
+        self.assertTrue(detail_events[0]['detail'].startswith('reason=multiple action blocks; preview='))
+
+    def test_original_bare_event_is_unchanged_for_existing_consumers(self):
+        # skill_history() in web/webui.py counts the exact string 'invalid_decision'.
+        parsed = {'fallback_reason': 'missing action argument',
+                  'tool_call': {'name': 'board_message', 'arguments': {'message': 'ignored'}}}
+        self.agent.execute(parsed)
+        events = self._board_events()
+        bare = [e for e in events if e['event'] == 'invalid_decision']
+        self.assertEqual(len(bare), 1)
+        self.assertEqual(bare[0]['detail'], 'missing action argument')
+
+    def test_the_detail_event_is_findable_by_the_real_auditor_signature(self):
+        from village.auditor import detect_format_violation
+        parsed = {'fallback_reason': 'incomplete legacy action object',
+                  'tool_call': {'name': 'board_message', 'arguments': {'message': 'ignored'}}}
+        self.agent.execute(parsed)
+        events = self._board_events()
+        findings = detect_format_violation(events)
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].agent, '02-explorer')
+
+
 class CapabilitySummaryTests(unittest.TestCase):
     """P38: village/containers.py::describe_agent_capabilities() (P19) existed
     but was never surfaced to a resident's own prompt - an agent cannot use a

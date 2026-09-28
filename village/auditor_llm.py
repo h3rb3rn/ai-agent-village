@@ -270,23 +270,37 @@ def run(interval: float = 300.0,
         agent_events: Optional[Path] = None,
         db_path: Optional[Path] = None,
         *, coordination_store, memory_writer,
+        board_events: Optional[Path] = None,
         memory_reader: Optional[Callable[[str], List[Dict[str, Any]]]] = None,
         opener: Callable = urllib.request.urlopen, url: str = DEFAULT_URL,
         model: str = DEFAULT_MODEL, llm_enabled: bool = True) -> None:
     """Run full_audit_cycle() forever against newly-appended resident events.
 
-    Reads the same agent-events.jsonl the runtime and village/firewatch.py
-    already write to; a persisted cursor (AuditStore.cursor/advance_cursor)
-    ensures each event is only ever considered once, even across restarts.
-    Never restarts or throttles an agent itself - it only explains and routes.
+    Reads BOTH event streams the runtime writes - telemetry/agent-events.jsonl
+    (Resident.event(..., telemetry=True): inference timing, errors) AND
+    board/events.jsonl (Resident.event(..., telemetry=False), the default:
+    board_message, invalid_decision, escalation, foreign_home_blocked). All
+    three deterministic signatures in village/auditor.py key on events that
+    live in the board file, not the telemetry file - discovered 2026-09-28
+    after the auditor had run 82 clean cycles over 6 hours with zero findings
+    despite 140+ invalid_decision, 159+ escalation and 22+ foreign_home_blocked
+    events already on the board; it had simply never been reading them
+    (see docs/evidence/P43.md). web/api/observatory already merges the same
+    two files for exactly this reason - this mirrors that, not a new pattern.
+
+    A persisted cursor (AuditStore.cursor/advance_cursor) ensures each event
+    is only ever considered once, even across restarts. Never restarts or
+    throttles an agent itself - it only explains and routes.
     """
     from village.firewatch import _read_events, AGENT_EVENTS as _DEFAULT_AGENT_EVENTS
 
     agent_events = agent_events or _DEFAULT_AGENT_EVENTS
+    board_events = board_events or Path("/var/lib/ai-village/board/events.jsonl")
     db_path = db_path or Path("/var/lib/ai-village/telemetry/audit.sqlite3")
     store = AuditStore(db_path)
     while True:
-        events = _read_events(agent_events)
+        events = _read_events(agent_events) + _read_events(board_events)
+        events.sort(key=lambda e: str(e.get("timestamp", "")))
         cursor = store.cursor()
         new_events = [e for e in events if str(e.get("timestamp", "")) > cursor] if cursor else events
         if new_events:

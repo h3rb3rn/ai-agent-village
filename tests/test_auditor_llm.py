@@ -8,7 +8,7 @@ the way the Methodologist already fails (thinking exhausts the output budget).
 import io
 import json
 import unittest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from village.auditor import AuditStore
 from village.auditor_llm import (
@@ -381,3 +381,75 @@ class FullAuditCycleTests(unittest.TestCase):
         summary = self.store.summary()
         self.assertEqual(summary["cycles_run"], 1)
         self.assertEqual(summary["deterministic_delivered"], 1)
+
+
+class RunMergesBoardAndTelemetryEventsTests(unittest.TestCase):
+    """P43: discovered live on N06-M10 (2026-09-28) that the auditor had run 82
+    clean cycles over 6 hours with zero findings, despite 140+ invalid_decision,
+    159+ escalation and 22+ foreign_home_blocked events already on the board -
+    all three deterministic signatures key on events that Resident.event()
+    writes to board/events.jsonl by default, but run() only ever read
+    telemetry/agent-events.jsonl. This proves run() now reads and merges both."""
+
+    def setUp(self):
+        import shutil
+        import tempfile
+        from pathlib import Path
+        self.tmp = Path(tempfile.mkdtemp(prefix="village-run-merge-"))
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.agent_events = self.tmp / "agent-events.jsonl"
+        self.board_events = self.tmp / "events.jsonl"
+        self.db_path = self.tmp / "audit.sqlite3"
+        from village.coordinator import CoordinationStore
+        self.coord = CoordinationStore(self.tmp / "coordination.sqlite3", self.tmp)
+        self.memory_writer = MagicMock(return_value={"id": "mem1"})
+
+    def _stop_after_one_iteration(self):
+        calls = {"n": 0}
+        def fake_sleep(_seconds):
+            calls["n"] += 1
+            raise RuntimeError("stop the loop for the test")
+        return fake_sleep
+
+    def test_a_foreign_home_event_on_the_board_file_alone_is_found(self):
+        from village.auditor_llm import run
+        from village.auditor import AuditStore
+        # Only on the board file - exactly Resident.event()'s default (telemetry=False).
+        self.board_events.write_text(json.dumps({
+            "agent": "01-king", "event": "foreign_home_blocked", "event_id": "e1",
+            "timestamp": "2026-09-28T00:00:00+00:00",
+            "detail": "target_agent=08-logician; command_prefix=x",
+        }) + "\n")
+        self.agent_events.write_text("")
+
+        with patch("time.sleep", side_effect=self._stop_after_one_iteration()):
+            with self.assertRaises(RuntimeError):
+                run(1.0, self.agent_events, self.db_path, board_events=self.board_events,
+                   coordination_store=self.coord, memory_writer=self.memory_writer, llm_enabled=False)
+
+        store = AuditStore(self.db_path)
+        self.assertEqual(store.summary()["deterministic_delivered"], 1)
+
+    def test_events_from_both_files_are_combined_in_timestamp_order(self):
+        from village.auditor_llm import run
+        from village.auditor import AuditStore
+        self.board_events.write_text(json.dumps({
+            "agent": "01-king", "event": "foreign_home_blocked", "event_id": "e1",
+            "timestamp": "2026-09-28T00:00:01+00:00",
+            "detail": "target_agent=08-logician; command_prefix=x",
+        }) + "\n")
+        self.agent_events.write_text(json.dumps({
+            "agent": "06-operator", "event": "foreign_home_blocked", "event_id": "e2",
+            "timestamp": "2026-09-28T00:00:02+00:00",
+            "detail": "target_agent=08-logician; command_prefix=y",
+        }) + "\n")
+
+        with patch("time.sleep", side_effect=self._stop_after_one_iteration()):
+            with self.assertRaises(RuntimeError):
+                run(1.0, self.agent_events, self.db_path, board_events=self.board_events,
+                   coordination_store=self.coord, memory_writer=self.memory_writer, llm_enabled=False)
+
+        store = AuditStore(self.db_path)
+        summary = store.summary()
+        self.assertEqual(summary["deterministic_delivered"], 2)
+        self.assertEqual(summary["delivered_by_scope"], {"private": 1, "shared": 1})

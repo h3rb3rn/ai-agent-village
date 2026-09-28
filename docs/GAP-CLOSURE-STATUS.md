@@ -77,7 +77,8 @@ Pro Paket Nachweis unter `docs/evidence/Pxx.md` anlegen, sobald tatsächlich dar
 | P39 | Fähigkeiten sichtbar für Agents im Prompt (`describe_agent_capabilities`) | P19, VISION.md | HOST_VERIFIED | [docs/evidence/P39.md](evidence/P39.md) · alle 9 Agenten aktiv, 0 Neustarts |
 | P40 | Wiederholungssperre 15min→1h (village-weites df-h-Füllverhalten gemildert) | VISION.md | HOST_VERIFIED | [docs/evidence/P40.md](evidence/P40.md) |
 | P41 | Tesla-M10-GPU freigeschaltet (CDI) + community-abgestimmte Forschungsthemen | P19, VISION.md | HOST_VERIFIED | [docs/evidence/P41.md](evidence/P41.md) |
-| P42 | Veraltete tools-Liste im Agentenkontext repariert (ACTION_SPECS-Quelle) + Ownership-Hinweis | P41, Live-Beobachtung | LOCAL_VERIFIED | [docs/evidence/P42.md](evidence/P42.md) · Host-Rollout ausstehend |
+| P42 | Veraltete tools-Liste im Agentenkontext repariert (ACTION_SPECS-Quelle) + Ownership-Hinweis + King-Hinweis auf research_proposal | P41, Live-Beobachtung | HOST_VERIFIED | [docs/evidence/P42.md](evidence/P42.md) |
+| P43 | Auditor las nie die richtigen Ereignisse (falsche Datei + falsches Format) – behoben | P36, Betreiberfrage | LOCAL_VERIFIED | [docs/evidence/P43.md](evidence/P43.md) · Host-Rollout folgt |
 
 ## Fortschrittsbuch
 

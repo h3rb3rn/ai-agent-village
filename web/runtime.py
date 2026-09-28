@@ -594,6 +594,11 @@ class Resident:
                                 'meeting_id, achieved, evidence, next_step and blockers.')
             self.feedback('invalid_decision', parsed['fallback_reason']+'. No action executed. Correct your envelope: {"name":"tool_name","arguments":{...}}.'+meeting_hint+' Your rejected final text: '+preview, False)
             self.event('invalid_decision', parsed['fallback_reason'])
+            # village/auditor.py::detect_format_violation() keys on this exact
+            # event name and 'reason=...; preview=...' shape (P43): the bare
+            # 'invalid_decision' event above has no preview and cannot feed the
+            # auditor's fine-tuning export, which needs the actual rejected text.
+            self.event('invalid_decision_detail', f'reason={parsed["fallback_reason"]}; preview={preview}')
             # A rejected generation is never published: it stays in the resident's
             # private last-response.json (bounded, redacted) and is only counted.
             self.state['last_rejected_fingerprint'] = hashlib.sha256(str(preview).encode('utf-8')).hexdigest()[:16]
