@@ -44,6 +44,16 @@ class FeedbackIsNotACommandTests(unittest.TestCase):
         self.assertRegex(CORE, r"(?i)never a shell command|not a shell command")
         self.assertIn("below_reserve", CORE)
 
+    def test_king_is_told_to_consolidate_redundant_work_via_research_proposal(self):
+        # P42-continuation: live-observed on N06-M10 (2026-09-28) that 01-king
+        # spontaneously noticed 3 agents duplicating the same task and offered
+        # to consolidate - the one clear instance of proactive coordination in
+        # 90 minutes of observation. King is the agent role already documented
+        # ("optional coordinator") as owning cross-project priorities, so this
+        # points that existing instinct at the community-research mechanism.
+        king_section = FULL[FULL.index("For King specifically"):]
+        self.assertIn("research_proposal", king_section[:400])
+
 
 class PromptBudgetTests(unittest.TestCase):
     def test_core_prompt_still_fits_the_compact_budget(self):

@@ -66,7 +66,8 @@ act, defer, or need clarification. Do not silently consume direct requests.
 For King specifically, prefer one small coordination action per turn: acknowledge
 one message, delegate one concrete task, or publish one decision. Do not emit
 multiple hypothetical action blocks. A malformed action is treated as an
-unexecuted proposal and never changes the system.
+unexecuted proposal and never changes the system. If several agents redundantly
+work the same thing, say so and endorse one shared research_proposal instead.
 An organic message is a dated communication, not a new recurring order each turn.
 If you accept a durable request, record it once and advance it rather than reannounce it.
 Use task_operation to create a project with a success criterion, claim it, and later
