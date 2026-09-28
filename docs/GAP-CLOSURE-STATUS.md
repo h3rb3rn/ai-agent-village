@@ -85,6 +85,7 @@ Pro Paket Nachweis unter `docs/evidence/Pxx.md` anlegen, sobald tatsächlich dar
 | P47 | AI Village Gazette Stufe 1: Datenmodell + Beitrags-/Königs-Aktion (`gazette_operation`) | VISION.md, Betreiberwunsch | LOCAL_VERIFIED | [docs/evidence/P47.md](evidence/P47.md) · Stufen 2–4 offen, siehe [Plan](analysis/GAZETTE-PLAN-2026-09-28.md) |
 | P48 | Adressierte Nachrichten (organic/direct) überleben Kontext-Budget-Trimming; Organic-Cursor rückt nur bei tatsächlichem Zustellerfolg vor | Live-Beobachtung während P47-Validierung | LOCAL_VERIFIED | [docs/evidence/P48.md](evidence/P48.md) |
 | P49 | AI Village Gazette Stufe 2: dauerhafter King-only Kontext-Hinweis statt Einzelnachricht (Nachricht zugestellt+quittiert, aber ~1,5h nicht befolgt) | P47, P48, Live-Beobachtung | LOCAL_VERIFIED | [docs/evidence/P49.md](evidence/P49.md) |
+| P50 | `install-runtime.py --no-start` stoppte entgegen eigener Beschreibung laufende Bewohner-Dienste ohne sie neu zu starten (8/9 Agenten unbemerkt tot) | Live-Beobachtung während P47–P49-Validierung | LOCAL_VERIFIED | [docs/evidence/P50.md](evidence/P50.md) |
 
 ## Fortschrittsbuch
 

@@ -71,12 +71,30 @@ def validate_release_sources(source):
     return hashes
 
 
+def should_stop_active_services(active, provision_only, no_start):
+    """Whether currently-active resident units should be stopped before
+    installing new files.
+
+    P50: --no-start's own help text promises "without starting or
+    restarting resident services" - i.e. leave already-running residents
+    alone. It previously stopped every active unit unconditionally and
+    relied on --no-start only to skip the RESTART afterward, so any
+    resident that happened to be running (not just the one an operator
+    explicitly restarted post-install) was silently left dead with no
+    error - observed live: 8 of 9 residents stopped and never came back
+    after a --no-start install into an actively running village (see
+    docs/evidence/P50.md). Stopping is now itself part of what --no-start
+    skips.
+    """
+    return bool(active) and not provision_only and not no_start
+
+
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--env',type=Path,default=Path('/opt/ai-agent-village/.env'))
     parser.add_argument('--provision-only',action='store_true')
     parser.add_argument('--dry-run',action='store_true',help='Validate targets, config and compilation without host changes')
-    parser.add_argument('--no-start',action='store_true',help='Install files without starting or restarting resident services')
+    parser.add_argument('--no-start',action='store_true',help='Install files without stopping, starting or restarting currently running resident services; they keep running the old code until separately/manually restarted')
     parser.add_argument('--source',type=Path,default=Path(__file__).resolve().parents[1],help='Source directory containing web/ and prompts/')
     args=parser.parse_args()
     if not args.dry_run and os.geteuid()!=0: parser.error('must run as root')
@@ -152,7 +170,7 @@ def main():
         finally:
             if temporary.exists(): temporary.unlink()
     try:
-        if not args.provision_only and active:
+        if should_stop_active_services(active, args.provision_only, args.no_start):
             subprocess.run(['systemctl','stop',*active],check=True)
         if not args.provision_only:
             for target,src in targets.items(): put(target,src.read_text())
@@ -183,7 +201,7 @@ def main():
             subprocess.run(['systemctl','restart','ai-village-memory-gateway.service'],check=True)
             subprocess.run(['systemctl','is-active','--quiet','ai-village-memory-gateway.service'],check=True)
             if args.no_start:
-                print('Installed successfully without starting or restarting resident services (--no-start).')
+                print('Installed successfully without touching currently running resident services (--no-start); any resident that was already active keeps running the old code until you restart it.')
             else:
                 pause_marker=Path(os.environ.get('VILLAGE_PAUSE_MARKER','/etc/ai-village/paused'))
                 if pause_marker.exists():
