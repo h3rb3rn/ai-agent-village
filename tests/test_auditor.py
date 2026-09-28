@@ -16,7 +16,7 @@ from unittest.mock import MagicMock
 
 from village.auditor import (
     AuditStore, audit_cycle, deliver, detect_foreign_home_access,
-    detect_format_violation, detect_repeated_action, scan,
+    detect_format_violation, detect_recurring_meeting_blocker, detect_repeated_action, scan,
 )
 from village.coordinator import CoordinationStore
 
@@ -55,6 +55,46 @@ class DetectorTests(unittest.TestCase):
     def test_unrelated_events_produce_no_findings(self):
         e = event("02-explorer", "command_result", "result=success; command=ls")
         self.assertEqual(scan([e]), [])
+
+    def test_recurring_meeting_blocker_fires_on_near_identical_wording(self):
+        # P57 (operator directive): "Wenn im Jourfix wiederholt die gleichen
+        # Probleme trotz Selbsterkenntnis auftreten muessen diese sanktioniert
+        # werden." Wording legitimately varies between reports - similarity,
+        # not exact match.
+        e1 = event("02-explorer", "meeting_result",
+                   "meeting_id=m1; agent_id=02-explorer; saved=true; blockers=Multiple overlapping disk monitoring tasks exist",
+                   ts="2026-09-28T02:10:00+00:00")
+        e2 = event("02-explorer", "meeting_result",
+                   "meeting_id=m2; agent_id=02-explorer; saved=true; blockers=Multiple overlapping disk monitoring tasks still exist",
+                   ts="2026-09-28T14:10:00+00:00")
+        findings = detect_recurring_meeting_blocker([e1, e2])
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].agent, "02-explorer")
+        self.assertIn("overlapping disk monitoring", findings[0].problem)
+
+    def test_trivial_blockers_never_fire(self):
+        e1 = event("06-operator", "meeting_result", "meeting_id=m1; agent_id=06-operator; saved=true; blockers=none")
+        e2 = event("06-operator", "meeting_result", "meeting_id=m2; agent_id=06-operator; saved=true; blockers=None.")
+        self.assertEqual(detect_recurring_meeting_blocker([e1, e2]), [])
+
+    def test_genuinely_different_blockers_do_not_fire(self):
+        e1 = event("08-logician", "meeting_result",
+                   "meeting_id=m1; agent_id=08-logician; saved=true; blockers=Unverified GPU readiness")
+        e2 = event("08-logician", "meeting_result",
+                   "meeting_id=m2; agent_id=08-logician; saved=true; blockers=Waiting on peer review of shared script")
+        self.assertEqual(detect_recurring_meeting_blocker([e1, e2]), [])
+
+    def test_a_single_report_never_fires_alone(self):
+        e1 = event("03-librarian", "meeting_result",
+                   "meeting_id=m1; agent_id=03-librarian; saved=true; blockers=Same disk space problem again")
+        self.assertEqual(detect_recurring_meeting_blocker([e1]), [])
+
+    def test_different_agents_are_never_cross_compared(self):
+        e1 = event("02-explorer", "meeting_result",
+                   "meeting_id=m1; agent_id=02-explorer; saved=true; blockers=Overlapping disk monitoring tasks exist")
+        e2 = event("01-king", "meeting_result",
+                   "meeting_id=m1; agent_id=01-king; saved=true; blockers=Overlapping disk monitoring tasks exist")
+        self.assertEqual(detect_recurring_meeting_blocker([e1, e2]), [])
 
     def test_scan_runs_every_signature(self):
         events = [

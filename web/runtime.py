@@ -972,11 +972,21 @@ class Resident:
                 op = args.get('operation') or args.get('action')
                 if op == 'report':
                     result = self.meetings.report(args['meeting_id'], self.id, args.get('achieved',''), args.get('evidence',''), args.get('next_step',''), args.get('blockers',''))
+                    # P57: the submitted blockers text used to be entirely
+                    # invisible in telemetry - meeting_result only ever
+                    # carried {meeting_id, agent_id, saved}. Without it,
+                    # nothing (not the Auditor, not an operator) could ever
+                    # tell that an agent named the same unresolved blocker
+                    # meeting after meeting despite recognizing it each time.
+                    blockers_text = str(args.get('blockers', '')).strip()[:300]
+                    self.event('meeting_result', f"meeting_id={args['meeting_id']}; agent_id={self.id}; "
+                                                  f"saved=true; blockers={blockers_text}")
                 elif op == 'close':
                     result = self.meetings.close(args['meeting_id'])
+                    self.event('meeting_result', json.dumps(result, ensure_ascii=False))
                 else:
                     raise ValueError('meeting_operation requires report or close')
-                self.event('meeting_result', json.dumps(result, ensure_ascii=False)); self.feedback(name, json.dumps(result, ensure_ascii=False), True)
+                self.feedback(name, json.dumps(result, ensure_ascii=False), True)
             elif name == 'research_proposal':
                 op = args.get('operation') or args.get('action')
                 store = self.tasks.store

@@ -18,6 +18,7 @@ not duplicated authoring.
 """
 from __future__ import annotations
 
+import difflib
 import re
 import sqlite3
 import uuid
@@ -151,8 +152,60 @@ def detect_format_violation(events: Iterable[Mapping[str, Any]]) -> List[AuditFi
 FORMAT_REASONS = _FORMAT_REASONS
 
 
+_MEETING_BLOCKER_RE = re.compile(r"meeting_id=([^;]*);\s*agent_id=([^;]*);\s*saved=true;\s*blockers=(.*)$", re.S)
+_TRIVIAL_BLOCKERS = {"", "none", "none.", "none identified", "n/a", "na", "-", "no blockers", "no blockers.", "none noted"}
+_RECURRING_BLOCKER_SIMILARITY = 0.6  # difflib.SequenceMatcher ratio; deliberately stdlib, no embeddings/LLM
+
+
+def detect_recurring_meeting_blocker(events: Iterable[Mapping[str, Any]]) -> List[AuditFinding]:
+    """P57 (operator directive, 2026-09-28): "Wenn im Jourfix wiederholt die
+    gleichen Probleme trotz Selbsterkenntnis auftreten muessen diese
+    sanktioniert werden." A blocker an agent explicitly names in one
+    Jour-Fixe report, then names again - essentially unchanged - in a later
+    report, was self-recognized but never actually resolved. Flagged as its
+    own escalated category (visible via failure_tally/your_repeated_mistakes,
+    P46) rather than silently repeated to the agent forever.
+
+    Text similarity, not exact match: wording legitimately varies between
+    reports even when the underlying problem does not. difflib.SequenceMatcher
+    (stdlib) keeps this deterministic and explainable, consistent with the
+    module's no-LLM design for this layer - a nuanced judgment call would
+    belong in village/auditor_llm.py, not here.
+    """
+    findings = []
+    by_agent: Dict[str, List[Dict[str, Any]]] = {}
+    for e in events:
+        if e.get("event") != "meeting_result":
+            continue
+        match = _MEETING_BLOCKER_RE.search(str(e.get("detail", "")))
+        if not match:
+            continue
+        agent, blockers = match.group(2).strip(), match.group(3).strip()
+        if blockers.lower() in _TRIVIAL_BLOCKERS:
+            continue
+        by_agent.setdefault(agent, []).append({"event": e, "blockers": blockers})
+    for agent, reports in by_agent.items():
+        for prev, cur in zip(reports, reports[1:]):
+            ratio = difflib.SequenceMatcher(None, prev["blockers"].lower(), cur["blockers"].lower()).ratio()
+            if ratio < _RECURRING_BLOCKER_SIMILARITY:
+                continue
+            findings.append(AuditFinding(
+                category="recurring_meeting_blocker", agent=agent, model=_agent_model(cur["event"]),
+                source_event_id=str(cur["event"].get("event_id", "")),
+                problem=(f'You reported this same Jour-Fixe blocker before without resolving it: '
+                         f'"{cur["blockers"][:200]}" - recognized, but it recurred essentially unchanged.'),
+                solution=("A repeated blocker means the previous next_step did not actually address it. "
+                          "Take a genuinely different concrete step this time, or escalate it explicitly "
+                          "(ask a named peer, propose it as shared work) instead of restating it next time."),
+                rejected_example=prev["blockers"][:1500],
+                corrected_example=cur["blockers"][:1500],
+            ))
+    return findings
+
+
 SIGNATURES: Dict[str, Callable[[Iterable[Mapping[str, Any]]], List[AuditFinding]]] = {
     "foreign_home_access": detect_foreign_home_access,
+    "recurring_meeting_blocker": detect_recurring_meeting_blocker,
     "repeated_action": detect_repeated_action,
     "format_violation": detect_format_violation,
 }

@@ -92,6 +92,7 @@ Pro Paket Nachweis unter `docs/evidence/Pxx.md` anlegen, sobald tatsächlich dar
 | P54 | AI Village Gazette: Zuteilung als echte Königsaktion (statt automatischer Berechnung mit bloß behaupteter Zuschreibung) | Betreiberkorrektur "Auf echte Delegation durch King umstellen" | LOCAL_VERIFIED | [docs/evidence/P54.md](evidence/P54.md) |
 | P55 | AI Village Gazette Stufe 3: deterministischer Compiler + redaktionelle Prüfinstanz (09-chronicler); Nebenfund: projects-Trimm-Reihenfolge-Bug aus P48 behoben | Betreiberwunsch (Compiler), Betreiberkorrektur (Prüfinstanz) | LOCAL_VERIFIED | [docs/evidence/P55.md](evidence/P55.md) · Stufe 4 offen |
 | P56 | Meeting-Report-Hinweis unbegrenzt ignorierbar (gleiche Lücke wie P51, andere Stelle) – Deckelung ergänzt | Live-Beobachtung (Chronicler-Blockade bei P55-Validierung), Betreiberauftrag "nachhaltige Lösung" | LOCAL_VERIFIED | [docs/evidence/P56.md](evidence/P56.md) |
+| P57 | Sichtbare Eskalation bei wiederholt selbst erkannten, ungelösten Jour-Fixe-Blockern (neue Auditor-Signatur `recurring_meeting_blocker`) | Live-Auswertung Jour-Fixe-Effektivität, Betreiberauftrag "müssen sanktioniert werden" | LOCAL_VERIFIED | [docs/evidence/P57.md](evidence/P57.md) |
 
 ## Fortschrittsbuch
 
