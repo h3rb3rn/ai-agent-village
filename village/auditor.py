@@ -203,9 +203,46 @@ def detect_recurring_meeting_blocker(events: Iterable[Mapping[str, Any]]) -> Lis
     return findings
 
 
+_MEETING_UNREPORTED_RE = re.compile(r"meeting_id=([^;]*);\s*agent=(.*)$")
+
+
+def detect_meeting_never_reported(events: Iterable[Mapping[str, Any]]) -> List[AuditFinding]:
+    """P58-follow-up (operator: 'Nicht nur beobachten wenn du GAPs
+    identifizierst, sondern proaktiv loesen'). A meeting force-closed by
+    scripts/meeting-scheduler.py on age alone used to erase all trace of
+    who never reported - an agent could out-wait the P56 gate for up to 4h
+    with zero lasting consequence. scripts/meeting-scheduler.py now emits
+    one meeting_unreported event per agent who never reported before
+    closure; this signature makes that visible via the same
+    failure_tally/Auditor pipeline as every other category (P57's
+    'sichtbare Eskalation' directive)."""
+    findings = []
+    for e in events:
+        if e.get("event") != "meeting_unreported":
+            continue
+        match = _MEETING_UNREPORTED_RE.search(str(e.get("detail", "")))
+        if not match:
+            continue
+        mid, agent = match.group(1).strip(), match.group(2).strip()
+        findings.append(AuditFinding(
+            category="meeting_never_reported", agent=agent, model=_agent_model(e),
+            source_event_id=str(e.get("event_id", "")),
+            problem=(f"You never submitted a meeting_operation report for {mid} before it was closed - "
+                     "the meeting-gate nudge was ignored until the scheduler force-closed the stale "
+                     "agenda, leaving no record of your status."),
+            solution=("Submit meeting_operation report as soon as the gate blocks you, not after - a "
+                      "closed meeting cannot be reported on retroactively."),
+            rejected_example=f"meeting_id={mid} closed with no report from {agent}",
+            corrected_example='{"name":"meeting_operation","arguments":{"operation":"report","meeting_id":"<id>",'
+                              '"achieved":"...","evidence":"...","next_step":"...","blockers":"..."}}',
+        ))
+    return findings
+
+
 SIGNATURES: Dict[str, Callable[[Iterable[Mapping[str, Any]]], List[AuditFinding]]] = {
     "foreign_home_access": detect_foreign_home_access,
     "recurring_meeting_blocker": detect_recurring_meeting_blocker,
+    "meeting_never_reported": detect_meeting_never_reported,
     "repeated_action": detect_repeated_action,
     "format_violation": detect_format_violation,
 }

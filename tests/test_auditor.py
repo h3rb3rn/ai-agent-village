@@ -16,7 +16,8 @@ from unittest.mock import MagicMock
 
 from village.auditor import (
     AuditStore, audit_cycle, deliver, detect_foreign_home_access,
-    detect_format_violation, detect_recurring_meeting_blocker, detect_repeated_action, scan,
+    detect_format_violation, detect_meeting_never_reported,
+    detect_recurring_meeting_blocker, detect_repeated_action, scan,
 )
 from village.coordinator import CoordinationStore
 
@@ -88,6 +89,13 @@ class DetectorTests(unittest.TestCase):
         e1 = event("03-librarian", "meeting_result",
                    "meeting_id=m1; agent_id=03-librarian; saved=true; blockers=Same disk space problem again")
         self.assertEqual(detect_recurring_meeting_blocker([e1]), [])
+
+    def test_meeting_never_reported_fires_per_agent(self):
+        e = event("09-chronicler", "meeting_unreported", "meeting_id=m1; agent=09-chronicler")
+        findings = detect_meeting_never_reported([e])
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].agent, "09-chronicler")
+        self.assertIn("m1", findings[0].problem)
 
     def test_different_agents_are_never_cross_compared(self):
         e1 = event("02-explorer", "meeting_result",
