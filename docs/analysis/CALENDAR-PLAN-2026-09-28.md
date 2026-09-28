@@ -79,9 +79,13 @@ tatsächlichen Kapazität des jeweiligen Agenten passt.
 
 - Anders als bei der Gazette (PDF/Dashboard erst Stufe 4) ist
   Dashboard-Sichtbarkeit hier ausdrücklich ein Kernwunsch, kein
-  Nachtrag – neuer Menüpunkt/Panel im Observatory-Dashboard, das alle 9
-  Kalender (inkl. König) nebeneinander zeigt, inklusive der festen
-  Einträge aus Stufe 2 und optional der Kapazitätsprognose als
+  Nachtrag.
+- **Kein eigener Menüpunkt** (Betreiberentscheidung 2026-09-28): der
+  Kalender erscheint als neuer Abschnitt/Panel **innerhalb der
+  bestehenden Agenten-Seite** (`/agents`, `web/observatory.html`), nicht
+  als eigenständiger Sidebar-Eintrag wie die Gazette. Zeigt alle 9
+  Kalender (inkl. König) nebeneinander bzw. je Bewohnerkarte, inklusive
+  der festen Einträge aus Stufe 2 und optional der Kapazitätsprognose als
   Kontextinfo je Bewohner.
 
 ## Bewusst noch offen / nicht entschieden

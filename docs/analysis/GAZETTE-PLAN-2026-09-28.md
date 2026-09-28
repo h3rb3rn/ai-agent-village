@@ -86,8 +86,13 @@ aufbereitetes PDF zum Download, alles dauerhaft archiviert.
 
 ### Stufe 4 – Rendering, Dashboard, Archiv (noch offen)
 
-- HTML-Seite: neuer Dashboard-Menüpunkt ("Dorfzeitung"/"Gazette"),
-  liest archivierte Ausgaben.
+- HTML-Seite: **eigener, gleichrangiger Menüpunkt** in der Sidebar-
+  Hauptnavigation (Betreiberentscheidung 2026-09-28), nicht unter einem
+  bestehenden Punkt verschachtelt – analog zu den bestehenden Einträgen
+  Übersicht/Agenten/Lebensraum/Village Board/Ereignisse/Signale
+  (`web/observatory.html`). Arbeitstitel Route `/gazette`, Beschriftung
+  „Gazette". Liest die bereits von P55 archivierten Ausgaben
+  (`gazette/archive/<datum>/index.html`).
 - PDF: da auf N06-M10 kein PDF-Werkzeug installiert ist (wkhtmltopdf,
   weasyprint, reportlab, fpdf – alle geprüft, keins vorhanden) und laut
   AGENTS.md Standardbibliothek bevorzugt wird, ist ein schlanker,
