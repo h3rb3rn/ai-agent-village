@@ -292,6 +292,68 @@ class SnapshotToolsSyncTests(unittest.TestCase):
         self.assertIn('owner', snap['task_ownership_note'])
 
 
+class FailureTallyContextTests(unittest.TestCase):
+    """P46 (operator, 2026-09-28): "Task A Strichliste mit Fehlversuch/Erfolg je
+    gewaehlten Weg und das wegspeichern" - a stateless resident could not
+    otherwise notice it has made the exact same mistake many times (live
+    evidence the same day: 03-librarian corrected 7x for one unit-conversion
+    bug over 3.5 hours). Resident.failure_tally() reads village/auditor.py's
+    own (rejected, corrected) history and surfaces it in the per-turn context
+    as your_repeated_mistakes, cached like capability_summary()."""
+
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp(prefix='village-tally-ctx-'))
+        (self.root / 'board').mkdir(); (self.root / 'telemetry').mkdir()
+        (self.root / 'identity.txt').write_text('identity')
+        self.env = dict(AGENT_ID='03-librarian', AGENT_NAME='librarian', AGENT_ROLE='resident', VILLAGE_ROOT=str(self.root),
+                        AGENT_IDENTITY_PROMPT=str(self.root / 'identity.txt'), OLLAMA_MODEL='m')
+        self.agent = Resident(self.env)
+
+    def tearDown(self):
+        shutil.rmtree(self.root, ignore_errors=True)
+
+    def _seed_audit_log(self, agent, category, count):
+        from village.auditor import AuditStore, AuditFinding
+        store = AuditStore(self.root / 'telemetry' / 'audit.sqlite3')
+        for i in range(count):
+            store.route(AuditFinding(category=category, agent=agent, source_event_id=f'{category}-{i}',
+                                     problem=f'problem {i}', solution=f'solution {i}'),
+                       now=f'2026-09-2{7 if i < 4 else 8}T{10 + i:02d}:00:00+00:00')
+        return store
+
+    def test_no_audit_history_yields_an_empty_list(self):
+        snap = json.loads(self.agent.snapshot())
+        self.assertEqual(snap['your_repeated_mistakes'], [])
+
+    def test_repeated_mistakes_reach_the_context_worst_first(self):
+        self._seed_audit_log('03-librarian', 'format_violation', 3)
+        self._seed_audit_log('03-librarian', 'foreign_home_access', 1)
+        snap = json.loads(self.agent.snapshot())
+        tally = snap['your_repeated_mistakes']
+        self.assertEqual(tally[0]['category'], 'format_violation')
+        self.assertEqual(tally[0]['count'], 3)
+
+    def test_another_agents_history_is_never_shown(self):
+        self._seed_audit_log('01-king', 'format_violation', 5)
+        snap = json.loads(self.agent.snapshot())
+        self.assertEqual(snap['your_repeated_mistakes'], [])
+
+    def test_missing_audit_database_degrades_to_empty_not_a_crash(self):
+        # No telemetry/audit.sqlite3 file exists yet (auditor never ran) -
+        # AuditStore.__init__ itself creates one, so this proves the read path
+        # tolerates a freshly-created, empty database rather than assuming
+        # pre-existing data.
+        snap = json.loads(self.agent.snapshot())
+        self.assertEqual(snap['your_repeated_mistakes'], [])
+
+    def test_result_is_cached_within_the_ttl(self):
+        self._seed_audit_log('03-librarian', 'format_violation', 1)
+        first = self.agent.failure_tally(ttl_seconds=1800)
+        self._seed_audit_log('03-librarian', 'format_violation', 5)  # would change the count if not cached
+        second = self.agent.failure_tally(ttl_seconds=1800)
+        self.assertEqual(first, second)
+
+
 class BoardMessageOwnershipCheckTests(unittest.TestCase):
     """P42-continuation: a prompt-only ownership reminder (task_ownership_note)
     did not change observed behaviour on N06-M10 - 03-librarian kept

@@ -355,6 +355,7 @@ class Resident:
             tools={name: ACTION_SPECS[name]['doc'] for name in normalize_allowed(self.policy.allowed_actions)},
             task_ownership_note='Before announcing you will do a task, check its "owner" in projects; '
                                 'if someone else already owns it, do not duplicate their announced intent.',
+            your_repeated_mistakes=self.failure_tally(),
             private_work_directory=str(self.home), groups=os.getgroups())
         if self.policy.task_templates:
             share = self.env.get('VILLAGE_SHARE_DIR', '/usr/local/share/ai-village')
@@ -865,6 +866,31 @@ class Resident:
         self.state['capabilities_summary'] = summary
         self.state['capabilities_at'] = time.time()
         return summary
+
+    def failure_tally(self, ttl_seconds: float = 600.0) -> list:
+        """P46 (operator, 2026-09-28): "Task A Strichliste mit Fehlversuch/Erfolg
+        je gewaehlten Weg und das wegspeichern" - live evidence the same day
+        showed a single delivered Auditor correction is read once and forgotten
+        by the next cycle (03-librarian corrected 7x for the identical
+        unit-conversion bug over 3.5 hours; 01-king/04-artisan hit
+        format_violation on almost every 1h rate-limit reset, no improvement).
+        This turns village/auditor.py's own (rejected, corrected) history -
+        already persisted, already used for fine-tuning export - into the
+        cumulative experience tally this project never fed back as a decision
+        input: "you have made this exact mistake N times", not a one-off note.
+        Read-only against the auditor's own SQLite file; any failure (auditor
+        never ran yet, file locked) degrades to an empty list, never a crash."""
+        cached_at = self.state.get('failure_tally_at', 0)
+        if time.time() - cached_at < ttl_seconds and 'failure_tally_cache' in self.state:
+            return self.state['failure_tally_cache']
+        try:
+            from village.auditor import AuditStore
+            tally = AuditStore(self.root / 'telemetry' / 'audit.sqlite3').tally_for_agent(self.id)
+        except Exception:
+            tally = []
+        self.state['failure_tally_cache'] = tally
+        self.state['failure_tally_at'] = time.time()
+        return tally
 
     def cycle(self):
         # P01/P07: Respect persistent pause marker and drain/abort modes

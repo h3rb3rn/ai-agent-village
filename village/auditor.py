@@ -338,6 +338,35 @@ class AuditStore:
             "last_cycle_at": totals["last_cycle_at"] if totals else None,
         }
 
+    def tally_for_agent(self, agent: str, limit: int = 5) -> List[Dict[str, Any]]:
+        """P46: a single delivered correction is read once and forgotten by the
+        next cycle - a stateless resident has no way to notice "I have made
+        this exact mistake 7 times before". This turns the audit_log's
+        (rejected, corrected) history into the cumulative tally VISION.md's
+        operator asked for (a persisted win/fail count per approach, fed back
+        as a decision input - the "Bauchgefuehl aus Erfahrung" this project
+        never had): per category, how many times this agent was corrected and
+        the most recent problem/solution, worst offender first."""
+        with self._conn() as conn:
+            rows = conn.execute(
+                """SELECT category, count(*) AS n, max(created_at) AS last_at
+                   FROM audit_log WHERE agent = ? GROUP BY category ORDER BY n DESC, last_at DESC""",
+                (agent,),
+            ).fetchall()
+            result = []
+            for row in rows[:limit]:
+                latest = conn.execute(
+                    """SELECT problem, solution FROM audit_log
+                       WHERE agent = ? AND category = ? ORDER BY created_at DESC LIMIT 1""",
+                    (agent, row["category"]),
+                ).fetchone()
+                result.append({
+                    "category": row["category"], "count": row["n"], "last_at": row["last_at"],
+                    "last_problem": latest["problem"] if latest else "",
+                    "last_solution": latest["solution"] if latest else "",
+                })
+            return result
+
     def mark_delivered(self, category: str, source_event_id: str) -> None:
         with self._conn() as conn:
             conn.execute(

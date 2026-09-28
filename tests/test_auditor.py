@@ -216,5 +216,77 @@ class AuditCycleIntegrationTests(unittest.TestCase):
         self.assertEqual(audit_cycle(events, self.store, coordination_store=self.coord, memory_writer=self.memory_writer), 0)
 
 
+class FailureTallyTests(unittest.TestCase):
+    """P46: live evidence on N06-M10 (2026-09-28) showed a single delivered
+    correction is read once and forgotten by the next cycle - 03-librarian was
+    corrected for the exact same unit-conversion bug 7 times over 3.5 hours,
+    01-king/04-artisan hit format_violation on almost every rate-limit reset.
+    tally_for_agent() turns the (rejected, corrected) history already in
+    audit_log into the cumulative win/fail count the operator asked for -
+    "Strichliste... je gewaehlten Weg" - so a stateless resident can be told
+    "you have made this exact mistake N times" instead of starting fresh
+    every cycle."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="village-tally-"))
+        self.store = AuditStore(self.tmp / "audit.sqlite3")
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _foreign_home(self, agent, event_id, ts):
+        return next(iter(detect_foreign_home_access([
+            event(agent, "foreign_home_blocked", "target_agent=08-logician; command_prefix=x", event_id=event_id, ts=ts)
+        ])))
+
+    def _format_violation(self, agent, event_id, ts):
+        return next(iter(detect_format_violation([
+            event(agent, "invalid_decision_detail", "reason=multiple action blocks; preview=broken json",
+                 event_id=event_id, ts=ts)
+        ])))
+
+    def test_empty_for_an_agent_never_corrected(self):
+        self.assertEqual(self.store.tally_for_agent("03-librarian"), [])
+
+    def test_counts_and_orders_worst_offender_first(self):
+        # 3 foreign_home_access, 1 format_violation for the same agent. route()'s
+        # own rate limit compares against wall-clock time unless `now` is passed
+        # explicitly - it must be, or these three calls (made microseconds apart
+        # in real time) would rate-limit each other regardless of their
+        # synthetic event timestamps.
+        self.store.route(self._foreign_home("03-librarian", "e1", "2026-09-27T20:00:00+00:00"), now="2026-09-27T20:00:00+00:00")
+        self.store.route(self._foreign_home("03-librarian", "e2", "2026-09-27T21:01:00+00:00"), now="2026-09-27T21:01:00+00:00")
+        self.store.route(self._foreign_home("03-librarian", "e3", "2026-09-27T22:02:00+00:00"), now="2026-09-27T22:02:00+00:00")
+        self.store.route(self._format_violation("03-librarian", "e4", "2026-09-27T20:30:00+00:00"), now="2026-09-27T20:30:00+00:00")
+        tally = self.store.tally_for_agent("03-librarian")
+        self.assertEqual(tally[0]["category"], "foreign_home_access")
+        self.assertEqual(tally[0]["count"], 3)
+        self.assertEqual(tally[1]["category"], "format_violation")
+        self.assertEqual(tally[1]["count"], 1)
+
+    def test_includes_the_most_recent_problem_and_solution_text(self):
+        self.store.route(self._foreign_home("03-librarian", "e1", "2026-09-27T20:00:00+00:00"))
+        tally = self.store.tally_for_agent("03-librarian")
+        self.assertIn("private home directory", tally[0]["last_problem"])
+        self.assertTrue(tally[0]["last_solution"])
+
+    def test_other_agents_are_never_mixed_in(self):
+        self.store.route(self._foreign_home("03-librarian", "e1", "2026-09-27T20:00:00+00:00"))
+        self.store.route(self._foreign_home("01-king", "e2", "2026-09-27T21:01:00+00:00"))
+        self.assertEqual(len(self.store.tally_for_agent("01-king")), 1)
+        self.assertEqual(self.store.tally_for_agent("01-king")[0]["count"], 1)
+
+    def test_limit_bounds_how_many_categories_are_returned(self):
+        # 6 distinct format-violation-shaped categories would need 6 different
+        # signatures to produce 6 different categories; simulate directly via
+        # route() with synthetic AuditFinding-like categories instead.
+        from village.auditor import AuditFinding
+        for i in range(6):
+            finding = AuditFinding(category=f"cat{i}", agent="03-librarian", source_event_id=f"e{i}",
+                                   problem="p", solution="s")
+            self.store.route(finding)
+        self.assertEqual(len(self.store.tally_for_agent("03-librarian", limit=3)), 3)
+
+
 if __name__ == "__main__":
     unittest.main()
