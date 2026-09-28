@@ -97,6 +97,40 @@ class RuntimeTests(unittest.TestCase):
         parsed=decision({'message':{'content':json.dumps(obj)}})
         self.assertNotIn('fallback_reason',parsed)
 
+    def test_addressed_messages_survive_oversized_projects_trim(self):
+        # P48 regression: 'projects' alone can dwarf the entire character budget
+        # (observed live: 01-king had 14 real tasks totalling ~13.8k chars against
+        # a ~6.4k budget at the default OLLAMA_NUM_CTX=8192). 'projects' used to be
+        # the most-protected field (trimmed last), so a message addressed directly
+        # to the agent - organic (operator) and direct (peer) alike - was silently
+        # wiped out first while the bulky, re-derivable project snapshot sat
+        # completely untouched. Both must now survive; 'projects' absorbs the cut.
+        big_projects = [{'id': str(i), 'title': 'x' * 700, 'owner': '01-a', 'status': 'open'} for i in range(20)]
+        self.agent.tasks.path.write_text(json.dumps(big_projects))
+        (self.root/'board/organic-inbox.jsonl').write_text(
+            json.dumps({'timestamp': '2026-09-24T11:00:00Z', 'message': 'Operator: please respond.'}) + '\n')
+        self.agent.tasks.store.post_inbox_message(
+            source='direct', sender='02-b', recipient='01-a', content='Please respond directly.')
+        with patch.object(self.agent, 'memory', return_value={'items': []}):
+            ctx = json.loads(self.agent.snapshot())
+        self.assertEqual(len(ctx['recent_organic_messages_untrusted']), 1, ctx.get('recent_organic_messages_untrusted'))
+        self.assertEqual(len(ctx['untrusted_direct_messages']), 1, ctx.get('untrusted_direct_messages'))
+        self.assertLess(len(ctx['projects']), len(big_projects))
+
+    def test_organic_cursor_does_not_advance_past_a_trimmed_out_message(self):
+        # P48 regression: the cursor used to advance to cover every tailed organic
+        # entry regardless of whether it survived context-budget trimming, so a
+        # message dropped for budget reasons was marked permanently "seen" and
+        # never retried. A single message too large to ever fit must leave the
+        # cursor unchanged so the next cycle gets another chance at it.
+        huge_message = 'x' * 20000
+        (self.root/'board/organic-inbox.jsonl').write_text(
+            json.dumps({'timestamp': '2026-09-24T11:00:00Z', 'message': huge_message}) + '\n')
+        with patch.object(self.agent, 'memory', return_value={'items': []}):
+            ctx = json.loads(self.agent.snapshot())
+        self.assertEqual(ctx['recent_organic_messages_untrusted'], [])
+        self.assertEqual(self.agent.pending_organic_cursor, self.agent.state.get('seen_organic_epoch', 0))
+
     def test_organic_message_not_reissued_every_turn(self):
         (self.root/'board/organic-inbox.jsonl').write_text(json.dumps({'timestamp':'2026-09-24T11:00:00Z','message':'A dated request'})+'\n')
         with patch.object(self.agent,'memory',return_value={'items':[]}):

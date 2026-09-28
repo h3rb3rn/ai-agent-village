@@ -291,7 +291,13 @@ class Resident:
         # P09: Sync organic inbox to transactional coordinator store with deterministic IDs
         organic_file = self.board / 'organic-inbox.jsonl'
         organic = tail(organic_file, 50)
-        self.pending_organic_cursor = max((event_time(x) for x in organic), default=self.state.get('seen_organic_epoch', 0))
+        # P48: provisional, non-advancing default. Advancing this to cover every
+        # tailed entry regardless of whether it later survives context-budget
+        # trimming caused organic messages to be marked permanently "seen" even
+        # when the agent never actually saw them (observed live: King's cursor
+        # advanced past an operator instruction that was trimmed out of every
+        # cycle's context). Recomputed below, after trimming, from survivors only.
+        self.pending_organic_cursor = self.state.get('seen_organic_epoch', 0)
         for entry in organic:
             if isinstance(entry, dict) and 'id' not in entry:
                 ts = str(entry.get('timestamp', ''))
@@ -404,13 +410,29 @@ class Resident:
             context['last_action_feedback']['result']=context['last_action_feedback']['result'][-2500:]
         if self.policy.prompt_profile == 'compact':
             context = compact_context(context)
-        for field in ('untrusted_peer_messages','own_recent_results','untrusted_direct_messages',
-                      'recent_organic_messages_untrusted','retrieved_memory_untrusted','projects'):
+        # P48: trim least-actionable content first. 'projects' is a bulky,
+        # re-derivable snapshot (already capped at 32) that can dwarf the whole
+        # budget on its own (observed: 14 tasks ~13.8k chars against a ~6.4k
+        # budget at the default OLLAMA_NUM_CTX) - it used to be trimmed LAST,
+        # so it sat untouched while explicitly-addressed organic/direct
+        # messages were wiped out first. Those are now the most protected:
+        # losing a few stale task rows is a much smaller loss than an agent
+        # never seeing a message addressed directly to it.
+        for field in ('retrieved_memory_untrusted','untrusted_peer_messages','own_recent_results','projects',
+                      'recent_organic_messages_untrusted','untrusted_direct_messages'):
             while context.get(field) and len(json.dumps(context,ensure_ascii=False))>budget:
                 context[field].pop(0)
-        # P09: Track exactly which inbox message IDs survived context trimming to mark delivered
+        # P09/P48: Track exactly which inbox message IDs survived context trimming to
+        # mark delivered. pending_organic_cursor was set to a provisional (non-advancing)
+        # default above; recompute it here from what actually survived trimming, so a
+        # message dropped for budget reasons is retried next cycle instead of being
+        # silently, permanently marked seen (self.state['seen_organic_epoch'] only
+        # advances to cover messages the agent actually had a chance to read).
         delivered_ids = []
-        for item in context.get('recent_organic_messages_untrusted', []):
+        surviving_organic = context.get('recent_organic_messages_untrusted') or []
+        if surviving_organic:
+            self.pending_organic_cursor = max(event_time(x) for x in surviving_organic)
+        for item in surviving_organic:
             if isinstance(item, dict) and item.get('id'):
                 delivered_ids.append(str(item['id']))
         for item in context.get('untrusted_direct_messages', []):
