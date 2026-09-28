@@ -193,6 +193,17 @@ class RuntimeTests(unittest.TestCase):
             after = json.loads(self.agent.snapshot())
         self.assertNotIn('gazette_daily_note', after)
 
+    def test_non_king_gazette_hint_names_the_specific_delegated_kind(self):
+        # P53 escalation: the generic "pick any kind" hint (P52) produced 0
+        # contributions after ~30 minutes despite confirmed delivery - real
+        # delegation names the specific kind King assigned this resident,
+        # not an open choice.
+        edition = self.agent.gazette.open_edition('01-king', ['01-a', '02-b', '03-c'])
+        assigned_kind = edition['assignments']['01-a']
+        with patch.object(self.agent, 'memory', return_value={'items': []}):
+            ctx = json.loads(self.agent.snapshot())
+        self.assertIn(f"kind='{assigned_kind}'", ctx['gazette_daily_note'])
+
     def test_organic_message_not_reissued_every_turn(self):
         (self.root/'board/organic-inbox.jsonl').write_text(json.dumps({'timestamp':'2026-09-24T11:00:00Z','message':'A dated request'})+'\n')
         with patch.object(self.agent,'memory',return_value={'items':[]}):

@@ -80,6 +80,17 @@ class GazetteStore:
                 UNIQUE(edition_id, agent, kind),
                 FOREIGN KEY(edition_id) REFERENCES gazette_editions(id) ON DELETE CASCADE)""")
             c.execute("CREATE INDEX IF NOT EXISTS idx_gazette_contrib_edition ON gazette_contributions(edition_id)")
+            # P53: a generic "pick any kind" hint proved too weak to actually
+            # produce contributions (live observation: 0 after ~30 min
+            # across all 9 residents despite a confirmed-delivered hint -
+            # docs/evidence/P53.md). Real per-agent delegation: each resident
+            # gets one specific, deterministically assigned kind at open
+            # time, same as the game pairing is already drawn - no reliance
+            # on King separately messaging anyone (that already failed once).
+            c.execute("""CREATE TABLE IF NOT EXISTS gazette_assignments(
+                edition_id TEXT NOT NULL, agent TEXT NOT NULL, kind TEXT NOT NULL,
+                PRIMARY KEY(edition_id, agent),
+                FOREIGN KEY(edition_id) REFERENCES gazette_editions(id) ON DELETE CASCADE)""")
             c.commit()
 
     def _conn(self):
@@ -99,14 +110,34 @@ class GazetteStore:
         rng = rng or random.Random()
         game = rng.choice(GAME_POOL)
         pair = rng.sample(peers, 2) if len(peers) >= 2 else list(peers)
+        # P53: real per-agent delegation, drawn deterministically at open
+        # time just like the game/pairing - never dependent on King
+        # separately messaging each peer (a generic broadcast already
+        # proved too weak to produce contributions, see docs/evidence/P53.md).
+        assignable_kinds = [k for k in CONTRIBUTION_KINDS if k != "game_result"]
+        shuffled_kinds = list(assignable_kinds)
+        rng.shuffle(shuffled_kinds)
+        roster = [king_agent] + [p for p in peers if p != king_agent]
+        assignments = [(eid, agent, shuffled_kinds[i % len(shuffled_kinds)]) for i, agent in enumerate(roster)]
         with self._conn() as c:
             c.execute(
                 "INSERT OR IGNORE INTO gazette_editions(id,status,opened_by,opened_at,game_name,game_pair,compiled_at) "
                 "VALUES(?,?,?,?,?,?,NULL)",
                 (eid, "open", king_agent, now(), game, ",".join(pair)),
             )
+            c.executemany(
+                "INSERT OR IGNORE INTO gazette_assignments(edition_id,agent,kind) VALUES(?,?,?)",
+                assignments,
+            )
             c.commit()
         return self.get_edition(eid)  # type: ignore
+
+    def get_assignment(self, edition_id: str, agent: str) -> Optional[str]:
+        with self._conn() as c:
+            row = c.execute(
+                "SELECT kind FROM gazette_assignments WHERE edition_id=? AND agent=?", (edition_id, agent)
+            ).fetchone()
+            return row["kind"] if row else None
 
     def get_edition(self, edition_id: str) -> Optional[Dict[str, Any]]:
         with self._conn() as c:
@@ -120,6 +151,11 @@ class GazetteStore:
                     "SELECT * FROM gazette_contributions WHERE edition_id=? ORDER BY created_at", (edition_id,)
                 )
             ]
+            result["assignments"] = {
+                r["agent"]: r["kind"] for r in c.execute(
+                    "SELECT agent, kind FROM gazette_assignments WHERE edition_id=?", (edition_id,)
+                )
+            }
             return result
 
     def list_editions(self, limit: int = 30) -> List[Dict[str, Any]]:

@@ -414,22 +414,32 @@ class Resident:
                         "peers know to contribute via gazette_operation contribute."
                     )
         else:
-            # A one-off broadcast from King asking everyone to contribute has
-            # the identical problem the direct nudge to King had (P48/P49):
-            # it competes with each resident's own ongoing work and loses -
-            # live observation: all 9 residents active, each on their own
-            # project, zero Gazette contributions hours after a correct
-            # village-wide announcement. Every resident who has not yet
-            # contributed today gets the same always-visible, self-limiting
-            # hint King already has, instead of relying on that message.
+            # P52: a one-off broadcast from King asking everyone to
+            # contribute had the identical problem the direct nudge to King
+            # had (P48/P49) - it competes with each resident's own ongoing
+            # work and loses. The generic "pick any kind" version of this
+            # hint (P52) still produced 0 contributions across all 9
+            # residents after ~30 minutes, confirmed delivered. P53
+            # escalates to real per-agent delegation: each resident is
+            # deterministically assigned one specific kind at open time
+            # (village/gazette.py::open_edition), named explicitly here
+            # instead of leaving the choice open.
             gazette_edition = self.gazette.get_edition(gazette_today())
             if gazette_edition and not any(c['agent'] == self.id for c in gazette_edition['contributions']):
-                context['gazette_daily_note'] = (
-                    "Today's AI Village Gazette edition is open and you have not contributed "
-                    "yet. Send one short gazette_operation contribute (max 400 chars) - pick "
-                    "any kind that fits: state/mood/wishes/topics/suggestions/learning/outlook/"
-                    "village_news (game_result is reserved for today's drawn pair)."
-                )
+                assigned_kind = gazette_edition.get('assignments', {}).get(self.id)
+                if assigned_kind:
+                    context['gazette_daily_note'] = (
+                        f"Today's AI Village Gazette edition is open. King has assigned you the "
+                        f"'{assigned_kind}' section - send one gazette_operation contribute with "
+                        f"kind='{assigned_kind}' and a short (max 400 chars) entry."
+                    )
+                else:
+                    context['gazette_daily_note'] = (
+                        "Today's AI Village Gazette edition is open and you have not contributed "
+                        "yet. Send one short gazette_operation contribute (max 400 chars) - pick "
+                        "any kind that fits: state/mood/wishes/topics/suggestions/learning/outlook/"
+                        "village_news (game_result is reserved for today's drawn pair)."
+                    )
         if own_project and own_project.get('blockers'):
             context['task_blocker_guidance'] = (
                 f"Your active task {own_project['id']} has blockers: {own_project['blockers']}. "
