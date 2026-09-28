@@ -131,6 +131,26 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(ctx['recent_organic_messages_untrusted'], [])
         self.assertEqual(self.agent.pending_organic_cursor, self.agent.state.get('seen_organic_epoch', 0))
 
+    def test_king_sees_a_daily_gazette_hint_until_he_opens_one(self):
+        # Gazette Stufe 2 (P48): a one-off nudge proved unreliable in live
+        # observation (delivered, acknowledged, never acted on - P48.md). An
+        # always-visible King-only hint must appear while no edition is open
+        # for today, and disappear the moment King actually opens one.
+        king_env = dict(self.env, AGENT_ID='01-king', AGENT_NAME='king', AGENT_ROLE='king')
+        king = Resident(king_env)
+        with patch.object(king, 'memory', return_value={'items': []}):
+            before = json.loads(king.snapshot())
+        self.assertIn('gazette_daily_note', before)
+        king.gazette.open_edition('01-king', ['02-b', '03-c'])
+        with patch.object(king, 'memory', return_value={'items': []}):
+            after = json.loads(king.snapshot())
+        self.assertNotIn('gazette_daily_note', after)
+
+    def test_non_king_never_sees_the_gazette_hint(self):
+        with patch.object(self.agent, 'memory', return_value={'items': []}):
+            ctx = json.loads(self.agent.snapshot())
+        self.assertNotIn('gazette_daily_note', ctx)
+
     def test_organic_message_not_reissued_every_turn(self):
         (self.root/'board/organic-inbox.jsonl').write_text(json.dumps({'timestamp':'2026-09-24T11:00:00Z','message':'A dated request'})+'\n')
         with patch.object(self.agent,'memory',return_value={'items':[]}):
