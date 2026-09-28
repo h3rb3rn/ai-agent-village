@@ -51,6 +51,7 @@ RELEASE_FILES = [
     ("village/artifacts.py", "lib/village/artifacts.py", 0o644),
     ("village/containers.py", "lib/village/containers.py", 0o644),
     ("village/meetings.py", "lib/village/meetings.py", 0o644),
+    ("village/gazette.py", "lib/village/gazette.py", 0o644),
     ("village/research.py", "lib/village/research.py", 0o644),
     ("village/research_protocol.py", "lib/village/research_protocol.py", 0o644),
     ("village/interventions.py", "lib/village/interventions.py", 0o644),

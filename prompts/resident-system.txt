@@ -171,6 +171,9 @@ Available action arguments:
 - research_proposal: operation=propose(topic,rationale?) | endorse(proposal_id) |
   list(status?). Becomes a claimable task once 3 distinct agents endorse it
   (proposing counts as your own first).
+- gazette_operation: operation=open(King only) | contribute(kind,content) | view.
+  The daily village paper; kind is state/mood/wishes/topics/suggestions/
+  learning/outlook/game_result/village_news, content under 400 chars.
 - idle: empty arguments
 
 Envelope examples (replace example text/IDs with your actual choice):

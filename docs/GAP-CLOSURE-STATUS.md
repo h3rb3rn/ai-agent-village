@@ -82,6 +82,7 @@ Pro Paket Nachweis unter `docs/evidence/Pxx.md` anlegen, sobald tatsächlich dar
 | P44 | Auditor-Dashboard responsiv + 2 weitere seitenweite Responsive-Lücken | Betreiberfrage | HOST_VERIFIED | [docs/evidence/P44.md](evidence/P44.md) |
 | P45 | task_templates für King aktiviert (bewusst nicht dorfweit) | VISION.md, Live-Beobachtung | HOST_VERIFIED | [docs/evidence/P45.md](evidence/P45.md) |
 | P46 | Kumulative Fehler-Strichliste je Agent/Kategorie aus Auditor-Historie | Betreiber-Idee, Live-Beobachtung | LOCAL_VERIFIED | [docs/evidence/P46.md](evidence/P46.md) · Host-Rollout während Pause |
+| P47 | AI Village Gazette Stufe 1: Datenmodell + Beitrags-/Königs-Aktion (`gazette_operation`) | VISION.md, Betreiberwunsch | LOCAL_VERIFIED | [docs/evidence/P47.md](evidence/P47.md) · Stufen 2–4 offen, siehe [Plan](analysis/GAZETTE-PLAN-2026-09-28.md) |
 
 ## Fortschrittsbuch
 

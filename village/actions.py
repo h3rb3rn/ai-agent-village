@@ -88,6 +88,17 @@ ACTION_SPECS: Dict[str, Dict[str, Any]] = {
             "topic": _s(200), "rationale": _s(400), "proposal_id": _s(80),
             "status": {"enum": ["open", "adopted"]}},
         "required": ["operation"]},
+    "gazette_operation": {
+        "doc": "operation=open(King only, starts today's AI Village Gazette edition and draws the "
+              "day's game+pair)|contribute(kind,content)|view(edition_id?) -> the daily village paper; "
+              "kind is one of state/mood/wishes/topics/suggestions/learning/outlook/game_result/village_news, "
+              "content max 400 chars - a short fact, not an essay",
+        "properties": {
+            "operation": {"enum": ["open", "contribute", "view"]},
+            "kind": {"enum": ["state", "mood", "wishes", "topics", "suggestions", "learning",
+                             "outlook", "game_result", "village_news"]},
+            "content": _s(400), "edition_id": _s(20)},
+        "required": ["operation"]},
     "idle": {"doc": "no arguments -> deliberate rest", "properties": {}, "required": []},
 }
 

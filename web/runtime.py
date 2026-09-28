@@ -44,6 +44,8 @@ from village.jobs import JobManager
 from village.teams import TeamStore
 from village.research import ResearchBroker
 from village.meetings import MeetingStore
+from village.gazette import GazetteStore
+from village.gazette import today as gazette_today
 from village.collaboration import assess as assess_collaboration, is_checkpoint_action
 from village.lifecycle import InferenceState, InferenceTracker, classify_error
 from village.security import redact_text, sanitize_tool_env
@@ -185,6 +187,8 @@ class Resident:
         self.teams = TeamStore(self.board / 'coordination.sqlite3')
         self.research = ResearchBroker()
         self.meetings = MeetingStore(self.board / 'coordination.sqlite3')
+        # P47: AI Village Gazette - the daily edition the residents write themselves.
+        self.gazette = GazetteStore(self.board / 'coordination.sqlite3')
         # P12: SQLite-backed manager for persistent background tool jobs with crash reconciliation
         self.jobs = JobManager(self.home / 'jobs.sqlite3')
         reconciled_jobs = self.jobs.reconcile_stale_jobs(self.id)
@@ -827,6 +831,39 @@ class Resident:
                     raise ValueError('research_proposal requires operation propose, endorse, or list')
                 self.event('research_proposal_result', json.dumps(result, ensure_ascii=False)[:2000])
                 self.feedback(name, json.dumps(result, ensure_ascii=False), True)
+            elif name == 'gazette_operation':
+                # P47 (operator, 2026-09-28): the daily AI Village Gazette - a
+                # chronicle the residents write themselves, bounded contributions
+                # only ("nur ein kleiner Teil pro Agent"), King draws the day's
+                # game+pair. Compiling this into a rendered edition is a later,
+                # separate stage (see docs/analysis/GAZETTE-PLAN-2026-09-28.md).
+                op = args.get('operation') or args.get('action')
+                if op == 'open':
+                    if self.id != '01-king':
+                        self.feedback(name, 'Only 01-king may open today\'s gazette edition.', False)
+                    else:
+                        peers = [p.get('id') for p in read_json(Path('/etc/ai-village/runtime-peers.json'), [])
+                                if p.get('id') and p.get('id') != self.id]
+                        result = self.gazette.open_edition(self.id, peers)
+                        self.event('gazette_opened', json.dumps(result, ensure_ascii=False)[:1000])
+                        self.feedback(name, json.dumps(result, ensure_ascii=False), True)
+                elif op == 'contribute':
+                    kind = args.get('kind')
+                    content = args.get('content', '')
+                    edition_id = args.get('edition_id') or gazette_today()
+                    try:
+                        result = self.gazette.submit_contribution(edition_id, self.id, kind, content)
+                    except ValueError as exc:
+                        self.feedback(name, str(exc), False)
+                    else:
+                        self.event('gazette_contribution', f'edition={edition_id}; kind={kind}')
+                        self.feedback(name, json.dumps(result, ensure_ascii=False)[:2000], True)
+                elif op == 'view':
+                    edition_id = args.get('edition_id') or gazette_today()
+                    result = self.gazette.get_edition(edition_id)
+                    self.feedback(name, json.dumps(result, ensure_ascii=False)[:3000] if result else 'No edition yet for that date.', bool(result))
+                else:
+                    raise ValueError('gazette_operation requires operation open, contribute, or view')
             else:
                 self.feedback('idle','Intentional rest; next turn may resume your own project.',True)
                 self.event('idle','intentional rest')
