@@ -110,27 +110,45 @@ class GazetteStore:
         rng = rng or random.Random()
         game = rng.choice(GAME_POOL)
         pair = rng.sample(peers, 2) if len(peers) >= 2 else list(peers)
-        # P53: real per-agent delegation, drawn deterministically at open
-        # time just like the game/pairing - never dependent on King
-        # separately messaging each peer (a generic broadcast already
-        # proved too weak to produce contributions, see docs/evidence/P53.md).
-        assignable_kinds = [k for k in CONTRIBUTION_KINDS if k != "game_result"]
-        shuffled_kinds = list(assignable_kinds)
-        rng.shuffle(shuffled_kinds)
-        roster = [king_agent] + [p for p in peers if p != king_agent]
-        assignments = [(eid, agent, shuffled_kinds[i % len(shuffled_kinds)]) for i, agent in enumerate(roster)]
         with self._conn() as c:
             c.execute(
                 "INSERT OR IGNORE INTO gazette_editions(id,status,opened_by,opened_at,game_name,game_pair,compiled_at) "
                 "VALUES(?,?,?,?,?,?,NULL)",
                 (eid, "open", king_agent, now(), game, ",".join(pair)),
             )
-            c.executemany(
-                "INSERT OR IGNORE INTO gazette_assignments(edition_id,agent,kind) VALUES(?,?,?)",
-                assignments,
-            )
             c.commit()
         return self.get_edition(eid)  # type: ignore
+
+    def assign_kinds(self, edition_id: str, king_agent: str, peers: List[str],
+                      rng: Optional[random.Random] = None) -> Dict[str, str]:
+        """King's own, real delegation act (P54): a generic "pick any kind"
+        hint (P52) and even an automatic, silently-computed assignment
+        attributed to King in text only (P53's first version) both proved
+        insufficient/dishonest - this method is only ever invoked from
+        King's own gazette_operation(operation='assign') call, so the
+        resulting assignment is genuinely his action, not a background
+        computation wearing his name. Idempotent per edition, like
+        open_edition(): King re-running it never reshuffles an assignment
+        peers may already be acting on.
+        """
+        existing = self.get_edition(edition_id)
+        if not existing:
+            raise ValueError(f"unknown gazette edition: {edition_id}")
+        if existing["assignments"]:
+            return existing["assignments"]
+        rng = rng or random.Random()
+        assignable_kinds = [k for k in CONTRIBUTION_KINDS if k != "game_result"]
+        shuffled_kinds = list(assignable_kinds)
+        rng.shuffle(shuffled_kinds)
+        roster = [king_agent] + [p for p in peers if p != king_agent]
+        rows = [(edition_id, agent, shuffled_kinds[i % len(shuffled_kinds)]) for i, agent in enumerate(roster)]
+        with self._conn() as c:
+            c.executemany(
+                "INSERT OR IGNORE INTO gazette_assignments(edition_id,agent,kind) VALUES(?,?,?)",
+                rows,
+            )
+            c.commit()
+        return {agent: kind for _, agent, kind in rows}
 
     def get_assignment(self, edition_id: str, agent: str) -> Optional[str]:
         with self._conn() as c:

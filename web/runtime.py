@@ -413,17 +413,28 @@ class Resident:
                         "the village: send a board_message to ALL mentioning the Gazette so "
                         "peers know to contribute via gazette_operation contribute."
                     )
+                elif not gazette_edition['assignments']:
+                    # P54: delegation is now King's own, real action
+                    # (gazette_operation operation=assign) instead of a
+                    # silent computation the P53 hint merely attributed to
+                    # him in text. Same proven mechanism (persistent hint,
+                    # not a message) for a third, equally reliable step.
+                    context['gazette_daily_note'] = (
+                        "You have opened and announced today's Gazette but not yet delegated "
+                        "who writes what: call gazette_operation with operation=assign once to "
+                        "give every resident one specific contribution kind."
+                    )
         else:
             # P52: a one-off broadcast from King asking everyone to
             # contribute had the identical problem the direct nudge to King
             # had (P48/P49) - it competes with each resident's own ongoing
             # work and loses. The generic "pick any kind" version of this
             # hint (P52) still produced 0 contributions across all 9
-            # residents after ~30 minutes, confirmed delivered. P53
-            # escalates to real per-agent delegation: each resident is
-            # deterministically assigned one specific kind at open time
-            # (village/gazette.py::open_edition), named explicitly here
-            # instead of leaving the choice open.
+            # residents after ~30 minutes, confirmed delivered. P53/P54
+            # escalate to real per-agent delegation: King's own explicit
+            # assign action gives each resident one specific kind, named
+            # here; falls back to an open choice only while King has not
+            # yet delegated.
             gazette_edition = self.gazette.get_edition(gazette_today())
             if gazette_edition and not any(c['agent'] == self.id for c in gazette_edition['contributions']):
                 assigned_kind = gazette_edition.get('assignments', {}).get(self.id)
@@ -946,6 +957,25 @@ class Resident:
                         result = self.gazette.open_edition(self.id, peers)
                         self.event('gazette_opened', json.dumps(result, ensure_ascii=False)[:1000])
                         self.feedback(name, json.dumps(result, ensure_ascii=False), True)
+                elif op == 'assign':
+                    # P54: King's own, real delegation act - a generic hint
+                    # (P52) and an automatic assignment merely attributed to
+                    # King in text (P53's first version) both proved
+                    # insufficient/dishonest; this is the only code path
+                    # that ever writes gazette_assignments.
+                    if self.id != '01-king':
+                        self.feedback(name, 'Only 01-king may assign gazette contribution kinds.', False)
+                    else:
+                        peers = [p.get('id') for p in read_json(Path('/etc/ai-village/runtime-peers.json'), [])
+                                if p.get('id') and p.get('id') != self.id]
+                        edition_id = args.get('edition_id') or gazette_today()
+                        try:
+                            result = self.gazette.assign_kinds(edition_id, self.id, peers)
+                        except ValueError as exc:
+                            self.feedback(name, str(exc), False)
+                        else:
+                            self.event('gazette_assigned', json.dumps(result, ensure_ascii=False)[:1000])
+                            self.feedback(name, json.dumps(result, ensure_ascii=False), True)
                 elif op == 'contribute':
                     kind = args.get('kind')
                     content = args.get('content', '')
@@ -962,7 +992,7 @@ class Resident:
                     result = self.gazette.get_edition(edition_id)
                     self.feedback(name, json.dumps(result, ensure_ascii=False)[:3000] if result else 'No edition yet for that date.', bool(result))
                 else:
-                    raise ValueError('gazette_operation requires operation open, contribute, or view')
+                    raise ValueError('gazette_operation requires operation open, assign, contribute, or view')
             else:
                 self.feedback('idle','Intentional rest; next turn may resume your own project.',True)
                 self.event('idle','intentional rest')

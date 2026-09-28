@@ -149,13 +149,16 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(ctx['recent_organic_messages_untrusted'], [])
         self.assertEqual(self.agent.pending_organic_cursor, self.agent.state.get('seen_organic_epoch', 0))
 
-    def test_king_sees_a_daily_gazette_hint_until_opened_and_announced(self):
-        # Gazette Stufe 2 (P48/P49): a one-off nudge proved unreliable in live
-        # observation (delivered, acknowledged, never acted on - P48.md).
-        # "Open" alone was not enough either: King opened a live edition and
-        # then simply moved on without telling anyone, leaving 0 contributions
-        # (P49 live observation) - so the hint must survive the open step too,
-        # with different guidance, until King has also announced it.
+    def test_king_sees_a_daily_gazette_hint_until_opened_announced_and_assigned(self):
+        # Gazette Stufe 2/3 (P48/P49/P54): a one-off nudge proved unreliable
+        # in live observation (delivered, acknowledged, never acted on -
+        # P48.md). "Open" alone was not enough either: King opened a live
+        # edition and then simply moved on without telling anyone, leaving 0
+        # contributions (P49). Announcing alone still was not enough: a
+        # generic "pick any kind" invitation to everyone also produced 0
+        # contributions after ~30 minutes (P52/P53.md) - real delegation is
+        # King's own third, separate action (operation=assign), so the hint
+        # must survive open AND announce too, with a third piece of guidance.
         king_env = dict(self.env, AGENT_ID='01-king', AGENT_NAME='king', AGENT_ROLE='king')
         king = Resident(king_env)
         with patch.object(king, 'memory', return_value={'items': []}):
@@ -168,6 +171,11 @@ class RuntimeTests(unittest.TestCase):
         self.assertIn('not yet told the village', opened_not_announced['gazette_daily_note'])
         king.execute({'tool_call': {'name': 'board_message',
                                      'arguments': {'message': 'The AI Village Gazette is open today, please contribute!', 'recipient': 'ALL'}}})
+        with patch.object(king, 'memory', return_value={'items': []}):
+            announced_not_assigned = json.loads(king.snapshot())
+        self.assertIn('gazette_daily_note', announced_not_assigned)
+        self.assertIn('not yet delegated', announced_not_assigned['gazette_daily_note'])
+        king.gazette.assign_kinds(king.gazette.list_editions(1)[0]['id'], '01-king', ['02-b', '03-c'])
         with patch.object(king, 'memory', return_value={'items': []}):
             after = json.loads(king.snapshot())
         self.assertNotIn('gazette_daily_note', after)
@@ -194,12 +202,14 @@ class RuntimeTests(unittest.TestCase):
         self.assertNotIn('gazette_daily_note', after)
 
     def test_non_king_gazette_hint_names_the_specific_delegated_kind(self):
-        # P53 escalation: the generic "pick any kind" hint (P52) produced 0
-        # contributions after ~30 minutes despite confirmed delivery - real
-        # delegation names the specific kind King assigned this resident,
-        # not an open choice.
-        edition = self.agent.gazette.open_edition('01-king', ['01-a', '02-b', '03-c'])
-        assigned_kind = edition['assignments']['01-a']
+        # P53/P54 escalation: the generic "pick any kind" hint (P52) produced
+        # 0 contributions after ~30 minutes despite confirmed delivery - real
+        # delegation (King's own separate assign action) names the specific
+        # kind he assigned this resident, not an open choice.
+        self.agent.gazette.open_edition('01-king', ['01-a', '02-b', '03-c'])
+        edition_id = self.agent.gazette.list_editions(1)[0]['id']
+        assignments = self.agent.gazette.assign_kinds(edition_id, '01-king', ['01-a', '02-b', '03-c'])
+        assigned_kind = assignments['01-a']
         with patch.object(self.agent, 'memory', return_value={'items': []}):
             ctx = json.loads(self.agent.snapshot())
         self.assertIn(f"kind='{assigned_kind}'", ctx['gazette_daily_note'])

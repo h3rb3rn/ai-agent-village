@@ -46,30 +46,51 @@ class OpenEditionTests(unittest.TestCase):
         edition = self.store.open_edition("01-king", ["02-explorer"])
         self.assertEqual(edition["game_pair"], ["02-explorer"])
 
-    def test_opening_assigns_every_agent_a_specific_contribution_kind(self):
-        # P53: a generic "pick any kind" hint proved too weak to actually
-        # produce contributions (0 across all 9 residents after ~30 minutes
-        # of confirmed delivery - docs/evidence/P53.md). Real per-agent
-        # delegation, drawn deterministically at open time like the game
-        # pairing - no reliance on King separately messaging anyone.
+    def test_opening_alone_creates_no_assignments(self):
+        # P54: opening no longer silently computes assignments - that made
+        # P53's "King has assigned you..." hint text a claim about something
+        # King never actually did. Delegation is now King's own separate,
+        # real action (assign_kinds(), only ever invoked from his own
+        # gazette_operation(operation='assign') call).
         edition = self.store.open_edition("01-king", PEERS, rng=random.Random(1))
-        assignments = edition["assignments"]
+        self.assertEqual(edition["assignments"], {})
+
+
+class AssignKindsTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="village-gazette-"))
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.store = GazetteStore(self.tmp / "coordination.sqlite3")
+        self.store.open_edition("01-king", PEERS, edition_id="2026-09-28", rng=random.Random(1))
+
+    def test_assigns_every_agent_a_specific_contribution_kind(self):
+        # P53/P54: a generic "pick any kind" hint proved too weak to
+        # actually produce contributions (0 across all 9 residents after
+        # ~30 minutes of confirmed delivery - docs/evidence/P53.md). Real
+        # per-agent delegation - King's own action, no reliance on him
+        # separately messaging anyone (that already failed once).
+        assignments = self.store.assign_kinds("2026-09-28", "01-king", PEERS, rng=random.Random(1))
         self.assertEqual(set(assignments.keys()), {"01-king", *PEERS})
         for kind in assignments.values():
             self.assertIn(kind, CONTRIBUTION_KINDS)
             self.assertNotEqual(kind, "game_result")  # reserved for the drawn pair only
+        self.assertEqual(self.store.get_edition("2026-09-28")["assignments"], assignments)
 
     def test_assignment_is_idempotent_like_the_game(self):
-        first = self.store.open_edition("01-king", PEERS, edition_id="2026-09-28", rng=random.Random(1))
-        second = self.store.open_edition("01-king", PEERS, edition_id="2026-09-28", rng=random.Random(99))
-        self.assertEqual(first["assignments"], second["assignments"])
+        first = self.store.assign_kinds("2026-09-28", "01-king", PEERS, rng=random.Random(1))
+        second = self.store.assign_kinds("2026-09-28", "01-king", PEERS, rng=random.Random(99))
+        self.assertEqual(first, second)
 
     def test_get_assignment_returns_none_when_unknown(self):
-        self.store.open_edition("01-king", PEERS, edition_id="2026-09-28", rng=random.Random(1))
+        self.store.assign_kinds("2026-09-28", "01-king", PEERS, rng=random.Random(1))
         self.assertIsNone(self.store.get_assignment("2026-09-28", "99-nobody"))
         self.assertIsNone(self.store.get_assignment("1999-01-01", "01-king"))
         assigned = self.store.get_assignment("2026-09-28", "01-king")
         self.assertIn(assigned, CONTRIBUTION_KINDS)
+
+    def test_unknown_edition_is_rejected(self):
+        with self.assertRaises(ValueError):
+            self.store.assign_kinds("1999-01-01", "01-king", PEERS)
 
 
 class SubmitContributionTests(unittest.TestCase):

@@ -89,6 +89,7 @@ Pro Paket Nachweis unter `docs/evidence/Pxx.md` anlegen, sobald tatsächlich dar
 | P51 | Mehrfach-Aktionsblöcke: erster gültiger Block wird ausgeführt statt Vollablehnung; Kollaborationsdruck-Deckelung gegen unbegrenztes Ignorieren | Live-Beobachtung, Auditor-Historie | LOCAL_VERIFIED | [docs/evidence/P51.md](evidence/P51.md) |
 | P52 | AI Village Gazette: dauerhafter Beitrags-Hinweis für alle Bewohner (nicht nur King) | Betreiberfrage, Live-Beobachtung | LOCAL_VERIFIED | [docs/evidence/P52.md](evidence/P52.md) |
 | P53 | AI Village Gazette: echte Delegation (konkrete Kategorie je Bewohner statt freier Wahl) | P52 unzureichend (0 Beiträge nach ~30min), Betreiberanweisung "Eskaliere" | LOCAL_VERIFIED | [docs/evidence/P53.md](evidence/P53.md) |
+| P54 | AI Village Gazette: Zuteilung als echte Königsaktion (statt automatischer Berechnung mit bloß behaupteter Zuschreibung) | Betreiberkorrektur "Auf echte Delegation durch King umstellen" | LOCAL_VERIFIED | [docs/evidence/P54.md](evidence/P54.md) |
 
 ## Fortschrittsbuch
 
