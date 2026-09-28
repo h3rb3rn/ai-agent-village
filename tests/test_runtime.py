@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'web'))
-from runtime import Resident,Tasks,resource_snapshot,tail,event_time,COLLABORATION_PRESSURE_CEILING
+from runtime import Resident,Tasks,resource_snapshot,tail,event_time,COLLABORATION_PRESSURE_CEILING,MEETING_REPORT_CEILING
 from decision import decision
 from village.collaboration import CooperationCheckpoint
 
@@ -89,6 +89,45 @@ class RuntimeTests(unittest.TestCase):
         self.execute('idle')
         self.assertFalse(self.agent.state['last_result']['ok'])
         self.assertIn('Collaboration checkpoint required', self.agent.state['last_result']['result'])
+
+    def test_meeting_report_nudge_eventually_gates_other_actions(self):
+        # P56: the exact same unbounded-nudge gap COLLABORATION_PRESSURE_CEILING
+        # (P51) closed for checkpoints, but never applied here - an agent
+        # could see "Meeting report requested" on every single cycle forever
+        # with zero consequence (observed live: 09-chronicler ignored it for
+        # 20+ minutes straight, sending other messages instead each time -
+        # and because it was his real blocker, the Gazette P55 editorial
+        # review inherited the same unbounded drift). Same fix, same ceiling.
+        # idle is explicitly excluded from this check (same as
+        # meeting_operation itself), so it never triggers the nudge -
+        # execute_bash is the repeated, otherwise-harmless action here.
+        # Varied per call: an identical command would hit the unrelated
+        # repeated-action guard (limit 2) long before this ceiling.
+        self.agent.meetings.schedule('jour_fixe', 'status update', '2026-09-24T10:00:00Z', meeting_id='m1')
+        for i in range(MEETING_REPORT_CEILING - 1):
+            self.execute('execute_bash', command=f'printf ok{i}')
+        self.assertTrue(self.agent.state['last_result']['ok'])  # not yet gated
+        self.execute('execute_bash', command=f'printf ok{MEETING_REPORT_CEILING}')
+        self.assertFalse(self.agent.state['last_result']['ok'])
+        self.assertIn('Meeting report required', self.agent.state['last_result']['result'])
+
+    def test_meeting_operation_itself_is_never_gated_by_its_own_nudge(self):
+        self.agent.meetings.schedule('jour_fixe', 'status update', '2026-09-24T10:00:00Z', meeting_id='m1')
+        for i in range(MEETING_REPORT_CEILING + 5):
+            self.execute('execute_bash', command=f'printf ok{i}')
+        self.execute('meeting_operation', operation='report', meeting_id='m1',
+                      achieved='x', evidence='y', next_step='z', blockers='')
+        self.assertTrue(self.agent.state['last_result']['ok'])
+
+    def test_meeting_nudge_stops_once_the_report_is_submitted(self):
+        self.agent.meetings.schedule('jour_fixe', 'status update', '2026-09-24T10:00:00Z', meeting_id='m1')
+        self.execute('meeting_operation', operation='report', meeting_id='m1',
+                      achieved='x', evidence='y', next_step='z', blockers='')
+        events_before = len(tail(self.root/'board/events.jsonl'))
+        self.execute('idle')
+        events_after = tail(self.root/'board/events.jsonl')
+        self.assertFalse(any(e.get('event') == 'meeting_required' for e in events_after[events_before:]))
+        self.assertTrue(self.agent.state['last_result']['ok'])
 
     def test_resource_snapshot_is_locale_independent(self):
         with patch.dict(os.environ,{'LANG':'de_DE.UTF-8'}):

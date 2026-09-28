@@ -65,6 +65,11 @@ VERSION = '2026-09-25-dynamic-teams-1'
 # miss threshold, ANY solo action gets gated, not just the mutating ones.
 COLLABORATION_PRESSURE_CEILING = 10
 
+# P56: same rationale and value as COLLABORATION_PRESSURE_CEILING, for the
+# meeting-report nudge, which had no ceiling at all until this fix (see the
+# comment at its use site).
+MEETING_REPORT_CEILING = 10
+
 
 def now():
     return datetime.now(timezone.utc).isoformat()
@@ -667,14 +672,35 @@ class Resident:
         elif checkpoint and checkpoint.required_action and is_checkpoint_action(checkpoint, name):
             self.state['collaboration_pressure'] = 0
 
-        # Open meetings are a bounded social checkpoint. Keep the request
-        # advisory: small models may fail to emit the structured report, and a
-        # hard gate would deadlock the village and suppress useful work.
+        # Open meetings are a bounded social checkpoint. Advisory first, same
+        # philosophy as the collaboration checkpoint (P21.6): small models may
+        # fail to emit the structured report, and a hard gate would deadlock
+        # the village and suppress useful work.
+        # P56: this used to be advisory forever, with zero escalation - the
+        # exact same unbounded-nudge gap COLLABORATION_PRESSURE_CEILING (P51)
+        # closed for checkpoints, just never applied here. Observed live:
+        # 09-chronicler saw "Meeting report requested" on every single cycle
+        # for 20+ minutes, sent other messages instead each time, with zero
+        # consequence - and because it was his real blocker for the Gazette
+        # P55 editorial review, that review gate silently inherited the same
+        # unbounded drift. Same fix, same ceiling: past
+        # MEETING_REPORT_CEILING ignored nudges, gate every action except
+        # meeting_operation/idle until the report is actually submitted.
         if name not in ('meeting_operation', 'idle'):
             pending = next((m for m in self.meetings.active() if not self.meetings.has_report(m['id'], self.id)), None)
             if pending:
-                self.feedback(name, f"Meeting report requested: {pending['id']}. Submit one meeting_operation report when possible; continuing this reversible action.", True)
-                self.event('meeting_required', f"meeting_id={pending['id']}")
+                mid = pending['id']
+                nudge_pressure = dict(self.state.get('meeting_nudge_pressure', {}))
+                count = int(nudge_pressure.get(mid, 0)) + 1
+                nudge_pressure[mid] = count
+                self.state['meeting_nudge_pressure'] = nudge_pressure
+                self.event('meeting_required', f"meeting_id={mid}; pressure={count}")
+                if count >= MEETING_REPORT_CEILING:
+                    self.feedback(name, f"Meeting report required before more solo work: submit meeting_operation "
+                                        f"report for {mid} (achieved, evidence, next_step, blockers).", False)
+                    self.event('meeting_gate', f"meeting_id={mid}; pressure={count}")
+                    return False
+                self.feedback(name, f"Meeting report requested: {mid}. Submit one meeting_operation report when possible; continuing this reversible action.", True)
 
         norm_name = name
         norm_args = dict(args)

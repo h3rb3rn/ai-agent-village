@@ -91,6 +91,7 @@ Pro Paket Nachweis unter `docs/evidence/Pxx.md` anlegen, sobald tatsächlich dar
 | P53 | AI Village Gazette: echte Delegation (konkrete Kategorie je Bewohner statt freier Wahl) | P52 unzureichend (0 Beiträge nach ~30min), Betreiberanweisung "Eskaliere" | LOCAL_VERIFIED | [docs/evidence/P53.md](evidence/P53.md) |
 | P54 | AI Village Gazette: Zuteilung als echte Königsaktion (statt automatischer Berechnung mit bloß behaupteter Zuschreibung) | Betreiberkorrektur "Auf echte Delegation durch King umstellen" | LOCAL_VERIFIED | [docs/evidence/P54.md](evidence/P54.md) |
 | P55 | AI Village Gazette Stufe 3: deterministischer Compiler + redaktionelle Prüfinstanz (09-chronicler); Nebenfund: projects-Trimm-Reihenfolge-Bug aus P48 behoben | Betreiberwunsch (Compiler), Betreiberkorrektur (Prüfinstanz) | LOCAL_VERIFIED | [docs/evidence/P55.md](evidence/P55.md) · Stufe 4 offen |
+| P56 | Meeting-Report-Hinweis unbegrenzt ignorierbar (gleiche Lücke wie P51, andere Stelle) – Deckelung ergänzt | Live-Beobachtung (Chronicler-Blockade bei P55-Validierung), Betreiberauftrag "nachhaltige Lösung" | LOCAL_VERIFIED | [docs/evidence/P56.md](evidence/P56.md) |
 
 ## Fortschrittsbuch
 
