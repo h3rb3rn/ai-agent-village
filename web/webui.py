@@ -8,6 +8,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 from village.events import append_event
+from village.gazette import GazetteStore
 from event_history import read_history
 
 ROOT = Path(os.environ["VILLAGE_ROOT"])
@@ -17,6 +18,7 @@ EVENTS = ROOT / "board" / "events.jsonl"
 TELEMETRY = ROOT / "telemetry" / "latest.json"
 TELEMETRY_DB = ROOT / "telemetry" / "events.sqlite3"
 AGENT_TELEMETRY = ROOT / "telemetry" / "agent-events.jsonl"
+GAZETTE_ARCHIVE = ROOT / "gazette" / "archive"
 HOST = os.environ.get("VILLAGE_WEBUI_BIND", "0.0.0.0")
 PORT = int(os.environ.get("VILLAGE_WEBUI_PORT", "8080"))
 MAX_MESSAGE = int(os.environ.get("VILLAGE_WEBUI_MAX_MESSAGE_CHARS", "4000"))
@@ -195,11 +197,34 @@ def signal_index(limit=500):
         pass
     return rows
 
+def gazette_index(limit=60):
+    # P64: only ever list COMPILED editions - a pending/unreviewed or
+    # rejected contribution must never reach this public-facing page,
+    # exactly the guarantee village/gazette.py::compile_edition() already
+    # gives the archive file itself (P55's editorial review gate). Reading
+    # list_editions() alone (which includes still-open editions) would
+    # bypass that guarantee, so it is filtered here too, defensively.
+    rows = []
+    try:
+        store = GazetteStore(ROOT / "board" / "coordination.sqlite3")
+        for edition in store.list_editions(limit=limit):
+            if edition.get("status") != "compiled" or not edition.get("compiled_at"):
+                continue
+            approved = sum(1 for c in edition.get("contributions", []) if c.get("review_status") == "approved")
+            rows.append({
+                "id": edition["id"], "opened_by": edition.get("opened_by"),
+                "compiled_at": edition.get("compiled_at"), "game_name": edition.get("game_name"),
+                "game_pair": edition.get("game_pair") or [], "contributor_count": approved,
+            })
+    except OSError:
+        pass
+    return sorted(rows, key=lambda r: r["id"], reverse=True)
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args): pass
     def do_GET(self):
         route = urlsplit(self.path).path
-        if route in ('/', '/dashboard', '/agents', '/habitat', '/board', '/timeline', '/signals'):
+        if route in ('/', '/dashboard', '/agents', '/habitat', '/board', '/timeline', '/signals', '/gazette'):
             return send(self, HTTPStatus.OK, (ASSETS / 'observatory.html').read_text())
         if route in ('/assets/observatory.css', '/assets/observatory.js'):
             name = route.rsplit('/', 1)[-1]
@@ -214,6 +239,20 @@ class Handler(BaseHTTPRequestHandler):
             return send(self, HTTPStatus.OK, json.dumps({'current': telemetry(), 'history': summary, 'events': events, 'outcomes': outcome_stats(events), 'skill_history': skill_history(events)}, ensure_ascii=False), 'application/json; charset=utf-8')
         if route == '/api/signals':
             return send(self, HTTPStatus.OK, json.dumps(signal_index(), ensure_ascii=False), 'application/json; charset=utf-8')
+        if route == '/api/gazette':
+            return send(self, HTTPStatus.OK, json.dumps(gazette_index(), ensure_ascii=False), 'application/json; charset=utf-8')
+        if route.startswith('/gazette/') and route.endswith('.html'):
+            edition_id = route.removeprefix('/gazette/').removesuffix('.html')
+            if not re.fullmatch(r'[0-9]{4}-[0-9]{2}-[0-9]{2}', edition_id):
+                return send(self, HTTPStatus.NOT_FOUND, 'not found', 'text/plain')
+            target = GAZETTE_ARCHIVE / edition_id / 'index.html'
+            if not target.is_file():
+                return send(self, HTTPStatus.NOT_FOUND, 'not found', 'text/plain')
+            try:
+                body = target.read_text(encoding='utf-8')
+            except OSError:
+                return send(self, HTTPStatus.NOT_FOUND, 'not found', 'text/plain')
+            return send(self, HTTPStatus.OK, body)
         if route == '/contact':
             if not signal_authorized(self): return auth_required(self)
             return send(self, HTTPStatus.OK, page("Signal-Zugang bestätigt", "<p>Die Anmeldung ist aktiv. Kehre zu <a href=\"/signals#contact\">Signale & Kontakt</a> zurück und sende deine Nachricht.</p>"))

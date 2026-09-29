@@ -318,6 +318,14 @@ class RuntimeTests(unittest.TestCase):
         self.assertTrue(king.state['last_result']['ok'])
         archive_path = self.root / 'gazette' / 'archive' / edition_id / 'index.html'
         self.assertTrue(archive_path.exists())
+        # P64: Path.mkdir()/write_text() inherit this process's umask, which
+        # produced 0700/0600 (unreadable by anyone but the owner) on N06-M10 -
+        # the dashboard (a different Unix user, group member) could not read
+        # a single published edition. Every level must be group-readable.
+        import stat
+        for level in (self.root / 'gazette', self.root / 'gazette' / 'archive', archive_path.parent):
+            self.assertTrue(stat.S_IMODE(level.stat().st_mode) & 0o050, f'{level} not group-readable/traversable')
+        self.assertTrue(stat.S_IMODE(archive_path.stat().st_mode) & 0o040, 'archive file not group-readable')
         self.assertIn('Feeling good.', archive_path.read_text())
 
     def test_chronicler_sees_pending_review_hint_until_cleared(self):

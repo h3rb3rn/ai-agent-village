@@ -1250,11 +1250,26 @@ class Resident:
                             # idempotent), and the file itself is never overwritten.
                             compiled_html = result.pop('compiled_html', None)
                             if compiled_html:
-                                archive_dir = self.root / 'gazette' / 'archive' / edition_id
+                                archive_root = self.root / 'gazette'
+                                archive_dir = archive_root / 'archive' / edition_id
                                 archive_dir.mkdir(parents=True, exist_ok=True)
+                                # P64: Path.mkdir() inherited this process's
+                                # (King's) restrictive umask - every level came
+                                # out 0700/2700, unreadable by anyone but King
+                                # and root. The dashboard (village-web) is a
+                                # member of the shared ai-village group, same
+                                # as coordination.sqlite3/events.jsonl (0660) -
+                                # made every directory level this call may have
+                                # just created group-readable/traversable to
+                                # match that existing convention.
+                                for level in (archive_root, archive_root / 'archive', archive_dir):
+                                    try: level.chmod(0o2750)
+                                    except OSError: pass
                                 archive_path = archive_dir / 'index.html'
                                 if not archive_path.exists():
                                     archive_path.write_text(compiled_html, encoding='utf-8')
+                                    try: archive_path.chmod(0o640)
+                                    except OSError: pass
                             self.event('gazette_compiled', f'edition={edition_id}')
                             self.feedback(name, json.dumps(result, ensure_ascii=False)[:2000], True)
                 elif op == 'view':
