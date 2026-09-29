@@ -442,21 +442,32 @@ class Resident:
             # here; falls back to an open choice only while King has not
             # yet delegated.
             gazette_edition = self.gazette.get_edition(gazette_today())
-            pending_reviews = [
-                c for c in (gazette_edition['contributions'] if gazette_edition else [])
-                if c.get('review_status') == 'pending'
-            ]
+            if self.id == GAZETTE_REVIEWER:
+                # P59-follow-up: scoping this to gazette_today() went blind
+                # the moment the calendar day rolled over - review is not a
+                # daily assignment like a contribution slot, it is an
+                # outstanding obligation against whatever was actually
+                # submitted, on any day, until the edition is compiled.
+                # Yesterday's still-open edition with pending reviews would
+                # otherwise silently vanish from this hint forever.
+                open_editions = [e for e in self.gazette.list_editions(limit=10) if e['status'] != 'compiled']
+                pending_reviews = [
+                    (edition['id'], c) for edition in open_editions for c in edition['contributions']
+                    if c.get('review_status') == 'pending'
+                ]
+            else:
+                pending_reviews = []
             if self.id == GAZETTE_REVIEWER and pending_reviews:
                 # P55: the editorial gate itself must not become the exact
                 # reliability bottleneck this session spent P48-P54 fixing -
                 # a persistent hint, not a message, for the one role whose
                 # inaction would silently empty the whole compiled edition.
-                names = ", ".join(f"{c['agent']}/{c['kind']}" for c in pending_reviews[:5])
+                names = ", ".join(f"{eid}/{c['agent']}/{c['kind']}" for eid, c in pending_reviews[:5])
                 context['gazette_daily_note'] = (
                     f"{len(pending_reviews)} Gazette contribution(s) await your editorial review "
                     f"as {GAZETTE_REVIEWER}: {names}. Use gazette_operation operation=review with "
-                    "agent, kind and decision=approve|reject (optional note) for each one - only "
-                    "what you approve ever appears in the compiled edition."
+                    "edition_id, agent, kind and decision=approve|reject (optional note) for each "
+                    "one - only what you approve ever appears in that edition's compiled version."
                 )
             elif gazette_edition and not any(c['agent'] == self.id for c in gazette_edition['contributions']):
                 assigned_kind = gazette_edition.get('assignments', {}).get(self.id)

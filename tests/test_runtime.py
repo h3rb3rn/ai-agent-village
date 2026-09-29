@@ -332,6 +332,24 @@ class RuntimeTests(unittest.TestCase):
             after = json.loads(chronicler.snapshot())
         self.assertNotIn('editorial review', after.get('gazette_daily_note', ''))
 
+    def test_chronicler_review_hint_survives_a_day_rollover(self):
+        # P59-follow-up: scoping the review hint to gazette_today() went
+        # blind the moment the calendar day rolled over - live observation:
+        # yesterday's edition still had 3 pending reviews, but chronicler's
+        # hint only ever checked today's (empty) edition, so it would have
+        # silently stopped mentioning them forever. Review is an ongoing
+        # obligation against whatever was submitted, not a daily assignment.
+        chronicler_env = dict(self.env, AGENT_ID='09-chronicler', AGENT_NAME='chronicler', AGENT_ROLE='steward')
+        chronicler = Resident(chronicler_env)
+        yesterday = chronicler.gazette.open_edition('01-king', ['01-a'], edition_id='2026-09-27')
+        chronicler.gazette.submit_contribution(yesterday['id'], '01-a', 'mood', 'Feeling good yesterday.')
+        # "Today" (gazette_today()) has no edition at all - the old code path
+        # would find gazette_edition=None and never surface the stale review.
+        with patch.object(chronicler, 'memory', return_value={'items': []}):
+            ctx = json.loads(chronicler.snapshot())
+        self.assertIn('gazette_daily_note', ctx)
+        self.assertIn('2026-09-27/01-a/mood', ctx['gazette_daily_note'])
+
     def test_organic_message_not_reissued_every_turn(self):
         (self.root/'board/organic-inbox.jsonl').write_text(json.dumps({'timestamp':'2026-09-24T11:00:00Z','message':'A dated request'})+'\n')
         with patch.object(self.agent,'memory',return_value={'items':[]}):
