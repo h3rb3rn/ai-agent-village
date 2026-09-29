@@ -342,6 +342,24 @@ class Resident:
                 result.append(edition)
         return result
 
+    def gazette_active_edition_id(self):
+        """The edition an action should target when none is given
+        explicitly: the most recent still-open (non-compiled) edition,
+        not strictly gazette_today().
+
+        P71 (live find while opening an out-of-band edition at operator
+        request): gazette_today() is real calendar time. The ordinary
+        contributor hint and every action's edition_id fallback
+        (assign/contribute/review/close) were still strictly scoped to it,
+        the same day-rollover blindness already fixed once for the
+        reviewer-pending hint (P59-follow-up) and the closable-edition
+        hint (P63) - just never carried over to the routine "you haven't
+        contributed yet" path or to the action handlers' own defaults.
+        Falls back to gazette_today() only when there is genuinely no open
+        edition, so 'open' still gets a sensible default to create one."""
+        open_editions = [e for e in self.gazette.list_editions(limit=5) if e['status'] != 'compiled']
+        return open_editions[0]['id'] if open_editions else gazette_today()
+
     def snapshot(self):
         peers = read_json(Path('/etc/ai-village/runtime-peers.json'), [])
         events = tail(self.board / 'events.jsonl', 800)
@@ -534,7 +552,7 @@ class Resident:
                 "afterwards goes into a later edition instead."
             )
         elif self.id == '01-king':
-            gazette_edition = self.gazette.get_edition(gazette_today())
+            gazette_edition = self.gazette.get_edition(self.gazette_active_edition_id())
             if not gazette_edition:
                 context['gazette_daily_note'] = (
                     "No AI Village Gazette edition is open for today yet. As King, call "
@@ -593,7 +611,7 @@ class Resident:
             # assign action gives each resident one specific kind, named
             # here; falls back to an open choice only while King has not
             # yet delegated.
-            gazette_edition = self.gazette.get_edition(gazette_today())
+            gazette_edition = self.gazette.get_edition(self.gazette_active_edition_id())
             if gazette_edition and not any(c['agent'] == self.id for c in gazette_edition['contributions']):
                 assigned_kind = gazette_edition.get('assignments', {}).get(self.id)
                 if assigned_kind:
@@ -1260,7 +1278,7 @@ class Resident:
                     else:
                         peers = [p.get('id') for p in read_json(Path('/etc/ai-village/runtime-peers.json'), [])
                                 if p.get('id') and p.get('id') != self.id]
-                        edition_id = args.get('edition_id') or gazette_today()
+                        edition_id = args.get('edition_id') or self.gazette_active_edition_id()
                         try:
                             result = self.gazette.assign_kinds(edition_id, self.id, peers)
                         except ValueError as exc:
@@ -1272,7 +1290,7 @@ class Resident:
                     kind = args.get('kind')
                     headline = args.get('headline', '')
                     content = args.get('content', '')
-                    edition_id = args.get('edition_id') or gazette_today()
+                    edition_id = args.get('edition_id') or self.gazette_active_edition_id()
                     try:
                         result = self.gazette.submit_contribution(edition_id, self.id, kind, headline, content)
                     except ValueError as exc:
@@ -1288,7 +1306,7 @@ class Resident:
                     if self.id != GAZETTE_REVIEWER:
                         self.feedback(name, f'Only {GAZETTE_REVIEWER} may review gazette contributions.', False)
                     else:
-                        edition_id = args.get('edition_id') or gazette_today()
+                        edition_id = args.get('edition_id') or self.gazette_active_edition_id()
                         try:
                             result = self.gazette.review_contribution(
                                 edition_id, args.get('agent'), args.get('kind'), self.id,
@@ -1304,7 +1322,7 @@ class Resident:
                     if self.id != '01-king':
                         self.feedback(name, "Only 01-king may close/compile today's gazette edition.", False)
                     else:
-                        edition_id = args.get('edition_id') or gazette_today()
+                        edition_id = args.get('edition_id') or self.gazette_active_edition_id()
                         try:
                             result = self.gazette.close_edition(edition_id, self.id)
                         except ValueError as exc:

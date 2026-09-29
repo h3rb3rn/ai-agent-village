@@ -289,6 +289,20 @@ class RuntimeTests(unittest.TestCase):
             all_clear = json.loads(king.snapshot())
         self.assertNotIn('gazette_daily_note', all_clear)
 
+    def test_king_own_hint_survives_an_out_of_band_edition_id(self):
+        # P71: King's own open/announce/assign hint chain had the identical
+        # gazette_today()-only blindness as the ordinary contributor hint.
+        from runtime import gazette_today
+        king_env = dict(self.env, AGENT_ID=REVIEWER_AGENT, AGENT_NAME='king', AGENT_ROLE='king')
+        king = Resident(king_env)
+        future_id = '2099-01-01'
+        self.assertNotEqual(future_id, gazette_today())
+        king.gazette.open_edition('01-king', ['01-a', '02-b'], edition_id=future_id)
+        with patch.object(king, 'memory', return_value={'items': []}):
+            ctx = json.loads(king.snapshot())
+        self.assertIn('gazette_daily_note', ctx)
+        self.assertIn('not yet told the village', ctx['gazette_daily_note'])
+
     def test_non_king_sees_no_gazette_hint_before_an_edition_exists(self):
         with patch.object(self.agent, 'memory', return_value={'items': []}):
             ctx = json.loads(self.agent.snapshot())
@@ -322,6 +336,30 @@ class RuntimeTests(unittest.TestCase):
         with patch.object(self.agent, 'memory', return_value={'items': []}):
             ctx = json.loads(self.agent.snapshot())
         self.assertIn(f"kind='{assigned_kind}'", ctx['gazette_daily_note'])
+
+    def test_non_king_gazette_hint_and_contribute_survive_an_out_of_band_edition_id(self):
+        # P71 (operator directive, "jetzt eine neue Ausgabe anstossen"):
+        # opening an edition under an id other than gazette_today() (the
+        # normal case right after a real day rollover, or an explicitly
+        # out-of-band edition) used to leave every ordinary resident's
+        # contributor hint blind - it only ever checked gazette_today(),
+        # never "whatever edition is actually open". The same day-rollover
+        # blindness P59-follow-up/P63 already fixed for the reviewer/close
+        # hints, just never carried over here.
+        from runtime import gazette_today
+        future_id = '2099-01-01'
+        self.assertNotEqual(future_id, gazette_today())
+        self.agent.gazette.open_edition('01-king', ['01-a', '02-b', '03-c'], edition_id=future_id)
+        with patch.object(self.agent, 'memory', return_value={'items': []}):
+            ctx = json.loads(self.agent.snapshot())
+        self.assertIn('gazette_daily_note', ctx)
+        # Submitting without an explicit edition_id (as every existing hint
+        # instructs) must land on the actually-open edition, not gazette_today().
+        self.agent.execute({'tool_call': {'name': 'gazette_operation', 'arguments': {
+            'operation': 'contribute', 'kind': 'mood', 'headline': 'Update', 'content': 'Feeling productive today.'}}})
+        self.assertTrue(self.agent.state['last_result']['ok'])
+        edition = self.agent.gazette.get_edition(future_id)
+        self.assertTrue(any(c['agent'] == '01-a' and c['kind'] == 'mood' for c in edition['contributions']))
 
     def test_gazette_review_is_restricted_to_the_reviewer(self):
         # P55 (operator directive): "die Zeitung sollte nicht aus

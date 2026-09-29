@@ -106,6 +106,7 @@ Pro Paket Nachweis unter `docs/evidence/Pxx.md` anlegen, sobald tatsächlich dar
 | P68 | Gazette schloss zu früh (Live-Fund: 1 von 9 Beiträgen, 66 Min. nach Eröffnung) – Mindestbeteiligung (Hälfte der Zugewiesenen) oder Mindestwartezeit (6h) jetzt Voraussetzung für `close` | Live-Beobachtung, Betreiberauftrag "Baue das ein" | LOCAL_VERIFIED | [docs/evidence/P68.md](evidence/P68.md) |
 | P69 | Headline-Feld (max. 2 Zeilen) pro Beitrag + neuer Beitragstyp "Kolumne" (mehr Zeichen-Spielraum, gelegentlich, nicht in der Pflicht-Rotation) für komplexe Themen | Betreiberauftrag ("Headline", "angemessen viel Spielraum für komplexe Themen", "Gelegentlich Kolumnen") | LOCAL_VERIFIED | [docs/evidence/P69.md](evidence/P69.md) |
 | P70 | Beiträge nach dem Schließen einer Ausgabe wurden für immer unsichtbar (Prüf-Hinweis durchsucht nur nicht-kompilierte Ausgaben) – Einreichung in kompilierte Ausgabe jetzt abgelehnt, verwaiste `pending`-Beiträge werden beim Öffnen der nächsten Ausgabe automatisch überführt | Live-Fund (Betreiberfrage "wieviel Beiträge existieren"), Betreiberauftrag "Prinzip 2, kein Beitrag soll verloren sein" | LOCAL_VERIFIED | [docs/evidence/P70.md](evidence/P70.md) |
+| P71 | Beitrags-Hinweis und alle Gazette-Aktionen (assign/contribute/review/close) waren fest an `gazette_today()` statt an die tatsächlich offene Ausgabe gebunden | Live-Fund beim Vorbereiten einer außerplanmäßigen Ausgabe, Betreiberauftrag "jetzt eine neue Ausgabe anstoßen" | LOCAL_VERIFIED | [docs/evidence/P71.md](evidence/P71.md) |
 
 ## Fortschrittsbuch
 
