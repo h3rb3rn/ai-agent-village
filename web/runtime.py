@@ -416,7 +416,31 @@ class Resident:
         # enough: King opened an edition and then simply moved on to his own
         # work without telling anyone, leaving 0 contributions (P49 live
         # observation). The hint now stays until BOTH have happened.
-        if self.id == '01-king':
+        # P60-follow-up: King and the Gazette reviewer used to be mutually
+        # exclusive branches (if self.id=='01-king': ... else: ...) - correct
+        # while REVIEWER_AGENT was 09-chronicler, but reassigning the
+        # reviewer role to 01-king (after 32+ gate-blocks produced zero
+        # reviews from the original assignee, see docs/evidence/P60.md)
+        # meant King's own branch always won, and the reviewer hint below it
+        # could never be reached for him again. Pending reviews now take
+        # priority over King's own daily setup steps: an unreviewed backlog
+        # directly blocks the entire compiled edition (nothing unapproved
+        # ever appears in it), while opening/announcing a new day's edition
+        # can happen anytime once that backlog is cleared.
+        reviewer_pending = self.gazette_pending_reviews() if self.id == GAZETTE_REVIEWER else []
+        if reviewer_pending:
+            # P55: the editorial gate itself must not become the exact
+            # reliability bottleneck this session spent P48-P54 fixing -
+            # a persistent hint, not a message, for the one role whose
+            # inaction would silently empty the whole compiled edition.
+            names = ", ".join(f"{eid}/{c['agent']}/{c['kind']}" for eid, c in reviewer_pending[:5])
+            context['gazette_daily_note'] = (
+                f"{len(reviewer_pending)} Gazette contribution(s) await your editorial review "
+                f"as {GAZETTE_REVIEWER}: {names}. Use gazette_operation operation=review with "
+                "edition_id, agent, kind and decision=approve|reject (optional note) for each "
+                "one - only what you approve ever appears in that edition's compiled version."
+            )
+        elif self.id == '01-king':
             gazette_edition = self.gazette.get_edition(gazette_today())
             if not gazette_edition:
                 context['gazette_daily_note'] = (
@@ -464,20 +488,7 @@ class Resident:
             # here; falls back to an open choice only while King has not
             # yet delegated.
             gazette_edition = self.gazette.get_edition(gazette_today())
-            pending_reviews = self.gazette_pending_reviews() if self.id == GAZETTE_REVIEWER else []
-            if self.id == GAZETTE_REVIEWER and pending_reviews:
-                # P55: the editorial gate itself must not become the exact
-                # reliability bottleneck this session spent P48-P54 fixing -
-                # a persistent hint, not a message, for the one role whose
-                # inaction would silently empty the whole compiled edition.
-                names = ", ".join(f"{eid}/{c['agent']}/{c['kind']}" for eid, c in pending_reviews[:5])
-                context['gazette_daily_note'] = (
-                    f"{len(pending_reviews)} Gazette contribution(s) await your editorial review "
-                    f"as {GAZETTE_REVIEWER}: {names}. Use gazette_operation operation=review with "
-                    "edition_id, agent, kind and decision=approve|reject (optional note) for each "
-                    "one - only what you approve ever appears in that edition's compiled version."
-                )
-            elif gazette_edition and not any(c['agent'] == self.id for c in gazette_edition['contributions']):
+            if gazette_edition and not any(c['agent'] == self.id for c in gazette_edition['contributions']):
                 assigned_kind = gazette_edition.get('assignments', {}).get(self.id)
                 if assigned_kind:
                     context['gazette_daily_note'] = (

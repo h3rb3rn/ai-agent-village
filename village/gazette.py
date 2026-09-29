@@ -76,13 +76,17 @@ KIND_LABELS = {
     "village_news": "Dorfmeldungen",
 }
 
-# P55: the editorial reviewer. 09-chronicler, not King - this module's own
-# original docstring already names the Gazette as meant to "serve as a
-# chronicle for 'the historian' (09-chronicler's own role)"; King already
-# carries three coordination actions (open/assign, plus announcing), and
-# curating the village's record is thematically the Chronicler's job, not
-# the King's.
-REVIEWER_AGENT = "09-chronicler"
+# P55 assigned this to 09-chronicler - thematically fitting (this module's
+# own docstring already named the Gazette as meant to "serve as a chronicle
+# for 'the historian'"), but P60's escalation (a gate proven correct and
+# firing reliably, see docs/evidence/P60.md) still produced zero reviews
+# after 32+ consecutive blocks - a genuinely sustained non-compliance, not
+# an infrastructure gap. Operator directive (2026-09-29): reassign to
+# 01-king, the only resident who has, across this entire session, actually
+# complied with every persistent-hint/gate mechanism eventually (open,
+# announce, assign - P48/P49/P54) - an evidence-based choice, not a guess
+# at an untested resident.
+REVIEWER_AGENT = "01-king"
 REVIEW_DECISIONS = ("approve", "reject")
 
 

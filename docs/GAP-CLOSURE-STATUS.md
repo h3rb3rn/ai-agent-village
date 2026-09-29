@@ -96,6 +96,7 @@ Pro Paket Nachweis unter `docs/evidence/Pxx.md` anlegen, sobald tatsächlich dar
 | P58 | Meeting-Gate-Hinweis mit kopierbarem JSON-Beispiel statt Feldnamen-Prosa (gleiches Muster wie `VALID_ENVELOPE_EXAMPLE`) | Live-Beobachtung (Chronicler 12+ Blocks ohne Wechsel), Betreiberfrage "sinnvollste Maßnahme" | LOCAL_VERIFIED | [docs/evidence/P58.md](evidence/P58.md) |
 | P59 | Verfallene Meetings: Nichtteilnahme wird jetzt aufgezeichnet (`meeting_unreported` + Auditor-Signatur) statt spurlos gelöscht; Nebenfunde: Prüfintervall (6h) länger als Verfallsschwelle (4h), Prüf-Hinweis überlebte keinen Tageswechsel | Live-Beobachtung, Betreiberauftrag "proaktiv lösen" | LOCAL_VERIFIED | [docs/evidence/P59.md](evidence/P59.md) |
 | P60 | Gazette-Prüf-Hinweis erhält dieselbe Deckelung wie Kollaboration (P51) und Meetings (P56/P58) | Stop-Hook-Feedback (Ziel nicht erfüllt), Betreiberauftrag "proaktiv lösen" | LOCAL_VERIFIED | [docs/evidence/P60.md](evidence/P60.md) |
+| P61 | Prüfinstanz von 09-chronicler auf 01-king umgewidmet (32+ Blockierungen ohne Compliance trotz korrektem Gate); Nebenfund: `snapshot()`-Hinweis für King/Prüfer war sich gegenseitig ausschließend verzweigt, jetzt Prüf-Rückstau vorrangig | Live-Beobachtung (Tracker, 40+ Min ohne Wirkung), Betreiberentscheidung "Rolle neu zuweisen" | LOCAL_VERIFIED | [docs/evidence/P61.md](evidence/P61.md) |
 
 ## Fortschrittsbuch
 

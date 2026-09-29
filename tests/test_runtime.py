@@ -8,6 +8,7 @@ import unittest
 from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'web'))
 from runtime import Resident,Tasks,resource_snapshot,tail,event_time,COLLABORATION_PRESSURE_CEILING,MEETING_REPORT_CEILING,GAZETTE_REVIEW_CEILING
+from village.gazette import REVIEWER_AGENT
 from decision import decision
 from village.collaboration import CooperationCheckpoint
 
@@ -283,15 +284,17 @@ class RuntimeTests(unittest.TestCase):
             ctx = json.loads(self.agent.snapshot())
         self.assertIn(f"kind='{assigned_kind}'", ctx['gazette_daily_note'])
 
-    def test_gazette_review_is_restricted_to_chronicler(self):
+    def test_gazette_review_is_restricted_to_the_reviewer(self):
         # P55 (operator directive): "die Zeitung sollte nicht aus
         # ungeprueften Beitraegen bestehen, es braucht eine Redaktionelle
-        # Pruefinstanz" - only 09-chronicler may approve/reject.
+        # Pruefinstanz" - only REVIEWER_AGENT may approve/reject. (Originally
+        # 09-chronicler; reassigned to 01-king by P60-follow-up after 32+
+        # consecutive gate-blocks produced zero reviews - see REVIEWER_AGENT.)
         edition = self.agent.gazette.open_edition('01-king', ['01-a', '02-b'])
         self.agent.gazette.submit_contribution(edition['id'], '01-a', 'mood', 'Feeling good.')
         self.execute('gazette_operation', operation='review', agent='01-a', kind='mood', decision='approve')
         self.assertFalse(self.agent.state['last_result']['ok'])
-        self.assertIn('Only 09-chronicler', self.agent.state['last_result']['result'])
+        self.assertIn(f'Only {REVIEWER_AGENT}', self.agent.state['last_result']['result'])
 
     def test_gazette_close_is_restricted_to_king(self):
         self.agent.gazette.open_edition('01-king', ['01-a', '02-b'])
@@ -299,17 +302,18 @@ class RuntimeTests(unittest.TestCase):
         self.assertFalse(self.agent.state['last_result']['ok'])
         self.assertIn('Only 01-king', self.agent.state['last_result']['result'])
 
-    def test_chronicler_can_review_and_king_can_close_with_archive(self):
-        chronicler_env = dict(self.env, AGENT_ID='09-chronicler', AGENT_NAME='chronicler', AGENT_ROLE='steward')
-        king_env = dict(self.env, AGENT_ID='01-king', AGENT_NAME='king', AGENT_ROLE='king')
-        chronicler = Resident(chronicler_env)
+    def test_reviewer_can_review_and_king_can_close_with_archive(self):
+        # REVIEWER_AGENT is King himself (P60-follow-up reassignment), so
+        # both roles happen to be the same resident here - review and close
+        # remain two separate gazette_operation calls either way.
+        king_env = dict(self.env, AGENT_ID=REVIEWER_AGENT, AGENT_NAME='king', AGENT_ROLE='king')
         king = Resident(king_env)
         edition = king.gazette.open_edition('01-king', ['01-a'])
         edition_id = edition['id']
         king.gazette.submit_contribution(edition_id, '01-a', 'mood', 'Feeling good.')
-        chronicler.execute({'tool_call': {'name': 'gazette_operation', 'arguments': {
+        king.execute({'tool_call': {'name': 'gazette_operation', 'arguments': {
             'operation': 'review', 'agent': '01-a', 'kind': 'mood', 'decision': 'approve'}}})
-        self.assertTrue(chronicler.state['last_result']['ok'])
+        self.assertTrue(king.state['last_result']['ok'])
         king.execute({'tool_call': {'name': 'gazette_operation', 'arguments': {'operation': 'close'}}})
         self.assertTrue(king.state['last_result']['ok'])
         archive_path = self.root / 'gazette' / 'archive' / edition_id / 'index.html'
@@ -319,7 +323,7 @@ class RuntimeTests(unittest.TestCase):
     def test_chronicler_sees_pending_review_hint_until_cleared(self):
         # The review gate itself must not become the exact reliability
         # bottleneck this session spent P48-P54 fixing.
-        chronicler_env = dict(self.env, AGENT_ID='09-chronicler', AGENT_NAME='chronicler', AGENT_ROLE='steward')
+        chronicler_env = dict(self.env, AGENT_ID=REVIEWER_AGENT, AGENT_NAME='king', AGENT_ROLE='king')
         chronicler = Resident(chronicler_env)
         edition = chronicler.gazette.open_edition('01-king', ['01-a'])
         chronicler.gazette.submit_contribution(edition['id'], '01-a', 'mood', 'Feeling good.')
@@ -327,7 +331,7 @@ class RuntimeTests(unittest.TestCase):
             before = json.loads(chronicler.snapshot())
         self.assertIn('gazette_daily_note', before)
         self.assertIn('editorial review', before['gazette_daily_note'])
-        chronicler.gazette.review_contribution(edition['id'], '01-a', 'mood', '09-chronicler', 'approve')
+        chronicler.gazette.review_contribution(edition['id'], '01-a', 'mood', REVIEWER_AGENT, 'approve')
         with patch.object(chronicler, 'memory', return_value={'items': []}):
             after = json.loads(chronicler.snapshot())
         self.assertNotIn('editorial review', after.get('gazette_daily_note', ''))
@@ -339,7 +343,13 @@ class RuntimeTests(unittest.TestCase):
         # hint only ever checked today's (empty) edition, so it would have
         # silently stopped mentioning them forever. Review is an ongoing
         # obligation against whatever was submitted, not a daily assignment.
-        chronicler_env = dict(self.env, AGENT_ID='09-chronicler', AGENT_NAME='chronicler', AGENT_ROLE='steward')
+        #
+        # Also exercises the P60-follow-up priority rule: REVIEWER_AGENT is
+        # now 01-king, and "today" has no edition at all here - under the
+        # old (King-branch-always-wins) structure this would have shown
+        # King's own "open today's edition" hint instead, hiding the review
+        # obligation. Pending reviews must win.
+        chronicler_env = dict(self.env, AGENT_ID=REVIEWER_AGENT, AGENT_NAME='king', AGENT_ROLE='king')
         chronicler = Resident(chronicler_env)
         yesterday = chronicler.gazette.open_edition('01-king', ['01-a'], edition_id='2026-09-27')
         chronicler.gazette.submit_contribution(yesterday['id'], '01-a', 'mood', 'Feeling good yesterday.')
@@ -349,6 +359,7 @@ class RuntimeTests(unittest.TestCase):
             ctx = json.loads(chronicler.snapshot())
         self.assertIn('gazette_daily_note', ctx)
         self.assertIn('2026-09-27/01-a/mood', ctx['gazette_daily_note'])
+        self.assertNotIn('No AI Village Gazette edition is open for today', ctx['gazette_daily_note'])
 
     def test_gazette_review_gate_eventually_blocks_other_actions(self):
         # P60 (operator: "Nicht nur beobachten wenn du GAPs identifizierst,
@@ -357,7 +368,7 @@ class RuntimeTests(unittest.TestCase):
         # reviews over 40+ minutes with no gate behind it - the same
         # unbounded-advisory gap already closed for collaboration
         # checkpoints (P51) and meeting reports (P56/P58).
-        chronicler_env = dict(self.env, AGENT_ID='09-chronicler', AGENT_NAME='chronicler', AGENT_ROLE='steward')
+        chronicler_env = dict(self.env, AGENT_ID=REVIEWER_AGENT, AGENT_NAME='king', AGENT_ROLE='king')
         chronicler = Resident(chronicler_env)
         edition = chronicler.gazette.open_edition('01-king', ['01-a'])
         chronicler.gazette.submit_contribution(edition['id'], '01-a', 'mood', 'Feeling good.')
@@ -373,7 +384,7 @@ class RuntimeTests(unittest.TestCase):
         self.assertIn(f'"edition_id":"{edition["id"]}"', result)
 
     def test_gazette_operation_itself_is_never_gated_by_review_pressure(self):
-        chronicler_env = dict(self.env, AGENT_ID='09-chronicler', AGENT_NAME='chronicler', AGENT_ROLE='steward')
+        chronicler_env = dict(self.env, AGENT_ID=REVIEWER_AGENT, AGENT_NAME='king', AGENT_ROLE='king')
         chronicler = Resident(chronicler_env)
         edition = chronicler.gazette.open_edition('01-king', ['01-a'])
         chronicler.gazette.submit_contribution(edition['id'], '01-a', 'mood', 'Feeling good.')
@@ -384,11 +395,11 @@ class RuntimeTests(unittest.TestCase):
         self.assertTrue(chronicler.state['last_result']['ok'])
 
     def test_gazette_review_gate_resets_once_nothing_pending(self):
-        chronicler_env = dict(self.env, AGENT_ID='09-chronicler', AGENT_NAME='chronicler', AGENT_ROLE='steward')
+        chronicler_env = dict(self.env, AGENT_ID=REVIEWER_AGENT, AGENT_NAME='king', AGENT_ROLE='king')
         chronicler = Resident(chronicler_env)
         edition = chronicler.gazette.open_edition('01-king', ['01-a'])
         chronicler.gazette.submit_contribution(edition['id'], '01-a', 'mood', 'Feeling good.')
-        chronicler.gazette.review_contribution(edition['id'], '01-a', 'mood', '09-chronicler', 'approve')
+        chronicler.gazette.review_contribution(edition['id'], '01-a', 'mood', REVIEWER_AGENT, 'approve')
         for i in range(GAZETTE_REVIEW_CEILING + 5):
             chronicler.execute({'tool_call': {'name': 'execute_bash', 'arguments': {'command': f'printf ok{i}'}}})
         self.assertTrue(chronicler.state['last_result']['ok'])
@@ -401,7 +412,7 @@ class RuntimeTests(unittest.TestCase):
         # 09-chronicler back in the meeting gate (pressure 25+) while he
         # still had 3 Gazette reviews outstanding - gazette_review_pressure
         # never moved because this code path never even reached it.
-        chronicler_env = dict(self.env, AGENT_ID='09-chronicler', AGENT_NAME='chronicler', AGENT_ROLE='steward')
+        chronicler_env = dict(self.env, AGENT_ID=REVIEWER_AGENT, AGENT_NAME='king', AGENT_ROLE='king')
         chronicler = Resident(chronicler_env)
         edition = chronicler.gazette.open_edition('01-king', ['01-a'])
         chronicler.gazette.submit_contribution(edition['id'], '01-a', 'mood', 'Feeling good.')
