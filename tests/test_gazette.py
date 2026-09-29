@@ -56,6 +56,42 @@ class OpenEditionTests(unittest.TestCase):
         edition = self.store.open_edition("01-king", PEERS, rng=random.Random(1))
         self.assertEqual(edition["assignments"], {})
 
+    def test_opening_carries_forward_a_pending_contribution_stranded_on_a_compiled_edition(self):
+        # P70 (live find, operator directive): a contribution submitted
+        # moments after its own edition compiled became permanently
+        # invisible. "Kein existierender Beitrag soll [verloren gehen] ...
+        # lass eine neue Version erstellen mit neuen Beitraegen" - carried
+        # forward into whichever edition opens next, rather than
+        # retroactively recompiling the already-published one.
+        self.store.open_edition("01-king", PEERS, edition_id="2026-09-28", rng=random.Random(1))
+        self.store.submit_contribution("2026-09-28", "01-king", "wishes", "A late wish", "Submitted just after close.")
+        self.store.close_edition("2026-09-28", "01-king")
+        # Stranded: 2026-09-28 is now compiled, the pending row is invisible
+        # to gazette_pending_reviews() (tested in test_runtime.py) forever
+        # unless carried forward.
+        new_edition = self.store.open_edition("01-king", PEERS, edition_id="2026-09-29", rng=random.Random(1))
+        moved = next(c for c in new_edition["contributions"] if c["agent"] == "01-king" and c["kind"] == "wishes")
+        self.assertEqual(moved["review_status"], "pending")
+        self.assertEqual(moved["content"], "Submitted just after close.")
+        old_edition = self.store.get_edition("2026-09-28")
+        self.assertFalse(any(c["agent"] == "01-king" and c["kind"] == "wishes" for c in old_edition["contributions"]))
+
+    def test_carry_forward_keeps_only_the_newest_of_two_orphaned_duplicates(self):
+        # Two different compiled editions each stranding a pending 'wishes'
+        # from the same agent - carrying both into the same new edition
+        # would violate UNIQUE(edition_id,agent,kind) and abort the whole
+        # open() inside one transaction. Must keep only the more recent one.
+        self.store.open_edition("01-king", PEERS, edition_id="2026-09-27", rng=random.Random(1))
+        self.store.submit_contribution("2026-09-27", "01-king", "wishes", "Old wish", "Older stranded content.")
+        self.store.close_edition("2026-09-27", "01-king")
+        self.store.open_edition("01-king", PEERS, edition_id="2026-09-28", rng=random.Random(1))
+        self.store.submit_contribution("2026-09-28", "01-king", "wishes", "New wish", "Newer stranded content.")
+        self.store.close_edition("2026-09-28", "01-king")
+        new_edition = self.store.open_edition("01-king", PEERS, edition_id="2026-09-29", rng=random.Random(1))
+        matches = [c for c in new_edition["contributions"] if c["agent"] == "01-king" and c["kind"] == "wishes"]
+        self.assertEqual(len(matches), 1)
+        self.assertEqual(matches[0]["content"], "Newer stranded content.")
+
 
 class AssignKindsTests(unittest.TestCase):
     def setUp(self):
@@ -144,6 +180,15 @@ class SubmitContributionTests(unittest.TestCase):
     def test_unknown_edition_is_rejected(self):
         with self.assertRaises(ValueError):
             self.store.submit_contribution("2099-01-01", "03-librarian", "mood", "Update: see full text." , "x")
+
+    def test_submitting_to_an_already_compiled_edition_is_rejected(self):
+        # P70 (live find): used to be silently accepted into a dead end -
+        # gazette_pending_reviews() never looks at compiled editions again.
+        self.store.submit_contribution("2026-09-28", "02-explorer", "mood", "Update: see full text.", "Feeling good.")
+        self.store.review_contribution("2026-09-28", "02-explorer", "mood", "01-king", "approve")
+        self.store.close_edition("2026-09-28", "01-king")
+        with self.assertRaises(ValueError):
+            self.store.submit_contribution("2026-09-28", "03-librarian", "wishes", "Update: see full text.", "Too late.")
 
     def test_empty_headline_is_rejected(self):
         # P69 (operator feedback): "bitte nur zwei Zeilen pro Beitrag [...]

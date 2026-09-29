@@ -183,7 +183,19 @@ class GazetteStore:
                      rng: Optional[random.Random] = None) -> Dict[str, Any]:
         """Idempotent: opening today's edition twice returns the same one
         (same game/pairing) rather than re-drawing - King's own repeated
-        action must not reshuffle an edition already announced to peers."""
+        action must not reshuffle an edition already announced to peers.
+
+        P70 (live find, operator directive 2026-09-29): a contribution
+        submitted after its own edition was already compiled became
+        permanently invisible - gazette_pending_reviews() only scans
+        non-compiled editions, so nothing ever pointed the reviewer at it
+        again. Operator: "Kein existierender Beitrag soll [verloren]
+        sein[...] Lass eine neue Version erstellen mit neuen Beitraegen" -
+        rather than retroactively recompiling the already-published
+        edition (breaks the write-once archive guarantee), any pending
+        contribution still stranded on a compiled edition is carried
+        forward into whichever edition opens next, so it takes its place
+        alongside that day's genuinely new contributions."""
         eid = edition_id or today()
         existing = self.get_edition(eid)
         if existing:
@@ -197,6 +209,25 @@ class GazetteStore:
                 "VALUES(?,?,?,?,?,?,NULL)",
                 (eid, "open", king_agent, now(), game, ",".join(pair)),
             )
+            orphans = c.execute(
+                "SELECT id, agent, kind, created_at FROM gazette_contributions "
+                "WHERE review_status='pending' AND edition_id IN "
+                "(SELECT id FROM gazette_editions WHERE status='compiled')"
+            ).fetchall()
+            ts = now()
+            seen = set()
+            # Newest first: if the same agent somehow has two stranded
+            # pending rows of the same kind (two different compiled
+            # editions), keep only the most recent - the new edition's
+            # UNIQUE(edition_id,agent,kind) would otherwise reject the
+            # second and abort this entire open() inside one transaction.
+            for row in sorted(orphans, key=lambda r: r["created_at"], reverse=True):
+                key = (row["agent"], row["kind"])
+                if key in seen:
+                    continue
+                seen.add(key)
+                c.execute("UPDATE gazette_contributions SET edition_id=?, updated_at=? WHERE id=?",
+                         (eid, ts, row["id"]))
             c.commit()
         return self.get_edition(eid)  # type: ignore
 
@@ -280,6 +311,16 @@ class GazetteStore:
         edition = self.get_edition(edition_id)
         if not edition:
             raise ValueError(f"unknown gazette edition: {edition_id}")
+        # P70 (live find): a contribution submitted moments after its own
+        # edition was compiled used to be silently accepted into a dead
+        # end - gazette_pending_reviews() never looks at compiled editions
+        # again, so it sat there forever, invisible to review. Rejected
+        # outright now, with a clear next step, instead of a silent trap;
+        # open_edition() carries forward anything already stranded there
+        # from before this fix.
+        if edition["status"] == "compiled":
+            raise ValueError(f"gazette edition {edition_id} is already compiled/closed; "
+                             "wait for the next edition to open and contribute there")
         if kind == "game_result" and agent not in edition["game_pair"]:
             raise ValueError(f"only today's drawn pair {edition['game_pair']} may submit a game_result")
         ts = now()

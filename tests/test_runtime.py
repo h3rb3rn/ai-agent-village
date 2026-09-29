@@ -539,6 +539,38 @@ class RuntimeTests(unittest.TestCase):
         self.assertIn('operation=close', ctx['gazette_daily_note'])
         self.assertNotIn('No AI Village Gazette edition is open for today', ctx['gazette_daily_note'])
 
+    def test_gazette_carried_forward_contribution_resurfaces_for_review(self):
+        # P70 (live find, operator directive): a contribution stranded on a
+        # compiled edition (submit_contribution() now rejects new ones
+        # there, but a pre-fix row like the two found live must still be
+        # rescued) is invisible to gazette_pending_reviews() until
+        # open_edition() carries it into whichever edition opens next -
+        # end-to-end through the real hint, not just the store method.
+        king_env = dict(self.env, AGENT_ID=REVIEWER_AGENT, AGENT_NAME='king', AGENT_ROLE='king')
+        king = Resident(king_env)
+        edition = king.gazette.open_edition('01-king', ['01-a'], edition_id='2026-09-28')
+        king.gazette.submit_contribution(edition['id'], '01-a', 'mood', "Update: see full text.", 'Feeling good.')
+        king.gazette.review_contribution(edition['id'], '01-a', 'mood', REVIEWER_AGENT, 'approve')
+        # Simulate the exact live scenario: a second contribution arrives
+        # and gets stranded moments after close (direct DB write, since
+        # submit_contribution() itself now correctly refuses this).
+        with king.gazette._conn() as c:
+            c.execute(
+                "INSERT INTO gazette_contributions(edition_id,agent,kind,headline,content,created_at,updated_at,review_status) "
+                "VALUES(?,?,?,?,?,?,?,'pending')",
+                (edition['id'], '01-a', 'wishes', 'Stranded wish', 'Submitted just after close.', 'x', 'x'))
+            c.commit()
+        king.gazette.close_edition(edition['id'], '01-king')
+        self.assertEqual(king.gazette_pending_reviews(), [])  # invisible while stranded
+        king.gazette.open_edition('01-king', ['01-a'], edition_id='2026-09-29')
+        pending = king.gazette_pending_reviews()
+        self.assertEqual(len(pending), 1)
+        self.assertEqual(pending[0][1]['content'], 'Submitted just after close.')
+        with patch.object(king, 'memory', return_value={'items': []}):
+            ctx = json.loads(king.snapshot())
+        self.assertIn('gazette_daily_note', ctx)
+        self.assertIn('editorial review', ctx['gazette_daily_note'])
+
     def test_gazette_close_gate_eventually_blocks_other_actions(self):
         king_env = dict(self.env, AGENT_ID=REVIEWER_AGENT, AGENT_NAME='king', AGENT_ROLE='king')
         king = Resident(king_env)
