@@ -100,6 +100,7 @@ Pro Paket Nachweis unter `docs/evidence/Pxx.md` anlegen, sobald tatsächlich dar
 | P62 | Legacy-JSON-Parser verwarf mehrere sauber zeilengetrennte Aktionsobjekte komplett statt (wie bei Fenced Blocks seit P51) nur das erste auszuführen und den Rest zu zählen | Live-Beobachtung (King's Prüf-/Schließ-Versuch direkt nach P61 komplett verworfen) | LOCAL_VERIFIED | [docs/evidence/P62.md](evidence/P62.md) |
 | P63 | Fertig geprüfte Gazette-Ausgabe wurde nie zum abschließenden `close`/Kompilieren aufgefordert (Hinweis + Deckelung gleich mitgebaut, dieselbe Lücke war schon 3x advisory-only unzureichend) | Live-Beobachtung (Ausgabe 2026-09-28 blieb nach vollständiger Prüfung unkompiliert) | LOCAL_VERIFIED | [docs/evidence/P63.md](evidence/P63.md) |
 | P64 | AI Village Gazette Stufe 4 (Teil 1): Dashboard-Seite liest archivierte Ausgaben; Nebenfund: Archiv-Dateien waren durch Kings Umask für die WebUI unlesbar (0700/0600, jetzt gruppen-lesbar wie coordination.sqlite3) | Betreiberwunsch (eigener Menüpunkt), Plan-Stufe 4 | LOCAL_VERIFIED | [docs/evidence/P64.md](evidence/P64.md) · PDF-Export offen |
+| P65 | `install-runtime.py` deployte `web/webui.py`/`observatory.*` nie mit (Ziel-Liste unvollständig, seit jeher) – Ziel-Konstruktion in testbare `build_targets()` extrahiert, Lücke geschlossen, automatischer WebUI-Neustart ergänzt | Live-Beobachtung (P64-Routen 404 trotz "erfolgreichem" Install) | LOCAL_VERIFIED | [docs/evidence/P65.md](evidence/P65.md) |
 
 ## Fortschrittsbuch
 

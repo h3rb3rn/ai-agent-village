@@ -71,6 +71,46 @@ def validate_release_sources(source):
     return hashes
 
 
+def build_targets(source):
+    """The full set of files this installer deploys, as {destination: source}.
+
+    Extracted out of main() (P65) so it is directly unit-testable without
+    mocking systemd/root/filesystem effects - the drift this caught (webui.py
+    and observatory.* were never in this list at all, see docs/evidence/P65.md)
+    would otherwise only ever surface live, the way it did for P64.
+    """
+    targets = {
+        Path('/usr/local/lib/ai-village/runtime.py'): source / 'web/runtime.py',
+        Path('/usr/local/lib/ai-village/event_history.py'): source / 'web/event_history.py',
+        Path('/usr/local/lib/ai-village/decision.py'): source / 'web/decision.py',
+        Path('/usr/local/lib/ai-village/memory-gateway.py'): source / 'memory/gateway.py',
+        Path('/usr/local/lib/ai-village/append-event.py'): source / 'scripts/append-event.py',
+        Path('/usr/local/lib/ai-village/mcp-tools-server.py'): source / 'scripts/mcp-tools-server.py',
+        Path('/usr/local/share/ai-village/system-prompt.txt'): source / 'prompts/resident-system.txt',
+        Path('/usr/local/share/ai-village/system-prompt-core.txt'): source / 'prompts/resident-core.txt',
+        Path('/usr/local/share/ai-village/runtime-policy.json'): source / 'config/runtime-policy.json',
+        Path('/usr/local/share/ai-village/task-templates.json'): source / 'config/task-templates.json',
+        # P64/P65: webui.py and its static assets were never in this list -
+        # every resident-agent-facing file had a redeploy path, but the
+        # dashboard itself did not. Found live: the P64 Gazette dashboard
+        # page was pushed, "installed" successfully, and the host kept
+        # serving the old webui.py/observatory.* indefinitely (404s on the
+        # new routes) until a manual install/restart. See docs/evidence/P65.md.
+        Path('/usr/local/lib/ai-village/webui.py'): source / 'web/webui.py',
+        Path('/usr/local/share/ai-village/web/observatory.html'): source / 'web/observatory.html',
+        Path('/usr/local/share/ai-village/web/observatory.css'): source / 'web/observatory.css',
+        Path('/usr/local/share/ai-village/web/observatory.js'): source / 'web/observatory.js',
+    }
+    # Runtime imports are installed as a self-contained package. Keeping these
+    # modules in the targeted release prevents a live host from running a newer
+    # runtime with an older, incomplete import tree.
+    for module in ('__init__.py', 'actions.py', 'collaboration.py', 'policy.py', 'prompting.py', 'tools.py', 'auditor.py', 'auditor_llm.py', 'artifacts.py', 'authority.py', 'config.py',
+                   'containers.py', 'control.py', 'coordinator.py', 'inference.py',
+                   'events.py', 'event_retention.py', 'firewatch.py', 'jobs.py', 'lifecycle.py', 'meetings.py', 'gazette.py', 'research.py', 'research_protocol.py', 'interventions.py', 'research_tasks.py', 'rollout.py', 'lineage.py', 'recovery.py', 'security.py', 'teams.py'):
+        targets[Path('/usr/local/lib/ai-village/village') / module] = source / 'village' / module
+    return targets
+
+
 def should_stop_active_services(active, provision_only, no_start):
     """Whether currently-active resident units should be stopped before
     installing new files.
@@ -120,24 +160,7 @@ def main():
                 parser.error(f'{key} differs from installed environment; reconcile deliberately before rollout (no change made)')
     root=Path(agents[0]['VILLAGE_ROOT'])
     if any(Path(a['VILLAGE_ROOT'])!=root for a in agents): parser.error('multiple roots not supported')
-    targets={
-        Path('/usr/local/lib/ai-village/runtime.py'):source/'web/runtime.py',
-        Path('/usr/local/lib/ai-village/event_history.py'):source/'web/event_history.py',
-        Path('/usr/local/lib/ai-village/decision.py'):source/'web/decision.py',
-        Path('/usr/local/lib/ai-village/memory-gateway.py'):source/'memory/gateway.py',
-        Path('/usr/local/lib/ai-village/append-event.py'):source/'scripts/append-event.py',
-        Path('/usr/local/lib/ai-village/mcp-tools-server.py'):source/'scripts/mcp-tools-server.py',
-        Path('/usr/local/share/ai-village/system-prompt.txt'):source/'prompts/resident-system.txt',
-        Path('/usr/local/share/ai-village/system-prompt-core.txt'):source/'prompts/resident-core.txt',
-        Path('/usr/local/share/ai-village/runtime-policy.json'):source/'config/runtime-policy.json',
-        Path('/usr/local/share/ai-village/task-templates.json'):source/'config/task-templates.json'}
-    # Runtime imports are installed as a self-contained package.  Keeping these
-    # modules in the targeted release prevents a live host from running a newer
-    # runtime with an older, incomplete import tree.
-    for module in ('__init__.py', 'actions.py', 'collaboration.py', 'policy.py', 'prompting.py', 'tools.py', 'auditor.py', 'auditor_llm.py', 'artifacts.py', 'authority.py', 'config.py',
-                   'containers.py', 'control.py', 'coordinator.py', 'inference.py',
-                   'events.py', 'event_retention.py', 'firewatch.py', 'jobs.py', 'lifecycle.py', 'meetings.py', 'gazette.py', 'research.py', 'research_protocol.py', 'interventions.py', 'research_tasks.py', 'rollout.py', 'lineage.py', 'recovery.py', 'security.py', 'teams.py'):
-        targets[Path('/usr/local/lib/ai-village/village') / module] = source / 'village' / module
+    targets=build_targets(source)
     if not args.provision_only:
         for target,src in targets.items():
             if src.suffix=='.py': compile(src.read_text(),str(src),'exec')
@@ -175,6 +198,12 @@ def main():
         if not args.provision_only:
             for target,src in targets.items(): put(target,src.read_text())
             put(Path('/usr/local/lib/ai-village/agent-runner'), '#!/bin/sh\nexec /usr/bin/python3 /usr/local/lib/ai-village/runtime.py\n',0o755)
+            # P65: unlike every other .py target above (invoked as `python3
+            # <path>`), systemd's ai-village-webui.service execs webui.py
+            # directly (ExecStart=/usr/local/lib/ai-village/webui.py) - it
+            # needs its own executable bit, which the shared put() default
+            # (0o644) does not set.
+            Path('/usr/local/lib/ai-village/webui.py').chmod(0o755)
         token_path=Path('/etc/ai-village/memory-agent-tokens.json')
         tokens=json.loads(token_path.read_text()) if token_path.exists() else {}
         credentials=Path('/etc/ai-village/credentials'); credentials.mkdir(exist_ok=True,mode=0o700)
@@ -200,6 +229,12 @@ def main():
         if not args.provision_only:
             subprocess.run(['systemctl','restart','ai-village-memory-gateway.service'],check=True)
             subprocess.run(['systemctl','is-active','--quiet','ai-village-memory-gateway.service'],check=True)
+            # P65: webui.py/observatory.* are now targets too (see above) -
+            # without this, a changed dashboard file sits on disk until
+            # someone happens to restart the service separately, exactly the
+            # gap the P64 Gazette page hit live.
+            subprocess.run(['systemctl','restart','ai-village-webui.service'],check=True)
+            subprocess.run(['systemctl','is-active','--quiet','ai-village-webui.service'],check=True)
             if args.no_start:
                 print('Installed successfully without touching currently running resident services (--no-start); any resident that was already active keeps running the old code until you restart it.')
             else:
@@ -219,6 +254,7 @@ def main():
         subprocess.run(['systemctl','daemon-reload'])
         if not args.provision_only:
             subprocess.run(['systemctl','restart','ai-village-memory-gateway.service'])
+            subprocess.run(['systemctl','restart','ai-village-webui.service'])
             if active: subprocess.run(['systemctl','restart',*active])
         status='rolled-back'
         raise
