@@ -99,6 +99,70 @@ GAZETTE_CLOSE_CEILING = 10
 # have passed since opening - whichever comes first.
 GAZETTE_CLOSE_MIN_HOURS = 6
 
+# P72 (operator directive, 2026-09-29): "Es kann nicht sein das die Agents
+# ununterbrochen in Loops festhaengen ... Mechanismen die den Agents im
+# Zweifel Hilfe zur Selbsthilfe geben und Loops identifizieren sowie
+# unterbrechen/durchbrechen." Live audit across all 9 residents found three
+# distinct failure classes, none caused by context-window size:
+#   - reason-specific but genuinely fixable JSON mistakes (unescaped quotes
+#     in an inline heredoc, task_operation/job_status confusion, etc.) -
+#     the general invalid_decision path only ever gave one generic phrase
+#     regardless of cause, the same "advisory-only, no differentiation" gap
+#     already found and fixed three times elsewhere this session (P51/P56/P60),
+#     just never applied to the most fundamental error path of all.
+#   - a genuinely stuck resident (King re-attempted one exact
+#     resource_monitor.sh heredoc for HOURS, unresolved) whose per-cycle
+#     invalid_streak kept resetting to 0 every time he succeeded at an
+#     unrelated action in between - a purely-consecutive counter never
+#     catches a failure that recurs over time with successes interleaved.
+#   - two agents (07-methodologist, 08-logician) whose failures are a real
+#     model/config mismatch, addressed separately via their .env settings
+#     (see docs/evidence/P72.md), not by this mechanism.
+# LOOP_BREAKER_STREAK: consecutive invalid decisions (spans roughly two
+# 900s backoff cycles) after which this cycle is restricted to idle only.
+LOOP_BREAKER_STREAK = 6
+# A rejected attempt's content-fingerprint recurring this many times within
+# REPEATED_REJECTION_WINDOW_SECONDS - regardless of successes in between -
+# also triggers the idle-only restriction (catches King's multi-hour loop,
+# which a consecutive streak alone never would).
+LOOP_BREAKER_REPEAT = 3
+REPEATED_REJECTION_WINDOW_SECONDS = 6 * 3600
+# A softer, still-visible nudge at the second identical repeat, before the
+# hard restriction kicks in at LOOP_BREAKER_REPEAT.
+REPEATED_REJECTION_NUDGE_AT = 2
+
+
+def invalid_decision_guidance(reason, preview):
+    """Concrete, reason-specific correction instead of one generic phrase
+    for every cause - proven repeatedly this session (P58/P60/P63) that a
+    small model needs a literal, copyable correction, not a description,
+    and different failure reasons genuinely need different fixes."""
+    if reason == 'output budget exhausted':
+        return ('Your response was cut off before finishing - it used your entire output '
+                'budget without completing the action. Skip any reasoning or narration: '
+                'output ONLY the JSON action, starting with { as the very first character.')
+    if reason in ('incomplete village-action block', 'incomplete legacy action object', 'unclosed action block'):
+        # Heuristic: an odd number of double-quotes in the rejected preview
+        # is the classic signature of an inline multi-line script (heredoc)
+        # whose own embedded quotes broke the JSON string boundary - the
+        # exact, repeatedly-observed live pattern (docs/evidence/P72.md).
+        if preview.count('"') % 2 == 1 or '<<' in preview:
+            return ('Your JSON was broken, most likely by an unescaped quote or newline inside '
+                     'a long inline script. Keep execute_bash commands short and avoid heredocs '
+                     'with embedded quotes; prefer a short one-line command, or build a file with '
+                     'several short printf/echo calls instead of one large inline script.')
+        return ('Your JSON action was incomplete - it stopped before the closing braces. Keep '
+                'the whole action short: {"name":"tool_name","arguments":{...}}, nothing before '
+                'or after it.')
+    if reason == 'unknown task operation':
+        return ('job_status, cancel_job and start_job are their own top-level actions, not '
+                'task_operation sub-actions. Use {"name":"job_status","arguments":{"job_id":"..."}} '
+                'directly instead of wrapping it inside task_operation.')
+    if reason == 'missing action argument':
+        return ('A required argument was empty or missing. Check every field the action needs '
+                'and provide all of them as non-empty values.')
+    return 'Correct your envelope: {"name":"tool_name","arguments":{...}}.'
+
 
 def now():
     return datetime.now(timezone.utc).isoformat()
@@ -477,7 +541,7 @@ class Resident:
             # instead of a hand-maintained copy, which had drifted stale - missing
             # calc_operation and research_proposal entirely, and describing
             # research_request without its huggingface source.
-            tools={name: ACTION_SPECS[name]['doc'] for name in normalize_allowed(self.policy.allowed_actions)},
+            tools={name: ACTION_SPECS[name]['doc'] for name in normalize_allowed(self.effective_allowed_actions())},
             task_ownership_note='Before announcing you will do a task, check its "owner" in projects; '
                                 'if someone else already owns it, do not duplicate their announced intent.',
             your_repeated_mistakes=self.failure_tally(),
@@ -633,6 +697,18 @@ class Resident:
                 f"Your active task {own_project['id']} has blockers: {own_project['blockers']}. "
                 "You may work on independent unblocked steps, yield the task, or claim an alternative open task without waiting for external approval."
             )
+        # P72: "Hilfe zur Selbsthilfe" - make the loop visible to the
+        # resident itself, not just silently restrict it. Mirrors why the
+        # effective allowed-action list (above, in 'tools') is idle-only.
+        if self.effective_allowed_actions() == ['idle']:
+            streak = self.state.get('invalid_streak', 0)
+            context['loop_breaker_note'] = (
+                f"You have failed to produce a valid action {streak} times in a row (or kept "
+                "repeating the exact same rejected content), and it has not started working. "
+                "This cycle only accepts idle - send {\"name\":\"idle\",\"arguments\":{}} to reset "
+                "cleanly. Next cycle, try a genuinely different, simpler approach to whatever you "
+                "were attempting."
+            )
         query = own_project['title'] if own_project else 'observation experiment evidence project'
         try:
             memories = self.memory('/v1/search', {'query': query, 'limit': 4})
@@ -773,6 +849,30 @@ class Resident:
             return 'text'
         return self.policy.action_format
 
+    def effective_allowed_actions(self):
+        """P72: normally self.policy.allowed_actions, but restricted to
+        idle only for one cycle after sustained failure - the concrete
+        "durchbrechen" (break through) mechanism, not just advisory text.
+        Constraining the schema itself (not merely suggesting idle in
+        prose) is the strongest lever available: idle needs zero
+        arguments, so even a resident that keeps producing broken JSON for
+        anything else has the best possible chance of succeeding once
+        that is the only shape the schema and system prompt admit.
+        Triggers on either a long consecutive invalid_streak, or the same
+        rejected fingerprint recurring across a longer window regardless
+        of successes in between (see LOOP_BREAKER_STREAK/_REPEAT)."""
+        if self.state.get('invalid_streak', 0) >= LOOP_BREAKER_STREAK:
+            return ['idle']
+        window = [r for r in self.state.get('recent_rejected_fingerprints', [])
+                 if time.time() - r['at'] < REPEATED_REJECTION_WINDOW_SECONDS]
+        if window:
+            counts = {}
+            for r in window:
+                counts[r['fp']] = counts.get(r['fp'], 0) + 1
+            if max(counts.values()) >= LOOP_BREAKER_REPEAT:
+                return ['idle']
+        return self.policy.allowed_actions
+
     def guard(self, name, args):
         if is_paused(self.pause_marker) and name in ('execute_bash', 'start_job'):
             self.feedback(name, 'Execution blocked: simulation is paused ("pausiert startet nichts").', False)
@@ -787,8 +887,9 @@ class Resident:
                 self.event('foreign_home_blocked', f'target_agent={other}; command_prefix={args["command"][:160]}')
                 return False
 
-        if name not in self.policy.allowed_actions:
-            self.feedback(name, f'Action {name} is not available to you. Choose one of: {", ".join(self.policy.allowed_actions)}.', False)
+        allowed_now = self.effective_allowed_actions()
+        if name not in allowed_now:
+            self.feedback(name, f'Action {name} is not available to you right now. Choose one of: {", ".join(allowed_now)}.', False)
             return False
         if name == 'board_message':
             recipient = str(args.get('recipient', 'ALL'))
@@ -999,16 +1100,38 @@ class Resident:
                 meeting_hint = (f' An open meeting ({pending["id"]}) requires exactly one '
                                 'meeting_operation report first; use operation report with '
                                 'meeting_id, achieved, evidence, next_step and blockers.')
-            self.feedback('invalid_decision', parsed['fallback_reason']+'. No action executed. Correct your envelope: {"name":"tool_name","arguments":{...}}.'+meeting_hint+' Your rejected final text: '+preview, False)
+            # P72: reason-specific correction replaces the one generic phrase
+            # every cause used to get (see invalid_decision_guidance()).
+            guidance = invalid_decision_guidance(parsed['fallback_reason'], preview)
+            fp = hashlib.sha256(str(preview).encode('utf-8')).hexdigest()[:16]
+            # P72: a resident can keep re-attempting the exact same rejected
+            # content across many cycles with genuine successes interleaved
+            # (King's resource_monitor.sh heredoc recurred for hours while he
+            # successfully did other, unrelated things in between) - a
+            # purely-consecutive invalid_streak never catches that pattern.
+            # Track how often this exact fingerprint has recurred within a
+            # bounded recent window, independent of the streak.
+            window = [r for r in self.state.get('recent_rejected_fingerprints', [])
+                     if time.time() - r['at'] < REPEATED_REJECTION_WINDOW_SECONDS]
+            repeat_count = sum(1 for r in window if r['fp'] == fp) + 1
+            window.append({'fp': fp, 'at': time.time()})
+            self.state['recent_rejected_fingerprints'] = window[-40:]
+            if repeat_count >= REPEATED_REJECTION_NUDGE_AT:
+                guidance += (f' You have attempted this exact same rejected content {repeat_count} '
+                            'times now - repeating it again will fail the same way. Try a genuinely '
+                            'different approach, or send idle to skip this cycle.')
+            self.feedback('invalid_decision', parsed['fallback_reason']+'. No action executed. '+guidance+meeting_hint+' Your rejected final text: '+preview, False)
             self.event('invalid_decision', parsed['fallback_reason'])
             # village/auditor.py::detect_format_violation() keys on this exact
             # event name and 'reason=...; preview=...' shape (P43): the bare
             # 'invalid_decision' event above has no preview and cannot feed the
             # auditor's fine-tuning export, which needs the actual rejected text.
             self.event('invalid_decision_detail', f'reason={parsed["fallback_reason"]}; preview={preview}')
+            if repeat_count >= LOOP_BREAKER_REPEAT:
+                self.event('loop_breaker_repeat', f'fingerprint={fp}; repeat_count={repeat_count}')
             # A rejected generation is never published: it stays in the resident's
             # private last-response.json (bounded, redacted) and is only counted.
-            self.state['last_rejected_fingerprint'] = hashlib.sha256(str(preview).encode('utf-8')).hexdigest()[:16]
+            self.state['last_rejected_fingerprint'] = fp
             return
         self.state['invalid_streak'] = 0
         if parsed.get('extra_blocks_ignored'):
@@ -1467,12 +1590,16 @@ class Resident:
                f'role={self.role}. These override stale model details in founding identity. '
                + self.capability_summary())
         action_format = self.effective_action_format()
+        # P72: idle-only for this cycle after sustained failure - restricts
+        # the schema sent to the model AND its own system prompt, not just
+        # advisory text (see effective_allowed_actions()).
+        allowed_now = self.effective_allowed_actions()
         checkpoint = getattr(self, 'current_collaboration_checkpoint', None)
-        consult_peer = checkpoint.peer_id if (checkpoint and checkpoint.stage == 'consult' and 'board_message' in self.policy.allowed_actions) else None
-        response_format = action_schema(self.policy.allowed_actions, self.peer_ids(), consult_peer) if action_format == 'schema' else None
+        consult_peer = checkpoint.peer_id if (checkpoint and checkpoint.stage == 'consult' and 'board_message' in allowed_now) else None
+        response_format = action_schema(allowed_now, self.peer_ids(), consult_peer) if action_format == 'schema' else None
         messages = [
             {'role': 'system', 'content': build_system_prompt(self.policy.prompt_profile, core_text, full_text, identity, live,
-                                                              self.policy.allowed_actions, action_format, self.policy.role_brief)},
+                                                              allowed_now, action_format, self.policy.role_brief)},
             {'role': 'user', 'content': snapshot + user_suffix(action_format)}
         ]
         api_type = self.env.get('API_TYPE', 'ollama').lower()
@@ -1535,7 +1662,7 @@ class Resident:
             self.event('inference_finished', f'request_id={req_record.request_id} duration_ms={elapsed_ms}; gpu_verified={gpu_verified}; metrics={json.dumps(metrics)}', True)
             # Private last output, bounded; do not broadcast rejected generations to peers.
             write_json(self.home / 'last-response.json', dict(metrics=metrics, content=self.redact(final_content(norm.content))[:65536]))
-            parsed = decision(answer, self.policy.allowed_actions)
+            parsed = decision(answer, allowed_now)
             if action_format == 'schema':
                 conforming = not parsed.get('fallback_reason') and not parsed.get('prose')
                 streak = 0 if conforming else int(self.state.get('schema_failure_streak', 0)) + 1

@@ -886,3 +886,87 @@ class WidenedRepeatWindowTests(unittest.TestCase):
         with patch('time.time', return_value=now):
             self.execute('execute_bash', command='echo hi')
         self.assertTrue(self.agent.state['last_result']['ok'])
+
+
+class LoopBreakerTests(unittest.TestCase):
+    """P72 (operator directive, 2026-09-29): "Es kann nicht sein das die
+    Agents ununterbrochen in Loops festhaengen ... Mechanismen die den
+    Agents im Zweifel Hilfe zur Selbsthilfe geben und Loops identifizieren
+    sowie unterbrechen/durchbrechen." Live audit found the general
+    invalid_decision path gave one generic phrase regardless of cause, and
+    a genuinely stuck resident (King re-attempting one exact
+    resource_monitor.sh heredoc for hours, invalid_streak resetting every
+    time he succeeded at something unrelated in between) that a purely-
+    consecutive streak counter never catches."""
+
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp(prefix='village-loopbreak-'))
+        (self.root / 'board').mkdir(); (self.root / 'telemetry').mkdir()
+        (self.root / 'identity.txt').write_text('identity')
+        self.env = dict(AGENT_ID='01-a', AGENT_NAME='a', AGENT_ROLE='resident', VILLAGE_ROOT=str(self.root),
+                        AGENT_IDENTITY_PROMPT=str(self.root / 'identity.txt'), OLLAMA_MODEL='m')
+        self.agent = Resident(self.env)
+
+    def tearDown(self):
+        shutil.rmtree(self.root, ignore_errors=True)
+
+    def reject(self, content):
+        (self.agent.home / 'last-response.json').write_text(json.dumps({'content': content}))
+        self.agent.execute(decision({'message': {'content': content}}))
+
+    def test_reason_specific_guidance_for_output_budget_exhausted(self):
+        (self.agent.home / 'last-response.json').write_text(json.dumps({'content': 'partial'}))
+        self.agent.execute(decision({'done_reason': 'length', 'message': {'content': 'partial'}}))
+        self.assertIn('Skip any reasoning or narration', self.agent.state['last_result']['result'])
+
+    def test_reason_specific_guidance_for_unknown_task_operation(self):
+        self.reject('{"name":"task_operation","arguments":{"action":"job_status","job_id":"abc"}}')
+        result = self.agent.state['last_result']['result']
+        self.assertIn('job_status', result)
+        self.assertIn('not task_operation sub-actions', result)
+
+    def test_reason_specific_guidance_detects_an_unescaped_quote_in_a_heredoc(self):
+        # An odd number of double-quotes in the rejected text is the classic
+        # signature of an inline script whose own quote broke the JSON
+        # string boundary - exactly the live pattern (King's
+        # resource_monitor.sh, docs/evidence/P72.md).
+        (self.agent.home / 'last-response.json').write_text(
+            json.dumps({'content': '{"name":"execute_bash","arguments":{"command":"cat > f << EOF\necho "unterminated'}))
+        self.agent.execute(decision({'message': {'content': '{"name":"execute_bash","arguments":{"command":"broken'}}))
+        self.assertIn('unescaped quote', self.agent.state['last_result']['result'])
+
+    def test_repeated_identical_rejection_gets_an_escalating_nudge(self):
+        self.reject('{"name":"broken')
+        first = self.agent.state['last_result']['result']
+        self.assertNotIn('exact same rejected content', first)
+        self.reject('{"name":"broken')
+        second = self.agent.state['last_result']['result']
+        self.assertIn('exact same rejected content', second)
+
+    def test_repeated_rejection_across_streak_resets_still_triggers_the_loop_breaker(self):
+        # The whole point of P72: a purely-consecutive counter never catches
+        # a failure that recurs over time with genuine successes in between.
+        for _ in range(rt.LOOP_BREAKER_REPEAT):
+            self.reject('{"name":"broken')
+            self.agent.state['invalid_streak'] = 0  # simulate an unrelated success in between
+        self.assertEqual(self.agent.effective_allowed_actions(), ['idle'])
+
+    def test_high_consecutive_streak_also_triggers_the_loop_breaker(self):
+        self.agent.state['invalid_streak'] = rt.LOOP_BREAKER_STREAK
+        self.assertEqual(self.agent.effective_allowed_actions(), ['idle'])
+
+    def test_below_both_thresholds_keeps_normal_actions(self):
+        self.agent.state['invalid_streak'] = rt.LOOP_BREAKER_STREAK - 1
+        self.assertNotEqual(self.agent.effective_allowed_actions(), ['idle'])
+
+    def test_loop_breaker_note_and_idle_only_tools_appear_in_snapshot(self):
+        self.agent.state['invalid_streak'] = rt.LOOP_BREAKER_STREAK
+        with patch.object(self.agent, 'memory', return_value={'items': []}):
+            ctx = json.loads(self.agent.snapshot())
+        self.assertIn('loop_breaker_note', ctx)
+        self.assertEqual(set(ctx['tools'].keys()), {'idle'})
+
+    def test_guard_rejects_non_idle_actions_while_loop_broken_but_allows_idle(self):
+        self.agent.state['invalid_streak'] = rt.LOOP_BREAKER_STREAK
+        self.assertFalse(self.agent.guard('execute_bash', {'command': 'ls'}))
+        self.assertTrue(self.agent.guard('idle', {}))
