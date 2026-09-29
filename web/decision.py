@@ -63,22 +63,37 @@ def _validate_action(name, args):
 
 
 def _parse_object(text):
-    """Parse one JSON object; tolerate trailing prose but never a second object.
+    """Parse the first JSON object; tolerate trailing prose, and tolerate
+    further cleanly-separated action objects the same way P51 already
+    tolerates several ```village-action fenced blocks in one turn (see
+    docs/evidence/P51.md).
 
-    Small models often append a sentence after a correct envelope. Accepting the first
-    complete object is safe only when nothing after it could be another action.
+    Live observation (P61 nachtrag, docs/evidence/P62.md): a resident
+    narrated a multi-step plan as several raw JSON objects, each on its own
+    line, with no fences at all - the exact P51 shape, just in the legacy
+    unfenced path. The old code rejected the whole turn outright the moment
+    any further '{' appeared anywhere after the first object, even when it
+    was obviously just the next of several newline-separated actions -
+    discarding a well-formed first action and teaching the model nothing.
+    Only genuinely ambiguous trailing text (a '{' preceded by non-whitespace,
+    e.g. inline prose like "... then {...}") is still rejected, since there
+    it is not clear the first object was meant to stand alone.
+
+    Returns (obj, extra_object_count).
     """
     try:
-        return json.loads(text)
+        return json.loads(text), 0
     except ValueError:
         pass
-    try:
-        obj, end = json.JSONDecoder().raw_decode(text.lstrip())
-    except ValueError:
-        raise
-    if '{' in text.lstrip()[end:]:
+    obj, end = json.JSONDecoder().raw_decode(text.lstrip())
+    remainder = text.lstrip()[end:]
+    brace_pos = remainder.find('{')
+    if brace_pos == -1:
+        return obj, 0
+    if remainder[:brace_pos].strip():
         raise ValueError('more than one object')
-    return obj
+    extra = 1 + len(re.findall(r'\n\s*\{', remainder[brace_pos + 1:]))
+    return obj, extra
 
 
 def final_content(content):
@@ -136,10 +151,10 @@ def decision(response, allowed=None):
     extra_blocks = 0
     if blocks:
         extra_blocks = len(blocks) - 1
-        try: obj = _parse_object(blocks[0])
+        try: obj, _ = _parse_object(blocks[0])
         except ValueError: return fallback('incomplete village-action block', content)
     elif content.startswith('{'):
-        try: obj = _parse_object(content)
+        try: obj, extra_blocks = _parse_object(content)
         except ValueError: return fallback('incomplete legacy action object', content)
     elif '```village-action' in content:
         return fallback('unclosed action block', content)

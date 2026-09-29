@@ -161,12 +161,31 @@ class TolerantParsingTests(unittest.TestCase):
         parsed = self.content('```village-action\n{"name":"idle","arguments":{}} done\n```')
         self.assertEqual(parsed['tool_call']['name'], 'idle')
 
-    def test_second_object_after_first_is_still_rejected(self):
+    def test_second_object_after_inline_prose_is_still_rejected(self):
+        # Ambiguous: non-whitespace text ("then") sits between the two
+        # objects, so it is not clear the first was meant to stand alone.
         parsed = self.content('{"name":"idle","arguments":{}} then {"name":"execute_bash","arguments":{"command":"ls"}}')
         self.assertEqual(parsed['fallback_reason'], 'incomplete legacy action object')
 
     def test_truncated_object_is_still_rejected(self):
         self.assertIn('fallback_reason', self.content('{"name":"board_message","arguments":{"message":"hi'))
+
+    def test_several_newline_separated_legacy_objects_take_the_first(self):
+        # P61 nachtrag / P62: live observation on N06-M10 - a resident narrated
+        # a multi-step plan as several raw JSON objects, each on its own line,
+        # with no ```village-action fences at all. The old code rejected the
+        # whole turn the moment any further '{' appeared anywhere after the
+        # first object - discarding a well-formed first action. Cleanly
+        # newline-separated objects get the same tolerance P51 already gives
+        # fenced multi-block turns: take the first, count the rest.
+        parsed = self.content(
+            '{"name":"idle","arguments":{}}\n'
+            '{"name":"execute_bash","arguments":{"command":"ls"}}\n'
+            '{"name":"gazette_operation","arguments":{"operation":"close"}}'
+        )
+        self.assertNotIn('fallback_reason', parsed)
+        self.assertEqual(parsed['tool_call']['name'], 'idle')
+        self.assertEqual(parsed['extra_blocks_ignored'], 2)
 
 
 class HostObservedAliasTests(unittest.TestCase):
