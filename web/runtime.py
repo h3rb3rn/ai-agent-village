@@ -88,6 +88,15 @@ GAZETTE_REVIEW_CEILING = 10
 # more step down the same pipeline.
 GAZETTE_CLOSE_CEILING = 10
 
+# P68 (operator feedback): the P63 close-gate had no floor at all - the
+# very next real edition closed after a single contribution from 1 of 9
+# assigned residents, 66 minutes after opening. This is the
+# "Redaktionsschluss" (editorial deadline) docs/analysis/GAZETTE-PLAN-2026-09-28.md's
+# Stufe 3 already named but never implemented: an edition is closable once
+# either half its assigned residents have contributed, or this many hours
+# have passed since opening - whichever comes first.
+GAZETTE_CLOSE_MIN_HOURS = 6
+
 
 def now():
     return datetime.now(timezone.utc).isoformat()
@@ -293,23 +302,41 @@ class Resident:
 
     def gazette_closable_editions(self):
         """Non-compiled editions (P63) that have at least one approved
-        contribution and nothing left pending review - ready for King's
-        gazette_operation close. Live observation: once open/announce/assign
-        were all done and every submitted contribution had been reviewed,
-        nothing ever told King to take the final step - gazette_pending_reviews()
-        was empty (so the P60 gate never fired either) and the daily hint was
-        scoped to gazette_today(), which goes blind on a day rollover exactly
-        like P59-follow-up already fixed for reviews (observed live: edition
-        2026-09-28 was still open, fully reviewed, and unmentioned once the
-        calendar reached 2026-09-29). Scanning every non-compiled edition, not
-        just today's, avoids the same blindness here. Shared by snapshot()
-        (the hint) and guard() (the gate) so both always agree."""
+        contribution, nothing left pending review, AND (P68) either enough
+        of the assigned residents have contributed or enough time has
+        passed since opening - ready for King's gazette_operation close.
+
+        Live observation: once open/announce/assign were all done and every
+        submitted contribution had been reviewed, nothing ever told King to
+        take the final step - gazette_pending_reviews() was empty (so the
+        P60 gate never fired either) and the daily hint was scoped to
+        gazette_today(), which goes blind on a day rollover exactly like
+        P59-follow-up already fixed for reviews. Scanning every non-compiled
+        edition, not just today's, avoids the same blindness here. Shared by
+        snapshot() (the hint) and guard() (the gate) so both always agree.
+
+        P68 (operator feedback): the P63 fix overshot - the very next real
+        edition (2026-09-29) closed after a single contribution from 1 of 9
+        assigned residents, 66 minutes after opening, because "nothing
+        pending" became true the moment that one piece was reviewed. An
+        edition is now only closable once either at least half the assigned
+        residents have contributed, or GAZETTE_CLOSE_MIN_HOURS have passed
+        since opening (whichever comes first) - mirrors the "Redaktionsschluss"
+        (editorial deadline) already named in docs/analysis/GAZETTE-PLAN-2026-09-28.md's
+        Stufe 3, never actually implemented until now."""
         open_editions = [e for e in self.gazette.list_editions(limit=10) if e['status'] != 'compiled']
         result = []
         for edition in open_editions:
             pending = [c for c in edition['contributions'] if c.get('review_status') == 'pending']
             approved = [c for c in edition['contributions'] if c.get('review_status') == 'approved']
-            if approved and not pending:
+            if not approved or pending:
+                continue
+            assigned_count = len(edition.get('assignments') or {})
+            contributor_count = len({c['agent'] for c in approved})
+            enough_participation = assigned_count == 0 or contributor_count >= (assigned_count + 1) // 2
+            hours_open = (time.time() - event_time({'timestamp': edition['opened_at']})) / 3600
+            enough_time = hours_open >= GAZETTE_CLOSE_MIN_HOURS
+            if enough_participation or enough_time:
                 result.append(edition)
         return result
 

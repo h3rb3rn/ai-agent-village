@@ -1,13 +1,14 @@
 import json
 import io
 import os
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 import sys
 import tempfile
 import unittest
 from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'web'))
-from runtime import Resident,Tasks,resource_snapshot,tail,event_time,COLLABORATION_PRESSURE_CEILING,MEETING_REPORT_CEILING,GAZETTE_REVIEW_CEILING,GAZETTE_CLOSE_CEILING
+from runtime import Resident,Tasks,resource_snapshot,tail,event_time,COLLABORATION_PRESSURE_CEILING,MEETING_REPORT_CEILING,GAZETTE_REVIEW_CEILING,GAZETTE_CLOSE_CEILING,GAZETTE_CLOSE_MIN_HOURS
 from village.gazette import REVIEWER_AGENT
 from decision import decision
 from village.collaboration import CooperationCheckpoint
@@ -269,10 +270,20 @@ class RuntimeTests(unittest.TestCase):
         king.gazette.review_contribution(edition_id, '01-king', assigned_kind, '01-king', 'approve')
         with patch.object(king, 'memory', return_value={'items': []}):
             reviewed = json.loads(king.snapshot())
-        # Fully reviewed but not yet closed (P63): the hint correctly
-        # cascades once more instead of disappearing.
-        self.assertIn('gazette_daily_note', reviewed)
-        self.assertIn('operation=close', reviewed['gazette_daily_note'])
+        # P68: 1 of 3 assigned residents (King, 02-b, 03-c) is below the
+        # 50% participation floor, and no time has passed - not yet
+        # closable, so no close hint should appear yet (King's own branch
+        # falls through to nothing further, correctly).
+        self.assertNotIn('gazette_daily_note', reviewed)
+        peer_kind = king.gazette.get_assignment(edition_id, '02-b')
+        king.gazette.submit_contribution(edition_id, '02-b', peer_kind, 'A peer contributed too.')
+        king.gazette.review_contribution(edition_id, '02-b', peer_kind, '01-king', 'approve')
+        with patch.object(king, 'memory', return_value={'items': []}):
+            enough_participation = json.loads(king.snapshot())
+        # Now 2 of 3 (>=50%) have contributed - closable, cascades to the
+        # close hint instead of disappearing.
+        self.assertIn('gazette_daily_note', enough_participation)
+        self.assertIn('operation=close', enough_participation['gazette_daily_note'])
         king.gazette.close_edition(edition_id, '01-king')
         with patch.object(king, 'memory', return_value={'items': []}):
             all_clear = json.loads(king.snapshot())
@@ -468,6 +479,47 @@ class RuntimeTests(unittest.TestCase):
         self.assertIn('gazette_daily_note', ctx)
         self.assertIn('operation=close', ctx['gazette_daily_note'])
         self.assertIn(edition['id'], ctx['gazette_daily_note'])
+
+    def test_gazette_not_closable_with_low_participation_and_no_time_elapsed(self):
+        # P68 (operator feedback): the P63 gate had no floor - the very next
+        # real edition closed after a single contribution from 1 of 9
+        # assigned residents, 66 minutes after opening. Reproduces that
+        # exact shape: 1 of 3 assigned residents contributed, edition just
+        # opened - must not be closable yet.
+        king_env = dict(self.env, AGENT_ID=REVIEWER_AGENT, AGENT_NAME='king', AGENT_ROLE='king')
+        king = Resident(king_env)
+        edition = king.gazette.open_edition('01-king', ['01-a', '02-b'])
+        king.gazette.assign_kinds(edition['id'], '01-king', ['01-a', '02-b'])
+        king.gazette.submit_contribution(edition['id'], '01-a', 'mood', 'Feeling good.')
+        king.gazette.review_contribution(edition['id'], '01-a', 'mood', REVIEWER_AGENT, 'approve')
+        self.assertEqual(king.gazette_closable_editions(), [])
+
+    def test_gazette_closable_once_half_of_assigned_residents_contributed(self):
+        king_env = dict(self.env, AGENT_ID=REVIEWER_AGENT, AGENT_NAME='king', AGENT_ROLE='king')
+        king = Resident(king_env)
+        edition = king.gazette.open_edition('01-king', ['01-a', '02-b', '03-c'])
+        king.gazette.assign_kinds(edition['id'], '01-king', ['01-a', '02-b', '03-c'])
+        # 4 assigned (King + 3 peers): 2 contributors is the (4+1)//2==2 floor.
+        king.gazette.submit_contribution(edition['id'], '01-a', 'mood', 'Feeling good.')
+        king.gazette.review_contribution(edition['id'], '01-a', 'mood', REVIEWER_AGENT, 'approve')
+        self.assertEqual(king.gazette_closable_editions(), [])
+        king.gazette.submit_contribution(edition['id'], '02-b', 'wishes', 'More books please.')
+        king.gazette.review_contribution(edition['id'], '02-b', 'wishes', REVIEWER_AGENT, 'approve')
+        self.assertEqual(len(king.gazette_closable_editions()), 1)
+
+    def test_gazette_closable_once_enough_time_has_passed_despite_low_participation(self):
+        king_env = dict(self.env, AGENT_ID=REVIEWER_AGENT, AGENT_NAME='king', AGENT_ROLE='king')
+        king = Resident(king_env)
+        edition = king.gazette.open_edition('01-king', ['01-a', '02-b', '03-c'])
+        king.gazette.assign_kinds(edition['id'], '01-king', ['01-a', '02-b', '03-c'])
+        king.gazette.submit_contribution(edition['id'], '01-a', 'mood', 'Feeling good.')
+        king.gazette.review_contribution(edition['id'], '01-a', 'mood', REVIEWER_AGENT, 'approve')
+        self.assertEqual(king.gazette_closable_editions(), [])  # only 1 of 4, no time elapsed
+        old_timestamp = (datetime.now(timezone.utc) - timedelta(hours=GAZETTE_CLOSE_MIN_HOURS + 1)).isoformat()
+        with king.gazette._conn() as c:
+            c.execute("UPDATE gazette_editions SET opened_at=? WHERE id=?", (old_timestamp, edition['id']))
+            c.commit()
+        self.assertEqual(len(king.gazette_closable_editions()), 1)
 
     def test_gazette_close_hint_survives_a_day_rollover(self):
         # Mirrors test_chronicler_review_hint_survives_a_day_rollover - a
