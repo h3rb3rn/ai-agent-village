@@ -220,6 +220,18 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(ctx['recent_organic_messages_untrusted'], [])
         self.assertEqual(self.agent.pending_organic_cursor, self.agent.state.get('seen_organic_epoch', 0))
 
+    def test_gazette_open_accepts_an_explicit_edition_id(self):
+        # P71: operator-directed out-of-band edition, e.g. to open tomorrow's
+        # edition ahead of the real calendar rollover - open() now takes an
+        # explicit edition_id the same way assign/contribute/review/close
+        # already do, rather than needing a store-level bypass of execute().
+        king_env = dict(self.env, AGENT_ID='01-king', AGENT_NAME='king', AGENT_ROLE='king')
+        king = Resident(king_env)
+        king.execute({'tool_call': {'name': 'gazette_operation', 'arguments': {
+            'operation': 'open', 'edition_id': '2099-01-01'}}})
+        self.assertTrue(king.state['last_result']['ok'])
+        self.assertIsNotNone(king.gazette.get_edition('2099-01-01'))
+
     def test_king_sees_a_daily_gazette_hint_until_opened_announced_and_assigned(self):
         # Gazette Stufe 2/3 (P48/P49/P54): a one-off nudge proved unreliable
         # in live observation (delivered, acknowledged, never acted on -

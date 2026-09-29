@@ -1264,7 +1264,13 @@ class Resident:
                     else:
                         peers = [p.get('id') for p in read_json(Path('/etc/ai-village/runtime-peers.json'), [])
                                 if p.get('id') and p.get('id') != self.id]
-                        result = self.gazette.open_edition(self.id, peers)
+                        # P71: accepts an explicit edition_id like every
+                        # other gazette op now does, defaulting to today's
+                        # date as before when omitted (the normal case for
+                        # King's own daily routine) - an operator-directed
+                        # out-of-band edition no longer needs a store-level
+                        # bypass of this action.
+                        result = self.gazette.open_edition(self.id, peers, edition_id=args.get('edition_id') or None)
                         self.event('gazette_opened', json.dumps(result, ensure_ascii=False)[:1000])
                         self.feedback(name, json.dumps(result, ensure_ascii=False), True)
                 elif op == 'assign':
