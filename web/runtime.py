@@ -704,8 +704,25 @@ class Resident:
         # P55 editorial review, that review gate silently inherited the same
         # unbounded drift. Same fix, same ceiling: past
         # MEETING_REPORT_CEILING ignored nudges, gate every action except
-        # meeting_operation/idle until the report is actually submitted.
-        if name not in ('meeting_operation', 'idle'):
+        # meeting_operation/gazette_operation/idle until the report is
+        # actually submitted (gazette_operation is exempted here too, and
+        # meeting_operation from the Gazette gate below, so neither gate
+        # blocks the other's own resolving action - see P60-follow-up).
+        # P60-follow-up: two independent hard gates (meeting, Gazette review)
+        # used to each `return False` immediately on firing - so whichever was
+        # checked first (meeting, always) silently starved the other's
+        # pressure counter for as long as it kept blocking. Live observation:
+        # a THIRD meeting rotation put 09-chronicler back in the meeting gate
+        # (pressure 25+) while he still had 3 Gazette reviews outstanding -
+        # gazette_review_pressure never moved because this code never even
+        # reached it. Both counters must always advance on every relevant
+        # call; only the actual block is arbitrated afterward (meeting first,
+        # since it is the older, more fundamental obligation) - so the moment
+        # the meeting resolves, the already-accumulated Gazette pressure can
+        # gate on the very next cycle instead of waiting through another
+        # GAZETTE_REVIEW_CEILING cycles from zero.
+        meeting_block = None
+        if name not in ('meeting_operation', 'gazette_operation', 'idle'):
             pending = next((m for m in self.meetings.active() if not self.meetings.has_report(m['id'], self.id)), None)
             if pending:
                 mid = pending['id']
@@ -727,11 +744,11 @@ class Resident:
                     example = ('{"name":"meeting_operation","arguments":{"operation":"report",'
                                f'"meeting_id":"{mid}","achieved":"...","evidence":"...",'
                                '"next_step":"...","blockers":"..."}}')
-                    self.feedback(name, f"Meeting report required before more solo work: submit exactly this "
-                                        f"envelope (fill in the four text fields): {example}", False)
-                    self.event('meeting_gate', f"meeting_id={mid}; pressure={count}")
-                    return False
-                self.feedback(name, f"Meeting report requested: {mid}. Submit one meeting_operation report when possible; continuing this reversible action.", True)
+                    meeting_block = (f"Meeting report required before more solo work: submit exactly this "
+                                     f"envelope (fill in the four text fields): {example}",
+                                     f"meeting_id={mid}; pressure={count}")
+                else:
+                    self.feedback(name, f"Meeting report requested: {mid}. Submit one meeting_operation report when possible; continuing this reversible action.", True)
 
         # P60 (operator: "Nicht nur beobachten wenn du GAPs identifizierst,
         # sondern proaktiv loesen"): live observation showed the Chronicler's
@@ -742,7 +759,8 @@ class Resident:
         # applied to this third nudge. Same fix: a pressure ceiling, and the
         # gate message includes a ready-to-submit example from the start
         # (P58 already proved naming fields in prose is not enough).
-        if self.id == GAZETTE_REVIEWER and name not in ('gazette_operation', 'idle'):
+        gazette_block = None
+        if self.id == GAZETTE_REVIEWER and name not in ('meeting_operation', 'gazette_operation', 'idle'):
             pending_reviews = self.gazette_pending_reviews()
             if not pending_reviews:
                 self.state['gazette_review_pressure'] = 0
@@ -755,11 +773,19 @@ class Resident:
                     example = ('{"name":"gazette_operation","arguments":{"operation":"review",'
                                f'"edition_id":"{eid}","agent":"{first["agent"]}","kind":"{first["kind"]}",'
                                '"decision":"approve"}}')
-                    self.feedback(name, f"Editorial review required before more solo work: "
-                                        f"{len(pending_reviews)} Gazette contribution(s) pending. Submit exactly "
-                                        f"this envelope for one of them (or decision=\"reject\" with a note): {example}", False)
-                    self.event('gazette_review_gate', f"pending={len(pending_reviews)}; pressure={pressure}")
-                    return False
+                    gazette_block = (f"Editorial review required before more solo work: "
+                                     f"{len(pending_reviews)} Gazette contribution(s) pending. Submit exactly "
+                                     f"this envelope for one of them (or decision=\"reject\" with a note): {example}",
+                                     f"pending={len(pending_reviews)}; pressure={pressure}")
+
+        if meeting_block:
+            self.feedback(name, meeting_block[0], False)
+            self.event('meeting_gate', meeting_block[1])
+            return False
+        if gazette_block:
+            self.feedback(name, gazette_block[0], False)
+            self.event('gazette_review_gate', gazette_block[1])
+            return False
 
         norm_name = name
         norm_args = dict(args)

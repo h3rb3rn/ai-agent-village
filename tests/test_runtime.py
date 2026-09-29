@@ -393,6 +393,38 @@ class RuntimeTests(unittest.TestCase):
             chronicler.execute({'tool_call': {'name': 'execute_bash', 'arguments': {'command': f'printf ok{i}'}}})
         self.assertTrue(chronicler.state['last_result']['ok'])
 
+    def test_gazette_review_pressure_keeps_advancing_while_meeting_gated(self):
+        # P60-follow-up: two independent hard gates each returned False
+        # immediately on firing, so whichever was checked first (meeting,
+        # always) silently starved the other's pressure counter for as long
+        # as it kept blocking. Live observation: a third meeting rotation put
+        # 09-chronicler back in the meeting gate (pressure 25+) while he
+        # still had 3 Gazette reviews outstanding - gazette_review_pressure
+        # never moved because this code path never even reached it.
+        chronicler_env = dict(self.env, AGENT_ID='09-chronicler', AGENT_NAME='chronicler', AGENT_ROLE='steward')
+        chronicler = Resident(chronicler_env)
+        edition = chronicler.gazette.open_edition('01-king', ['01-a'])
+        chronicler.gazette.submit_contribution(edition['id'], '01-a', 'mood', 'Feeling good.')
+        chronicler.meetings.schedule('jour_fixe', 'status update', '2026-09-24T10:00:00Z', meeting_id='m1')
+        # Simulate an already-exhausted meeting gate (observed live: pressure
+        # reached 25+) so every call below is meeting-blocked from the very
+        # first one - the real assertion is that gazette_review_pressure
+        # still advances underneath that block instead of being starved.
+        chronicler.state['meeting_nudge_pressure'] = {'m1': MEETING_REPORT_CEILING}
+        for i in range(GAZETTE_REVIEW_CEILING - 1):
+            chronicler.execute({'tool_call': {'name': 'execute_bash', 'arguments': {'command': f'printf ok{i}'}}})
+        self.assertFalse(chronicler.state['last_result']['ok'])
+        self.assertIn('Meeting report required', chronicler.state['last_result']['result'])
+        self.assertEqual(chronicler.state.get('gazette_review_pressure', 0), GAZETTE_REVIEW_CEILING - 1)
+        # Resolve the meeting; the already-accumulated Gazette pressure must
+        # gate on the very next call, not require GAZETTE_REVIEW_CEILING more.
+        chronicler.execute({'tool_call': {'name': 'meeting_operation', 'arguments': {
+            'operation': 'report', 'meeting_id': 'm1', 'achieved': 'x', 'evidence': 'y',
+            'next_step': 'z', 'blockers': ''}}})
+        chronicler.execute({'tool_call': {'name': 'execute_bash', 'arguments': {'command': 'printf done'}}})
+        self.assertFalse(chronicler.state['last_result']['ok'])
+        self.assertIn('Editorial review required', chronicler.state['last_result']['result'])
+
     def test_organic_message_not_reissued_every_turn(self):
         (self.root/'board/organic-inbox.jsonl').write_text(json.dumps({'timestamp':'2026-09-24T11:00:00Z','message':'A dated request'})+'\n')
         with patch.object(self.agent,'memory',return_value={'items':[]}):
