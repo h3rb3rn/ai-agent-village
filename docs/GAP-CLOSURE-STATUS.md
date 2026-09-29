@@ -98,6 +98,7 @@ Pro Paket Nachweis unter `docs/evidence/Pxx.md` anlegen, sobald tatsächlich dar
 | P60 | Gazette-Prüf-Hinweis erhält dieselbe Deckelung wie Kollaboration (P51) und Meetings (P56/P58) | Stop-Hook-Feedback (Ziel nicht erfüllt), Betreiberauftrag "proaktiv lösen" | LOCAL_VERIFIED | [docs/evidence/P60.md](evidence/P60.md) |
 | P61 | Prüfinstanz von 09-chronicler auf 01-king umgewidmet (32+ Blockierungen ohne Compliance trotz korrektem Gate); Nebenfund: `snapshot()`-Hinweis für King/Prüfer war sich gegenseitig ausschließend verzweigt, jetzt Prüf-Rückstau vorrangig | Live-Beobachtung (Tracker, 40+ Min ohne Wirkung), Betreiberentscheidung "Rolle neu zuweisen" | LOCAL_VERIFIED | [docs/evidence/P61.md](evidence/P61.md) |
 | P62 | Legacy-JSON-Parser verwarf mehrere sauber zeilengetrennte Aktionsobjekte komplett statt (wie bei Fenced Blocks seit P51) nur das erste auszuführen und den Rest zu zählen | Live-Beobachtung (King's Prüf-/Schließ-Versuch direkt nach P61 komplett verworfen) | LOCAL_VERIFIED | [docs/evidence/P62.md](evidence/P62.md) |
+| P63 | Fertig geprüfte Gazette-Ausgabe wurde nie zum abschließenden `close`/Kompilieren aufgefordert (Hinweis + Deckelung gleich mitgebaut, dieselbe Lücke war schon 3x advisory-only unzureichend) | Live-Beobachtung (Ausgabe 2026-09-28 blieb nach vollständiger Prüfung unkompiliert) | LOCAL_VERIFIED | [docs/evidence/P63.md](evidence/P63.md) |
 
 ## Fortschrittsbuch
 

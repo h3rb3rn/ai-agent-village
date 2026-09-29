@@ -78,6 +78,14 @@ MEETING_REPORT_CEILING = 10
 # elsewhere, just never applied to this third nudge.
 GAZETTE_REVIEW_CEILING = 10
 
+# P63: live observation on N06-M10 (2026-09-29) - once open/announce/assign
+# were done and every submitted contribution had been reviewed, nothing ever
+# forced King to take the final gazette_operation close step; the edition
+# just sat fully reviewed and uncompiled indefinitely (gazette_review_pressure
+# was 0, so the P60 gate never applied either). Same ceiling pattern, one
+# more step down the same pipeline.
+GAZETTE_CLOSE_CEILING = 10
+
 
 def now():
     return datetime.now(timezone.utc).isoformat()
@@ -281,6 +289,28 @@ class Resident:
             if c.get('review_status') == 'pending'
         ]
 
+    def gazette_closable_editions(self):
+        """Non-compiled editions (P63) that have at least one approved
+        contribution and nothing left pending review - ready for King's
+        gazette_operation close. Live observation: once open/announce/assign
+        were all done and every submitted contribution had been reviewed,
+        nothing ever told King to take the final step - gazette_pending_reviews()
+        was empty (so the P60 gate never fired either) and the daily hint was
+        scoped to gazette_today(), which goes blind on a day rollover exactly
+        like P59-follow-up already fixed for reviews (observed live: edition
+        2026-09-28 was still open, fully reviewed, and unmentioned once the
+        calendar reached 2026-09-29). Scanning every non-compiled edition, not
+        just today's, avoids the same blindness here. Shared by snapshot()
+        (the hint) and guard() (the gate) so both always agree."""
+        open_editions = [e for e in self.gazette.list_editions(limit=10) if e['status'] != 'compiled']
+        result = []
+        for edition in open_editions:
+            pending = [c for c in edition['contributions'] if c.get('review_status') == 'pending']
+            approved = [c for c in edition['contributions'] if c.get('review_status') == 'approved']
+            if approved and not pending:
+                result.append(edition)
+        return result
+
     def snapshot(self):
         peers = read_json(Path('/etc/ai-village/runtime-peers.json'), [])
         events = tail(self.board / 'events.jsonl', 800)
@@ -428,6 +458,7 @@ class Resident:
         # ever appears in it), while opening/announcing a new day's edition
         # can happen anytime once that backlog is cleared.
         reviewer_pending = self.gazette_pending_reviews() if self.id == GAZETTE_REVIEWER else []
+        closable = self.gazette_closable_editions() if self.id == '01-king' else []
         if reviewer_pending:
             # P55: the editorial gate itself must not become the exact
             # reliability bottleneck this session spent P48-P54 fixing -
@@ -439,6 +470,18 @@ class Resident:
                 f"as {GAZETTE_REVIEWER}: {names}. Use gazette_operation operation=review with "
                 "edition_id, agent, kind and decision=approve|reject (optional note) for each "
                 "one - only what you approve ever appears in that edition's compiled version."
+            )
+        elif closable:
+            # P63: an edition with nothing left pending review still needs an
+            # explicit close/compile - see gazette_closable_editions() for why
+            # this must scan every non-compiled edition, not just today's.
+            edition = closable[0]
+            approved = [c for c in edition['contributions'] if c.get('review_status') == 'approved']
+            context['gazette_daily_note'] = (
+                f"Gazette edition {edition['id']} has {len(approved)} reviewed contribution(s) and "
+                "none left awaiting review. Call gazette_operation with operation=close and "
+                f"edition_id='{edition['id']}' once to compile and archive it - anything submitted "
+                "afterwards goes into a later edition instead."
             )
         elif self.id == '01-king':
             gazette_edition = self.gazette.get_edition(gazette_today())
@@ -789,6 +832,26 @@ class Resident:
                                      f"this envelope for one of them (or decision=\"reject\" with a note): {example}",
                                      f"pending={len(pending_reviews)}; pressure={pressure}")
 
+        # P63: same ceiling pattern, one step further down the same pipeline -
+        # a fully-reviewed edition still needs King's own close to ever be
+        # compiled/archived (see gazette_closable_editions()).
+        close_block = None
+        if self.id == '01-king' and name not in ('meeting_operation', 'gazette_operation', 'idle'):
+            closable = self.gazette_closable_editions()
+            if not closable:
+                self.state['gazette_close_pressure'] = 0
+            else:
+                pressure = int(self.state.get('gazette_close_pressure', 0)) + 1
+                self.state['gazette_close_pressure'] = pressure
+                self.event('gazette_close_required', f"closable={len(closable)}; pressure={pressure}")
+                if pressure >= GAZETTE_CLOSE_CEILING:
+                    edition = closable[0]
+                    example = ('{"name":"gazette_operation","arguments":{"operation":"close",'
+                               f'"edition_id":"{edition["id"]}"}}')
+                    close_block = (f"Compile required before more solo work: edition {edition['id']} is "
+                                   f"fully reviewed and still open. Submit exactly this envelope: {example}",
+                                   f"closable={len(closable)}; pressure={pressure}")
+
         if meeting_block:
             self.feedback(name, meeting_block[0], False)
             self.event('meeting_gate', meeting_block[1])
@@ -796,6 +859,10 @@ class Resident:
         if gazette_block:
             self.feedback(name, gazette_block[0], False)
             self.event('gazette_review_gate', gazette_block[1])
+            return False
+        if close_block:
+            self.feedback(name, close_block[0], False)
+            self.event('gazette_close_gate', close_block[1])
             return False
 
         norm_name = name

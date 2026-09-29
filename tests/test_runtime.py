@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'web'))
-from runtime import Resident,Tasks,resource_snapshot,tail,event_time,COLLABORATION_PRESSURE_CEILING,MEETING_REPORT_CEILING,GAZETTE_REVIEW_CEILING
+from runtime import Resident,Tasks,resource_snapshot,tail,event_time,COLLABORATION_PRESSURE_CEILING,MEETING_REPORT_CEILING,GAZETTE_REVIEW_CEILING,GAZETTE_CLOSE_CEILING
 from village.gazette import REVIEWER_AGENT
 from decision import decision
 from village.collaboration import CooperationCheckpoint
@@ -402,7 +402,74 @@ class RuntimeTests(unittest.TestCase):
         chronicler.gazette.review_contribution(edition['id'], '01-a', 'mood', REVIEWER_AGENT, 'approve')
         for i in range(GAZETTE_REVIEW_CEILING + 5):
             chronicler.execute({'tool_call': {'name': 'execute_bash', 'arguments': {'command': f'printf ok{i}'}}})
-        self.assertTrue(chronicler.state['last_result']['ok'])
+        # P63: an edition with nothing left pending review is now itself a new
+        # obligation (close it) with its own ceiling, so further solo work can
+        # legitimately be gated again by THAT gate - the guarantee this test
+        # protects is specifically that the review pressure counter (not the
+        # unrelated close counter) actually resets to zero once resolved.
+        self.assertEqual(chronicler.state.get('gazette_review_pressure', 0), 0)
+
+    def test_gazette_closable_edition_surfaces_a_close_hint(self):
+        # P63: live observation - once open/announce/assign were done and
+        # every submitted contribution had been reviewed, nothing ever told
+        # King to take the final gazette_operation close step. The edition
+        # (2026-09-28 on N06-M10) sat fully reviewed and uncompiled with zero
+        # pressure anywhere, since gazette_pending_reviews() was empty.
+        king_env = dict(self.env, AGENT_ID=REVIEWER_AGENT, AGENT_NAME='king', AGENT_ROLE='king')
+        king = Resident(king_env)
+        edition = king.gazette.open_edition('01-king', ['01-a'])
+        king.gazette.submit_contribution(edition['id'], '01-a', 'mood', 'Feeling good.')
+        king.gazette.review_contribution(edition['id'], '01-a', 'mood', REVIEWER_AGENT, 'approve')
+        with patch.object(king, 'memory', return_value={'items': []}):
+            ctx = json.loads(king.snapshot())
+        self.assertIn('gazette_daily_note', ctx)
+        self.assertIn('operation=close', ctx['gazette_daily_note'])
+        self.assertIn(edition['id'], ctx['gazette_daily_note'])
+
+    def test_gazette_close_hint_survives_a_day_rollover(self):
+        # Mirrors test_chronicler_review_hint_survives_a_day_rollover - a
+        # closable edition is an outstanding obligation against whatever was
+        # already reviewed, not a daily assignment, so it must not go blind
+        # the moment the calendar day rolls over either.
+        king_env = dict(self.env, AGENT_ID=REVIEWER_AGENT, AGENT_NAME='king', AGENT_ROLE='king')
+        king = Resident(king_env)
+        yesterday = king.gazette.open_edition('01-king', ['01-a'], edition_id='2026-09-27')
+        king.gazette.submit_contribution(yesterday['id'], '01-a', 'mood', 'Feeling good yesterday.')
+        king.gazette.review_contribution(yesterday['id'], '01-a', 'mood', REVIEWER_AGENT, 'approve')
+        # "Today" (gazette_today()) has no edition at all.
+        with patch.object(king, 'memory', return_value={'items': []}):
+            ctx = json.loads(king.snapshot())
+        self.assertIn('gazette_daily_note', ctx)
+        self.assertIn('2026-09-27', ctx['gazette_daily_note'])
+        self.assertIn('operation=close', ctx['gazette_daily_note'])
+        self.assertNotIn('No AI Village Gazette edition is open for today', ctx['gazette_daily_note'])
+
+    def test_gazette_close_gate_eventually_blocks_other_actions(self):
+        king_env = dict(self.env, AGENT_ID=REVIEWER_AGENT, AGENT_NAME='king', AGENT_ROLE='king')
+        king = Resident(king_env)
+        edition = king.gazette.open_edition('01-king', ['01-a'])
+        king.gazette.submit_contribution(edition['id'], '01-a', 'mood', 'Feeling good.')
+        king.gazette.review_contribution(edition['id'], '01-a', 'mood', REVIEWER_AGENT, 'approve')
+        for i in range(GAZETTE_CLOSE_CEILING - 1):
+            king.execute({'tool_call': {'name': 'execute_bash', 'arguments': {'command': f'printf ok{i}'}}})
+        self.assertTrue(king.state['last_result']['ok'])  # not yet gated
+        king.execute({'tool_call': {'name': 'execute_bash', 'arguments': {'command': f'printf ok{GAZETTE_CLOSE_CEILING}'}}})
+        self.assertFalse(king.state['last_result']['ok'])
+        result = king.state['last_result']['result']
+        self.assertIn('Compile required', result)
+        self.assertIn('"operation":"close"', result)
+        self.assertIn(f'"edition_id":"{edition["id"]}"', result)
+
+    def test_gazette_close_operation_itself_is_never_gated_by_close_pressure(self):
+        king_env = dict(self.env, AGENT_ID=REVIEWER_AGENT, AGENT_NAME='king', AGENT_ROLE='king')
+        king = Resident(king_env)
+        edition = king.gazette.open_edition('01-king', ['01-a'])
+        king.gazette.submit_contribution(edition['id'], '01-a', 'mood', 'Feeling good.')
+        king.gazette.review_contribution(edition['id'], '01-a', 'mood', REVIEWER_AGENT, 'approve')
+        for i in range(GAZETTE_CLOSE_CEILING + 5):
+            king.execute({'tool_call': {'name': 'execute_bash', 'arguments': {'command': f'printf ok{i}'}}})
+        king.execute({'tool_call': {'name': 'gazette_operation', 'arguments': {'operation': 'close', 'edition_id': edition['id']}}})
+        self.assertTrue(king.state['last_result']['ok'])
 
     def test_gazette_review_pressure_keeps_advancing_while_meeting_gated(self):
         # P60-follow-up: two independent hard gates each returned False
