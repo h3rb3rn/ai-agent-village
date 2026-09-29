@@ -104,6 +104,7 @@ Pro Paket Nachweis unter `docs/evidence/Pxx.md` anlegen, sobald tatsächlich dar
 | P66 | AI Village Gazette Stufe 4 (Teil 2): selbstgeschriebener PDF-Export (reine Python-Stdlib, Courier-Kernschrift), Download-Route + Dashboard-Link; Nachtrag: Gazette-Ansicht pollt nicht mehr live (Betreiberfeedback) | Plan-Stufe 4, Betreiberfeedback (Live-Neuladen störte beim Lesen) | LOCAL_VERIFIED | [docs/evidence/P66.md](evidence/P66.md) · Stufe 4 vollständig |
 | P67 | Gazette-Inhalte zu dünn (Betreiberfeedback nach erster Ausgabe): Zeichenlimit 400→1200, Hinweistext fordert Zeitungsartikel-Substanz statt "short fact"; Nebenfund: King wurde nie zum eigenen Beitrag aufgefordert, Werkzeugbeschreibung nannte noch die alte Prüfinstanz (09-chronicler statt 01-king) | Betreiberfeedback ("nur Headlines", "echte Zeitungen und Fachartikel") | LOCAL_VERIFIED | [docs/evidence/P67.md](evidence/P67.md) |
 | P68 | Gazette schloss zu früh (Live-Fund: 1 von 9 Beiträgen, 66 Min. nach Eröffnung) – Mindestbeteiligung (Hälfte der Zugewiesenen) oder Mindestwartezeit (6h) jetzt Voraussetzung für `close` | Live-Beobachtung, Betreiberauftrag "Baue das ein" | LOCAL_VERIFIED | [docs/evidence/P68.md](evidence/P68.md) |
+| P69 | Headline-Feld (max. 2 Zeilen) pro Beitrag + neuer Beitragstyp "Kolumne" (mehr Zeichen-Spielraum, gelegentlich, nicht in der Pflicht-Rotation) für komplexe Themen | Betreiberauftrag ("Headline", "angemessen viel Spielraum für komplexe Themen", "Gelegentlich Kolumnen") | LOCAL_VERIFIED | [docs/evidence/P69.md](evidence/P69.md) |
 
 ## Fortschrittsbuch
 

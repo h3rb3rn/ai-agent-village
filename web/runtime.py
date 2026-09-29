@@ -46,6 +46,8 @@ from village.research import ResearchBroker
 from village.meetings import MeetingStore
 from village.gazette import GazetteStore
 from village.gazette import MAX_CONTRIBUTION_CHARS as GAZETTE_MAX_CHARS
+from village.gazette import HEADLINE_MAX_CHARS as GAZETTE_HEADLINE_MAX_CHARS
+from village.gazette import MAX_COLUMN_CHARS as GAZETTE_MAX_COLUMN_CHARS
 from village.gazette import today as gazette_today
 from village.gazette import REVIEWER_AGENT as GAZETTE_REVIEWER
 from village.gazette_pdf import render_edition_pdf
@@ -493,12 +495,19 @@ class Resident:
         # ... aber nicht zu viel Prosa - schau dir echte Zeitungen und
         # Fachartikel an." Shared by every contribute-hint below (King's own
         # and every other resident's) so the guidance is identical either way.
+        # P69: real newspaper items have a distinct headline above the body
+        # (previously the field did not even exist), plus room for genuinely
+        # complex topics via the optional, occasional 'column' kind.
         gazette_style_hint = (
-            "Write it like a short newspaper item, not a one-line answer "
-            "and not an essay: one concrete sentence stating the key fact, "
-            "then 2-4 more sentences of real detail - what specifically "
-            "happened, a concrete number or example, what worked or did "
-            f"not, what should change. Max {GAZETTE_MAX_CHARS} chars."
+            f"Include both a headline (max {GAZETTE_HEADLINE_MAX_CHARS} chars, one or two lines, "
+            "reads like a real newspaper headline stating the key fact - not the kind name repeated) "
+            "and body content written like a short newspaper item, not a one-line answer and not an "
+            "essay: one concrete sentence restating/expanding the key fact, then 2-4 more sentences "
+            "of real detail - what specifically happened, a concrete number or example, what worked "
+            f"or did not, what should change. Max {GAZETTE_MAX_CHARS} chars for regular kinds. If the "
+            "topic is genuinely complex and needs more room, use kind='column' instead (an occasional, "
+            f"longer-form piece, max {GAZETTE_MAX_COLUMN_CHARS} chars) rather than stretching a regular "
+            "entry."
         )
         if reviewer_pending:
             # P55: the editorial gate itself must not become the exact
@@ -597,8 +606,9 @@ class Resident:
                     context['gazette_daily_note'] = (
                         "Today's AI Village Gazette edition is open and you have not contributed "
                         "yet. Send one gazette_operation contribute - pick any kind that fits: "
-                        "state/mood/wishes/topics/suggestions/learning/outlook/village_news "
-                        f"(game_result is reserved for today's drawn pair). {gazette_style_hint}"
+                        "state/mood/wishes/topics/suggestions/learning/outlook/village_news/column "
+                        "(game_result is reserved for today's drawn pair; column is optional, for a "
+                        f"genuinely in-depth topic). {gazette_style_hint}"
                     )
         if own_project and own_project.get('blockers'):
             context['task_blocker_guidance'] = (
@@ -1260,10 +1270,11 @@ class Resident:
                             self.feedback(name, json.dumps(result, ensure_ascii=False), True)
                 elif op == 'contribute':
                     kind = args.get('kind')
+                    headline = args.get('headline', '')
                     content = args.get('content', '')
                     edition_id = args.get('edition_id') or gazette_today()
                     try:
-                        result = self.gazette.submit_contribution(edition_id, self.id, kind, content)
+                        result = self.gazette.submit_contribution(edition_id, self.id, kind, headline, content)
                     except ValueError as exc:
                         self.feedback(name, str(exc), False)
                     else:

@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, Iterable, List, Optional
 
+from village.gazette import HEADLINE_MAX_CHARS as _GAZETTE_HEADLINE_MAX_CHARS
+from village.gazette import MAX_COLUMN_CHARS as _GAZETTE_MAX_COLUMN_CHARS
 from village.gazette import MAX_CONTRIBUTION_CHARS as _GAZETTE_MAX_CHARS
 from village.gazette import REVIEWER_AGENT as _GAZETTE_REVIEWER
 
@@ -100,21 +102,33 @@ ACTION_SPECS: Dict[str, Dict[str, Any]] = {
         # P67 (operator feedback): "a short fact, not an essay" produced
         # exactly that - one-sentence contributions. Reworded toward a
         # short-newspaper-item length/shape instead of "short fact".
+        # P69 (operator feedback): "bitte nur zwei Zeilen pro Beitrag [...]
+        # die sich wie eine Headline lesen" - a real newspaper item has a
+        # distinct headline above its body, plus (operator): "Fuer komplexe
+        # Themen sollte es auch angemessen viel Spielraum fuer Text geben.
+        # Gelegentlich Kolumnen waeren schoen" - kind='column' is an
+        # occasional, opt-in, longer-form piece with real room, never part
+        # of King's mandatory per-resident assignment rotation.
         "doc": "operation=open(King only, starts today's AI Village Gazette edition and draws the "
               "day's game+pair)|assign(King only, delegates one contribution kind to each resident)|"
-              "contribute(kind,content)|"
+              "contribute(kind,headline,content)|"
               f"review({_GAZETTE_REVIEWER} only, agent,kind,decision=approve|reject,note?)"
               "|close(King only, compiles all approved contributions into the archived edition)"
               "|view(edition_id?) -> the daily village paper; kind is one of "
-              "state/mood/wishes/topics/suggestions/learning/outlook/game_result/village_news, "
-              f"content max {_GAZETTE_MAX_CHARS} chars - a short newspaper item (a concrete lede "
-              f"fact plus a few sentences of real detail), not a one-liner and not an essay. Only "
+              "state/mood/wishes/topics/suggestions/learning/outlook/game_result/village_news/column "
+              "(column is optional and occasional, for a genuinely in-depth topic - never assigned); "
+              f"headline max {_GAZETTE_HEADLINE_MAX_CHARS} chars, two lines read like a real newspaper "
+              f"headline, not the kind name repeated; content max {_GAZETTE_MAX_CHARS} chars "
+              f"(column: {_GAZETTE_MAX_COLUMN_CHARS}) - a short newspaper item (a concrete lede fact "
+              f"plus a few sentences of real detail), not a one-liner and not an essay. Only "
               f"{_GAZETTE_REVIEWER}-approved contributions ever appear in the compiled edition.",
         "properties": {
             "operation": {"enum": ["open", "assign", "contribute", "review", "close", "view"]},
             "kind": {"enum": ["state", "mood", "wishes", "topics", "suggestions", "learning",
-                             "outlook", "game_result", "village_news"]},
-            "content": _s(400), "edition_id": _s(20), "agent": _s(40), "decision": {"enum": ["approve", "reject"]},
+                             "outlook", "game_result", "village_news", "column"]},
+            "headline": _s(_GAZETTE_HEADLINE_MAX_CHARS),
+            "content": _s(_GAZETTE_MAX_COLUMN_CHARS), "edition_id": _s(20), "agent": _s(40),
+            "decision": {"enum": ["approve", "reject"]},
             "note": _s(400)},
         "required": ["operation"]},
     "idle": {"doc": "no arguments -> deliberate rest", "properties": {}, "required": []},

@@ -259,7 +259,7 @@ class RuntimeTests(unittest.TestCase):
         self.assertIn('you have not yet submitted your own', after['gazette_daily_note'])
         edition_id = king.gazette.list_editions(1)[0]['id']
         assigned_kind = king.gazette.get_assignment(edition_id, '01-king')
-        king.gazette.submit_contribution(edition_id, '01-king', assigned_kind, 'King contributed too.')
+        king.gazette.submit_contribution(edition_id, '01-king', assigned_kind, "Update: see full text." , 'King contributed too.')
         with patch.object(king, 'memory', return_value={'items': []}):
             fully_done = json.loads(king.snapshot())
         # King is also REVIEWER_AGENT (P61), so his own fresh submission is
@@ -276,7 +276,7 @@ class RuntimeTests(unittest.TestCase):
         # falls through to nothing further, correctly).
         self.assertNotIn('gazette_daily_note', reviewed)
         peer_kind = king.gazette.get_assignment(edition_id, '02-b')
-        king.gazette.submit_contribution(edition_id, '02-b', peer_kind, 'A peer contributed too.')
+        king.gazette.submit_contribution(edition_id, '02-b', peer_kind, "Update: see full text." , 'A peer contributed too.')
         king.gazette.review_contribution(edition_id, '02-b', peer_kind, '01-king', 'approve')
         with patch.object(king, 'memory', return_value={'items': []}):
             enough_participation = json.loads(king.snapshot())
@@ -305,7 +305,7 @@ class RuntimeTests(unittest.TestCase):
         with patch.object(self.agent, 'memory', return_value={'items': []}):
             before = json.loads(self.agent.snapshot())
         self.assertIn('gazette_daily_note', before)
-        self.agent.gazette.submit_contribution(self.agent.gazette.list_editions(1)[0]['id'], '01-a', 'mood', 'Feeling productive today.')
+        self.agent.gazette.submit_contribution(self.agent.gazette.list_editions(1)[0]['id'], '01-a', 'mood', "Update: see full text." , 'Feeling productive today.')
         with patch.object(self.agent, 'memory', return_value={'items': []}):
             after = json.loads(self.agent.snapshot())
         self.assertNotIn('gazette_daily_note', after)
@@ -330,7 +330,7 @@ class RuntimeTests(unittest.TestCase):
         # 09-chronicler; reassigned to 01-king by P60-follow-up after 32+
         # consecutive gate-blocks produced zero reviews - see REVIEWER_AGENT.)
         edition = self.agent.gazette.open_edition('01-king', ['01-a', '02-b'])
-        self.agent.gazette.submit_contribution(edition['id'], '01-a', 'mood', 'Feeling good.')
+        self.agent.gazette.submit_contribution(edition['id'], '01-a', 'mood', "Update: see full text." , 'Feeling good.')
         self.execute('gazette_operation', operation='review', agent='01-a', kind='mood', decision='approve')
         self.assertFalse(self.agent.state['last_result']['ok'])
         self.assertIn(f'Only {REVIEWER_AGENT}', self.agent.state['last_result']['result'])
@@ -349,7 +349,7 @@ class RuntimeTests(unittest.TestCase):
         king = Resident(king_env)
         edition = king.gazette.open_edition('01-king', ['01-a'])
         edition_id = edition['id']
-        king.gazette.submit_contribution(edition_id, '01-a', 'mood', 'Feeling good.')
+        king.gazette.submit_contribution(edition_id, '01-a', 'mood', "Update: see full text." , 'Feeling good.')
         king.execute({'tool_call': {'name': 'gazette_operation', 'arguments': {
             'operation': 'review', 'agent': '01-a', 'kind': 'mood', 'decision': 'approve'}}})
         self.assertTrue(king.state['last_result']['ok'])
@@ -380,7 +380,7 @@ class RuntimeTests(unittest.TestCase):
         chronicler_env = dict(self.env, AGENT_ID=REVIEWER_AGENT, AGENT_NAME='king', AGENT_ROLE='king')
         chronicler = Resident(chronicler_env)
         edition = chronicler.gazette.open_edition('01-king', ['01-a'])
-        chronicler.gazette.submit_contribution(edition['id'], '01-a', 'mood', 'Feeling good.')
+        chronicler.gazette.submit_contribution(edition['id'], '01-a', 'mood', "Update: see full text." , 'Feeling good.')
         with patch.object(chronicler, 'memory', return_value={'items': []}):
             before = json.loads(chronicler.snapshot())
         self.assertIn('gazette_daily_note', before)
@@ -406,7 +406,7 @@ class RuntimeTests(unittest.TestCase):
         chronicler_env = dict(self.env, AGENT_ID=REVIEWER_AGENT, AGENT_NAME='king', AGENT_ROLE='king')
         chronicler = Resident(chronicler_env)
         yesterday = chronicler.gazette.open_edition('01-king', ['01-a'], edition_id='2026-09-27')
-        chronicler.gazette.submit_contribution(yesterday['id'], '01-a', 'mood', 'Feeling good yesterday.')
+        chronicler.gazette.submit_contribution(yesterday['id'], '01-a', 'mood', "Update: see full text." , 'Feeling good yesterday.')
         # "Today" (gazette_today()) has no edition at all - the old code path
         # would find gazette_edition=None and never surface the stale review.
         with patch.object(chronicler, 'memory', return_value={'items': []}):
@@ -425,7 +425,7 @@ class RuntimeTests(unittest.TestCase):
         chronicler_env = dict(self.env, AGENT_ID=REVIEWER_AGENT, AGENT_NAME='king', AGENT_ROLE='king')
         chronicler = Resident(chronicler_env)
         edition = chronicler.gazette.open_edition('01-king', ['01-a'])
-        chronicler.gazette.submit_contribution(edition['id'], '01-a', 'mood', 'Feeling good.')
+        chronicler.gazette.submit_contribution(edition['id'], '01-a', 'mood', "Update: see full text." , 'Feeling good.')
         for i in range(GAZETTE_REVIEW_CEILING - 1):
             chronicler.execute({'tool_call': {'name': 'execute_bash', 'arguments': {'command': f'printf ok{i}'}}})
         self.assertTrue(chronicler.state['last_result']['ok'])  # not yet gated
@@ -441,7 +441,7 @@ class RuntimeTests(unittest.TestCase):
         chronicler_env = dict(self.env, AGENT_ID=REVIEWER_AGENT, AGENT_NAME='king', AGENT_ROLE='king')
         chronicler = Resident(chronicler_env)
         edition = chronicler.gazette.open_edition('01-king', ['01-a'])
-        chronicler.gazette.submit_contribution(edition['id'], '01-a', 'mood', 'Feeling good.')
+        chronicler.gazette.submit_contribution(edition['id'], '01-a', 'mood', "Update: see full text." , 'Feeling good.')
         for i in range(GAZETTE_REVIEW_CEILING + 5):
             chronicler.execute({'tool_call': {'name': 'execute_bash', 'arguments': {'command': f'printf ok{i}'}}})
         chronicler.execute({'tool_call': {'name': 'gazette_operation', 'arguments': {
@@ -452,7 +452,7 @@ class RuntimeTests(unittest.TestCase):
         chronicler_env = dict(self.env, AGENT_ID=REVIEWER_AGENT, AGENT_NAME='king', AGENT_ROLE='king')
         chronicler = Resident(chronicler_env)
         edition = chronicler.gazette.open_edition('01-king', ['01-a'])
-        chronicler.gazette.submit_contribution(edition['id'], '01-a', 'mood', 'Feeling good.')
+        chronicler.gazette.submit_contribution(edition['id'], '01-a', 'mood', "Update: see full text." , 'Feeling good.')
         chronicler.gazette.review_contribution(edition['id'], '01-a', 'mood', REVIEWER_AGENT, 'approve')
         for i in range(GAZETTE_REVIEW_CEILING + 5):
             chronicler.execute({'tool_call': {'name': 'execute_bash', 'arguments': {'command': f'printf ok{i}'}}})
@@ -472,7 +472,7 @@ class RuntimeTests(unittest.TestCase):
         king_env = dict(self.env, AGENT_ID=REVIEWER_AGENT, AGENT_NAME='king', AGENT_ROLE='king')
         king = Resident(king_env)
         edition = king.gazette.open_edition('01-king', ['01-a'])
-        king.gazette.submit_contribution(edition['id'], '01-a', 'mood', 'Feeling good.')
+        king.gazette.submit_contribution(edition['id'], '01-a', 'mood', "Update: see full text." , 'Feeling good.')
         king.gazette.review_contribution(edition['id'], '01-a', 'mood', REVIEWER_AGENT, 'approve')
         with patch.object(king, 'memory', return_value={'items': []}):
             ctx = json.loads(king.snapshot())
@@ -490,7 +490,7 @@ class RuntimeTests(unittest.TestCase):
         king = Resident(king_env)
         edition = king.gazette.open_edition('01-king', ['01-a', '02-b'])
         king.gazette.assign_kinds(edition['id'], '01-king', ['01-a', '02-b'])
-        king.gazette.submit_contribution(edition['id'], '01-a', 'mood', 'Feeling good.')
+        king.gazette.submit_contribution(edition['id'], '01-a', 'mood', "Update: see full text." , 'Feeling good.')
         king.gazette.review_contribution(edition['id'], '01-a', 'mood', REVIEWER_AGENT, 'approve')
         self.assertEqual(king.gazette_closable_editions(), [])
 
@@ -500,10 +500,10 @@ class RuntimeTests(unittest.TestCase):
         edition = king.gazette.open_edition('01-king', ['01-a', '02-b', '03-c'])
         king.gazette.assign_kinds(edition['id'], '01-king', ['01-a', '02-b', '03-c'])
         # 4 assigned (King + 3 peers): 2 contributors is the (4+1)//2==2 floor.
-        king.gazette.submit_contribution(edition['id'], '01-a', 'mood', 'Feeling good.')
+        king.gazette.submit_contribution(edition['id'], '01-a', 'mood', "Update: see full text." , 'Feeling good.')
         king.gazette.review_contribution(edition['id'], '01-a', 'mood', REVIEWER_AGENT, 'approve')
         self.assertEqual(king.gazette_closable_editions(), [])
-        king.gazette.submit_contribution(edition['id'], '02-b', 'wishes', 'More books please.')
+        king.gazette.submit_contribution(edition['id'], '02-b', 'wishes', "Update: see full text." , 'More books please.')
         king.gazette.review_contribution(edition['id'], '02-b', 'wishes', REVIEWER_AGENT, 'approve')
         self.assertEqual(len(king.gazette_closable_editions()), 1)
 
@@ -512,7 +512,7 @@ class RuntimeTests(unittest.TestCase):
         king = Resident(king_env)
         edition = king.gazette.open_edition('01-king', ['01-a', '02-b', '03-c'])
         king.gazette.assign_kinds(edition['id'], '01-king', ['01-a', '02-b', '03-c'])
-        king.gazette.submit_contribution(edition['id'], '01-a', 'mood', 'Feeling good.')
+        king.gazette.submit_contribution(edition['id'], '01-a', 'mood', "Update: see full text." , 'Feeling good.')
         king.gazette.review_contribution(edition['id'], '01-a', 'mood', REVIEWER_AGENT, 'approve')
         self.assertEqual(king.gazette_closable_editions(), [])  # only 1 of 4, no time elapsed
         old_timestamp = (datetime.now(timezone.utc) - timedelta(hours=GAZETTE_CLOSE_MIN_HOURS + 1)).isoformat()
@@ -529,7 +529,7 @@ class RuntimeTests(unittest.TestCase):
         king_env = dict(self.env, AGENT_ID=REVIEWER_AGENT, AGENT_NAME='king', AGENT_ROLE='king')
         king = Resident(king_env)
         yesterday = king.gazette.open_edition('01-king', ['01-a'], edition_id='2026-09-27')
-        king.gazette.submit_contribution(yesterday['id'], '01-a', 'mood', 'Feeling good yesterday.')
+        king.gazette.submit_contribution(yesterday['id'], '01-a', 'mood', "Update: see full text." , 'Feeling good yesterday.')
         king.gazette.review_contribution(yesterday['id'], '01-a', 'mood', REVIEWER_AGENT, 'approve')
         # "Today" (gazette_today()) has no edition at all.
         with patch.object(king, 'memory', return_value={'items': []}):
@@ -543,7 +543,7 @@ class RuntimeTests(unittest.TestCase):
         king_env = dict(self.env, AGENT_ID=REVIEWER_AGENT, AGENT_NAME='king', AGENT_ROLE='king')
         king = Resident(king_env)
         edition = king.gazette.open_edition('01-king', ['01-a'])
-        king.gazette.submit_contribution(edition['id'], '01-a', 'mood', 'Feeling good.')
+        king.gazette.submit_contribution(edition['id'], '01-a', 'mood', "Update: see full text." , 'Feeling good.')
         king.gazette.review_contribution(edition['id'], '01-a', 'mood', REVIEWER_AGENT, 'approve')
         for i in range(GAZETTE_CLOSE_CEILING - 1):
             king.execute({'tool_call': {'name': 'execute_bash', 'arguments': {'command': f'printf ok{i}'}}})
@@ -559,7 +559,7 @@ class RuntimeTests(unittest.TestCase):
         king_env = dict(self.env, AGENT_ID=REVIEWER_AGENT, AGENT_NAME='king', AGENT_ROLE='king')
         king = Resident(king_env)
         edition = king.gazette.open_edition('01-king', ['01-a'])
-        king.gazette.submit_contribution(edition['id'], '01-a', 'mood', 'Feeling good.')
+        king.gazette.submit_contribution(edition['id'], '01-a', 'mood', "Update: see full text." , 'Feeling good.')
         king.gazette.review_contribution(edition['id'], '01-a', 'mood', REVIEWER_AGENT, 'approve')
         for i in range(GAZETTE_CLOSE_CEILING + 5):
             king.execute({'tool_call': {'name': 'execute_bash', 'arguments': {'command': f'printf ok{i}'}}})
@@ -577,7 +577,7 @@ class RuntimeTests(unittest.TestCase):
         chronicler_env = dict(self.env, AGENT_ID=REVIEWER_AGENT, AGENT_NAME='king', AGENT_ROLE='king')
         chronicler = Resident(chronicler_env)
         edition = chronicler.gazette.open_edition('01-king', ['01-a'])
-        chronicler.gazette.submit_contribution(edition['id'], '01-a', 'mood', 'Feeling good.')
+        chronicler.gazette.submit_contribution(edition['id'], '01-a', 'mood', "Update: see full text." , 'Feeling good.')
         chronicler.meetings.schedule('jour_fixe', 'status update', '2026-09-24T10:00:00Z', meeting_id='m1')
         # Simulate an already-exhausted meeting gate (observed live: pressure
         # reached 25+) so every call below is meeting-blocked from the very

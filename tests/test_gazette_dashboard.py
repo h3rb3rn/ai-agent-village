@@ -42,8 +42,8 @@ class GazetteDashboardTests(unittest.TestCase):
         # A compiled edition with one approved and one rejected contribution -
         # only the approved one may ever surface, on the list or in the archive.
         edition = store.open_edition("01-king", ["02-explorer", "03-librarian"], edition_id="2026-09-20")
-        store.submit_contribution(edition["id"], "02-explorer", "mood", "Feeling good.")
-        store.submit_contribution(edition["id"], "03-librarian", "wishes", "More books please.")
+        store.submit_contribution(edition["id"], "02-explorer", "mood", "Update: see full text." , "Feeling good.")
+        store.submit_contribution(edition["id"], "03-librarian", "wishes", "Update: see full text." , "More books please.")
         store.review_contribution(edition["id"], "02-explorer", "mood", "01-king", "approve")
         store.review_contribution(edition["id"], "03-librarian", "wishes", "01-king", "reject", "off-topic")
         compiled = store.close_edition(edition["id"], "01-king")
@@ -56,7 +56,7 @@ class GazetteDashboardTests(unittest.TestCase):
         # A second edition that is still open with an unreviewed contribution -
         # must never appear on the list, regardless of how it is filtered.
         store.open_edition("01-king", ["02-explorer", "03-librarian"], edition_id="2026-09-21")
-        store.submit_contribution("2026-09-21", "02-explorer", "mood", "Still working on it.")
+        store.submit_contribution("2026-09-21", "02-explorer", "mood", "Update: see full text." , "Still working on it.")
 
         cls.server = ThreadingHTTPServer(("127.0.0.1", 0), webui.Handler)
         cls.port = cls.server.server_address[1]

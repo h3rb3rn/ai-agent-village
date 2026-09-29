@@ -47,6 +47,14 @@ CONTRIBUTION_KINDS = (
     "outlook",     # Ausblick auf morgen
     "game_result", # Ergebnis/Verlauf des Tagesspiels, nur fuer die geloosten Teilnehmer
     "village_news",# eine faktische Kurzmeldung zum Dorfgeschehen, jeder darf
+    # P69 (operator feedback): "Fuer komplexe Themen sollte es auch
+    # angemessen viel Spielraum fuer Text geben. Gelegentlich Kolumnen
+    # waeren schoen." An occasional, opt-in, longer-form opinion/feature
+    # piece - deliberately NOT part of assign_kinds()'s mandatory
+    # per-resident rotation (same exclusion as game_result, see
+    # assign_kinds()), since it is meant to appear only when someone
+    # genuinely has an in-depth topic, not every day for every resident.
+    "column",
 )
 # P67 (operator feedback, 2026-09-29, after reading the first real edition):
 # "ernuechternd wenig Inhalt, nur drei Beitraege und alle nur aus Headlines
@@ -57,6 +65,21 @@ CONTRIBUTION_KINDS = (
 # plus a few sentences of real detail) without going to full-essay length,
 # which the operator explicitly did not want either.
 MAX_CONTRIBUTION_CHARS = 1200
+
+# P69 (operator feedback): "Fuer komplexe Themen sollte es auch angemessen
+# viel Spielraum fuer Text geben." The 'column' kind gets real room for a
+# genuine in-depth piece, well beyond the everyday newspaper-item length.
+MAX_COLUMN_CHARS = 3000
+
+# P69 (operator feedback): "bitte nur zwei Zeilen pro Beitrag [...] die sich
+# wie eine Headline lesen" - a real newspaper item has a distinct headline
+# above its body text, not just the fixed category label repeated every
+# time. ~60 chars/line at typical dashboard width * 2 lines.
+HEADLINE_MAX_CHARS = 120
+
+
+def max_chars_for_kind(kind: str) -> int:
+    return MAX_COLUMN_CHARS if kind == "column" else MAX_CONTRIBUTION_CHARS
 
 # A small, low-format-risk pool of daily "games" in place of a sports
 # section - each expressible in one or two short board messages, nothing
@@ -82,6 +105,7 @@ KIND_LABELS = {
     "outlook": "Ausblick",
     "game_result": "Spielergebnis",
     "village_news": "Dorfmeldungen",
+    "column": "Kolumne",
 }
 
 # P55 assigned this to 09-chronicler - thematically fitting (this module's
@@ -132,6 +156,11 @@ class GazetteStore:
                 c.execute("ALTER TABLE gazette_contributions ADD COLUMN reviewed_at TEXT")
             if "review_note" not in existing_cols:
                 c.execute("ALTER TABLE gazette_contributions ADD COLUMN review_note TEXT")
+            # P69: existing rows (the two already-archived editions) simply
+            # have no headline - default '' rather than NOT NULL without a
+            # default, so the migration never fails against live data.
+            if "headline" not in existing_cols:
+                c.execute("ALTER TABLE gazette_contributions ADD COLUMN headline TEXT NOT NULL DEFAULT ''")
             # P53: a generic "pick any kind" hint proved too weak to actually
             # produce contributions (live observation: 0 after ~30 min
             # across all 9 residents despite a confirmed-delivered hint -
@@ -189,7 +218,7 @@ class GazetteStore:
         if existing["assignments"]:
             return existing["assignments"]
         rng = rng or random.Random()
-        assignable_kinds = [k for k in CONTRIBUTION_KINDS if k != "game_result"]
+        assignable_kinds = [k for k in CONTRIBUTION_KINDS if k not in ("game_result", "column")]
         shuffled_kinds = list(assignable_kinds)
         rng.shuffle(shuffled_kinds)
         roster = [king_agent] + [p for p in peers if p != king_agent]
@@ -235,10 +264,17 @@ class GazetteStore:
             )]
         return [self.get_edition(i) for i in ids]  # type: ignore
 
-    def submit_contribution(self, edition_id: str, agent: str, kind: str, content: str) -> Dict[str, Any]:
+    def submit_contribution(self, edition_id: str, agent: str, kind: str, headline: str, content: str) -> Dict[str, Any]:
         if kind not in CONTRIBUTION_KINDS:
             raise ValueError(f"unknown gazette contribution kind: {kind}")
-        content = str(content).strip()[:MAX_CONTRIBUTION_CHARS]
+        # P69 (operator feedback): a real newspaper item has a distinct
+        # headline above its body - required explicitly rather than derived
+        # from the body text, so it is genuinely composed, not just a
+        # truncated first sentence.
+        headline = str(headline).strip()[:HEADLINE_MAX_CHARS]
+        if not headline:
+            raise ValueError("gazette contribution requires a non-empty headline")
+        content = str(content).strip()[:max_chars_for_kind(kind)]
         if not content:
             raise ValueError("gazette contribution requires non-empty content")
         edition = self.get_edition(edition_id)
@@ -252,11 +288,12 @@ class GazetteStore:
             # edit to already-approved content must not silently keep the
             # old approval, since the reviewer never saw the new text.
             c.execute(
-                "INSERT INTO gazette_contributions(edition_id,agent,kind,content,created_at,updated_at,review_status) "
-                "VALUES(?,?,?,?,?,?,'pending') "
-                "ON CONFLICT(edition_id,agent,kind) DO UPDATE SET content=excluded.content, updated_at=excluded.updated_at, "
+                "INSERT INTO gazette_contributions(edition_id,agent,kind,headline,content,created_at,updated_at,review_status) "
+                "VALUES(?,?,?,?,?,?,?,'pending') "
+                "ON CONFLICT(edition_id,agent,kind) DO UPDATE SET headline=excluded.headline, content=excluded.content, "
+                "updated_at=excluded.updated_at, "
                 "review_status='pending', reviewed_by=NULL, reviewed_at=NULL, review_note=NULL",
-                (edition_id, agent, kind, content, ts, ts),
+                (edition_id, agent, kind, headline, content, ts, ts),
             )
             c.commit()
         return self.get_edition(edition_id)  # type: ignore
@@ -319,6 +356,15 @@ class GazetteStore:
         def esc(text: Any) -> str:
             return html.escape(str(text))
 
+        def article(c_: Dict[str, Any]) -> str:
+            # P69 (operator feedback): a real newspaper item has a distinct
+            # headline above its body, not just the fixed category label
+            # repeated every time. Falls back gracefully for pre-P69 rows
+            # with no headline (the already-archived 2026-09-28/29 editions -
+            # never re-rendered, but this must not break if it ever were).
+            head = f'<h4>{esc(c_["headline"])}</h4>' if c_.get("headline") else ""
+            return f'<article>{head}<p>{esc(c_["content"])}</p><p class="byline">— {esc(c_["agent"])}</p></article>'
+
         parts = [
             "<!doctype html><html lang=\"de\"><head><meta charset=\"utf-8\">"
             f"<title>AI Village Gazette – Ausgabe {esc(edition_id)}</title></head><body>",
@@ -332,7 +378,7 @@ class GazetteStore:
         if by_kind.get("village_news"):
             parts.append("<section><h2>Dorfmeldungen</h2>")
             for c_ in by_kind["village_news"]:
-                parts.append(f'<article><p>{esc(c_["content"])}</p><p class="byline">— {esc(c_["agent"])}</p></article>')
+                parts.append(article(c_))
             parts.append("</section>")
 
         parts.append("<section><h2>Spiel des Tages</h2>")
@@ -340,10 +386,19 @@ class GazetteStore:
         if edition["game_pair"]:
             parts.append(f'<p class="byline">Ausgelost: {esc(", ".join(edition["game_pair"]))}</p>')
         for c_ in by_kind.get("game_result", []):
-            parts.append(f'<article><p>{esc(c_["content"])}</p><p class="byline">— {esc(c_["agent"])}</p></article>')
+            parts.append(article(c_))
         parts.append("</section>")
 
-        interview_kinds = [k for k in CONTRIBUTION_KINDS if k not in ("village_news", "game_result")]
+        if by_kind.get("column"):
+            # P69 (operator feedback): "Gelegentlich Kolumnen waeren schoen" -
+            # occasional, longer-form pieces get their own section, distinct
+            # from the per-resident interview grid below.
+            parts.append("<section><h2>Kolumne</h2>")
+            for c_ in by_kind["column"]:
+                parts.append(article(c_))
+            parts.append("</section>")
+
+        interview_kinds = [k for k in CONTRIBUTION_KINDS if k not in ("village_news", "game_result", "column")]
         agents_with_content = sorted({c_["agent"] for k in interview_kinds for c_ in by_kind.get(k, [])})
         if agents_with_content:
             parts.append("<section><h2>Interviews</h2>")
@@ -352,7 +407,8 @@ class GazetteStore:
                 for kind in interview_kinds:
                     match = next((c_ for c_ in by_kind.get(kind, []) if c_["agent"] == agent), None)
                     if match:
-                        parts.append(f'<p><strong>{esc(KIND_LABELS.get(kind, kind))}:</strong> {esc(match["content"])}</p>')
+                        head = f'<p class="headline">{esc(match["headline"])}</p>' if match.get("headline") else ""
+                        parts.append(f'{head}<p><strong>{esc(KIND_LABELS.get(kind, kind))}:</strong> {esc(match["content"])}</p>')
                 parts.append("</article>")
             parts.append("</section>")
 

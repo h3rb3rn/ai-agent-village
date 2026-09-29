@@ -34,10 +34,12 @@ CHAR_WIDTH_FACTOR = 0.6  # Courier: exactly 600/1000 em, fixed-width
 LINE_GAP = 1.35
 
 # (level, text) - level selects font+size; 'gap' inserts a blank half-line
-# and carries no text.
+# and carries no text. 'subhead' (P69) is a bold, body-sized line for a
+# contribution's headline, distinct from a section 'heading'.
 Section = Tuple[str, str]
 
-_SIZES = {"title": TITLE_SIZE, "heading": HEADING_SIZE, "body": BODY_SIZE}
+_SIZES = {"title": TITLE_SIZE, "heading": HEADING_SIZE, "body": BODY_SIZE, "subhead": BODY_SIZE}
+_BOLD_LEVELS = ("title", "heading", "subhead")
 
 
 def _wrap(text: str, size: int) -> List[str]:
@@ -76,7 +78,7 @@ def build_pdf(sections: List[Section]) -> bytes:
             lines.append(("gap", 0, ""))
             continue
         size = _SIZES[level]
-        font = "F2" if level in ("title", "heading") else "F1"
+        font = "F2" if level in _BOLD_LEVELS else "F1"
         for wrapped in _wrap(text, size):
             lines.append((font, size, wrapped))
 
@@ -171,6 +173,17 @@ def edition_sections(edition: Dict[str, Any], issue_number: int, previous_id: st
     for contrib in approved:
         by_kind.setdefault(contrib["kind"], []).append(contrib)
 
+    def article_sections(c: Dict[str, Any]) -> List[Section]:
+        # P69 (operator feedback): a real newspaper item has a distinct
+        # headline above its body. Falls back gracefully for pre-P69 rows
+        # with no headline (the already-archived 2026-09-28/29 editions -
+        # never re-rendered, but this must not break if it ever were).
+        out: List[Section] = []
+        if c.get("headline"):
+            out.append(("subhead", c["headline"]))
+        out.append(("body", f"{c['content']} — {c['agent']}"))
+        return out
+
     sections: List[Section] = [("title", "AI Village Gazette")]
     meta = f"Ausgabe Nr. {issue_number} · {edition['id']} · eröffnet von {edition['opened_by']}"
     sections.append(("body", meta))
@@ -181,7 +194,7 @@ def edition_sections(edition: Dict[str, Any], issue_number: int, previous_id: st
     if by_kind.get("village_news"):
         sections.append(("heading", "Dorfmeldungen"))
         for c in by_kind["village_news"]:
-            sections.append(("body", f"{c['content']} — {c['agent']}"))
+            sections.extend(article_sections(c))
         sections.append(("gap", ""))
 
     sections.append(("heading", "Spiel des Tages"))
@@ -189,10 +202,18 @@ def edition_sections(edition: Dict[str, Any], issue_number: int, previous_id: st
     if edition["game_pair"]:
         sections.append(("body", f"Ausgelost: {', '.join(edition['game_pair'])}"))
     for c in by_kind.get("game_result", []):
-        sections.append(("body", f"{c['content']} — {c['agent']}"))
+        sections.extend(article_sections(c))
     sections.append(("gap", ""))
 
-    interview_kinds = [k for k in CONTRIBUTION_KINDS if k not in ("village_news", "game_result")]
+    if by_kind.get("column"):
+        # P69 (operator feedback): "Gelegentlich Kolumnen waeren schoen" -
+        # occasional, longer-form pieces get their own section.
+        sections.append(("heading", "Kolumne"))
+        for c in by_kind["column"]:
+            sections.extend(article_sections(c))
+        sections.append(("gap", ""))
+
+    interview_kinds = [k for k in CONTRIBUTION_KINDS if k not in ("village_news", "game_result", "column")]
     agents_with_content = sorted({c["agent"] for k in interview_kinds for c in by_kind.get(k, [])})
     if agents_with_content:
         sections.append(("heading", "Interviews"))
@@ -201,6 +222,8 @@ def edition_sections(edition: Dict[str, Any], issue_number: int, previous_id: st
             for kind in interview_kinds:
                 match = next((c for c in by_kind.get(kind, []) if c["agent"] == agent), None)
                 if match:
+                    if match.get("headline"):
+                        sections.append(("subhead", match["headline"]))
                     sections.append(("body", f"{KIND_LABELS.get(kind, kind)}: {match['content']}"))
             sections.append(("gap", ""))
 

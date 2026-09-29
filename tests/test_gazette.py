@@ -9,7 +9,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from village.gazette import CONTRIBUTION_KINDS, GAME_POOL, MAX_CONTRIBUTION_CHARS, REVIEWER_AGENT, GazetteStore
+from village.gazette import (CONTRIBUTION_KINDS, GAME_POOL, HEADLINE_MAX_CHARS, MAX_COLUMN_CHARS,
+                             MAX_CONTRIBUTION_CHARS, REVIEWER_AGENT, GazetteStore)
 
 PEERS = ["02-explorer", "03-librarian", "04-artisan", "05-interpreter", "06-operator",
         "07-methodologist", "08-logician", "09-chronicler"]
@@ -74,6 +75,9 @@ class AssignKindsTests(unittest.TestCase):
         for kind in assignments.values():
             self.assertIn(kind, CONTRIBUTION_KINDS)
             self.assertNotEqual(kind, "game_result")  # reserved for the drawn pair only
+            # P69: 'column' is occasional/opt-in, never part of the
+            # mandatory per-resident rotation.
+            self.assertNotEqual(kind, "column")
         self.assertEqual(self.store.get_edition("2026-09-28")["assignments"], assignments)
 
     def test_assignment_is_idempotent_like_the_game(self):
@@ -101,31 +105,31 @@ class SubmitContributionTests(unittest.TestCase):
         self.edition = self.store.open_edition("01-king", PEERS, edition_id="2026-09-28", rng=random.Random(1))
 
     def test_submits_and_appears_in_the_edition(self):
-        result = self.store.submit_contribution("2026-09-28", "03-librarian", "mood", "Zuversichtlich heute.")
+        result = self.store.submit_contribution("2026-09-28", "03-librarian", "mood", "Update: see full text." , "Zuversichtlich heute.")
         contrib = next(c for c in result["contributions"] if c["agent"] == "03-librarian" and c["kind"] == "mood")
         self.assertEqual(contrib["content"], "Zuversichtlich heute.")
 
     def test_every_documented_kind_is_accepted(self):
         for kind in CONTRIBUTION_KINDS:
             agent = self.edition["game_pair"][0] if kind == "game_result" else "03-librarian"
-            self.store.submit_contribution("2026-09-28", agent, kind, f"content for {kind}")
+            self.store.submit_contribution("2026-09-28", agent, kind, "Update: see full text." , f"content for {kind}")
 
     def test_unknown_kind_is_rejected(self):
         with self.assertRaises(ValueError):
-            self.store.submit_contribution("2026-09-28", "03-librarian", "sports_score", "x")
+            self.store.submit_contribution("2026-09-28", "03-librarian", "sports_score", "Update: see full text." , "x")
 
     def test_empty_content_is_rejected(self):
         with self.assertRaises(ValueError):
-            self.store.submit_contribution("2026-09-28", "03-librarian", "mood", "   ")
+            self.store.submit_contribution("2026-09-28", "03-librarian", "mood", "Update: see full text." , "   ")
 
     def test_content_is_bounded_never_a_free_essay(self):
-        result = self.store.submit_contribution("2026-09-28", "03-librarian", "topics", "x" * 5000)
+        result = self.store.submit_contribution("2026-09-28", "03-librarian", "topics", "Update: see full text." , "x" * 5000)
         contrib = next(c for c in result["contributions"] if c["kind"] == "topics")
         self.assertLessEqual(len(contrib["content"]), MAX_CONTRIBUTION_CHARS)
 
     def test_resubmitting_the_same_kind_replaces_not_duplicates(self):
-        self.store.submit_contribution("2026-09-28", "03-librarian", "mood", "first draft")
-        result = self.store.submit_contribution("2026-09-28", "03-librarian", "mood", "final version")
+        self.store.submit_contribution("2026-09-28", "03-librarian", "mood", "Update: see full text." , "first draft")
+        result = self.store.submit_contribution("2026-09-28", "03-librarian", "mood", "Update: see full text." , "final version")
         matches = [c for c in result["contributions"] if c["agent"] == "03-librarian" and c["kind"] == "mood"]
         self.assertEqual(len(matches), 1)
         self.assertEqual(matches[0]["content"], "final version")
@@ -133,13 +137,33 @@ class SubmitContributionTests(unittest.TestCase):
     def test_game_result_is_restricted_to_the_drawn_pair(self):
         bystander = next(p for p in PEERS if p not in self.edition["game_pair"])
         with self.assertRaises(ValueError):
-            self.store.submit_contribution("2026-09-28", bystander, "game_result", "I won even though I wasn't picked")
+            self.store.submit_contribution("2026-09-28", bystander, "game_result", "Update: see full text." , "I won even though I wasn't picked")
         # the actually-drawn pair may submit without error
-        self.store.submit_contribution("2026-09-28", self.edition["game_pair"][0], "game_result", "It was a close haiku duel.")
+        self.store.submit_contribution("2026-09-28", self.edition["game_pair"][0], "game_result", "Update: see full text." , "It was a close haiku duel.")
 
     def test_unknown_edition_is_rejected(self):
         with self.assertRaises(ValueError):
-            self.store.submit_contribution("2099-01-01", "03-librarian", "mood", "x")
+            self.store.submit_contribution("2099-01-01", "03-librarian", "mood", "Update: see full text." , "x")
+
+    def test_empty_headline_is_rejected(self):
+        # P69 (operator feedback): "bitte nur zwei Zeilen pro Beitrag [...]
+        # die sich wie eine Headline lesen" - required explicitly, not
+        # derived from the body, so it is genuinely composed.
+        with self.assertRaises(ValueError):
+            self.store.submit_contribution("2026-09-28", "03-librarian", "mood", "   ", "Zuversichtlich heute.")
+
+    def test_headline_is_bounded_to_two_lines(self):
+        result = self.store.submit_contribution("2026-09-28", "03-librarian", "mood", "H" * 500, "Zuversichtlich heute.")
+        contrib = next(c for c in result["contributions"] if c["kind"] == "mood")
+        self.assertLessEqual(len(contrib["headline"]), HEADLINE_MAX_CHARS)
+
+    def test_column_kind_allows_more_room_than_regular_kinds(self):
+        # P69 (operator feedback): "Fuer komplexe Themen sollte es auch
+        # angemessen viel Spielraum fuer Text geben."
+        result = self.store.submit_contribution("2026-09-28", "03-librarian", "column", "A deep dive", "x" * 5000)
+        contrib = next(c for c in result["contributions"] if c["kind"] == "column")
+        self.assertGreater(len(contrib["content"]), MAX_CONTRIBUTION_CHARS)
+        self.assertLessEqual(len(contrib["content"]), MAX_COLUMN_CHARS)
 
 
 class ListEditionsTests(unittest.TestCase):
@@ -170,13 +194,13 @@ class EditorialReviewTests(unittest.TestCase):
         self.store.open_edition("01-king", PEERS, edition_id="2026-09-28", rng=random.Random(1))
 
     def test_a_new_contribution_starts_pending(self):
-        result = self.store.submit_contribution("2026-09-28", "02-explorer", "mood", "Feeling good.")
+        result = self.store.submit_contribution("2026-09-28", "02-explorer", "mood", "Update: see full text." , "Feeling good.")
         contrib = next(c for c in result["contributions"] if c["agent"] == "02-explorer")
         self.assertEqual(contrib["review_status"], "pending")
 
     def test_approve_and_reject_transition_review_status(self):
-        self.store.submit_contribution("2026-09-28", "02-explorer", "mood", "Feeling good.")
-        self.store.submit_contribution("2026-09-28", "03-librarian", "wishes", "More disk space please.")
+        self.store.submit_contribution("2026-09-28", "02-explorer", "mood", "Update: see full text." , "Feeling good.")
+        self.store.submit_contribution("2026-09-28", "03-librarian", "wishes", "Update: see full text." , "More disk space please.")
         approved = self.store.review_contribution("2026-09-28", "02-explorer", "mood", REVIEWER_AGENT, "approve")
         rejected = self.store.review_contribution("2026-09-28", "03-librarian", "wishes", REVIEWER_AGENT, "reject", "off-topic")
         a = next(c for c in approved["contributions"] if c["agent"] == "02-explorer")
@@ -187,7 +211,7 @@ class EditorialReviewTests(unittest.TestCase):
         self.assertEqual(r["review_note"], "off-topic")
 
     def test_unknown_decision_is_rejected(self):
-        self.store.submit_contribution("2026-09-28", "02-explorer", "mood", "Feeling good.")
+        self.store.submit_contribution("2026-09-28", "02-explorer", "mood", "Update: see full text." , "Feeling good.")
         with self.assertRaises(ValueError):
             self.store.review_contribution("2026-09-28", "02-explorer", "mood", REVIEWER_AGENT, "publish")
 
@@ -198,17 +222,17 @@ class EditorialReviewTests(unittest.TestCase):
     def test_resubmission_resets_an_approved_contribution_to_pending(self):
         # An edit to already-approved text must not silently keep the old
         # approval - the reviewer never saw the new content.
-        self.store.submit_contribution("2026-09-28", "02-explorer", "mood", "Feeling good.")
+        self.store.submit_contribution("2026-09-28", "02-explorer", "mood", "Update: see full text." , "Feeling good.")
         self.store.review_contribution("2026-09-28", "02-explorer", "mood", REVIEWER_AGENT, "approve")
-        result = self.store.submit_contribution("2026-09-28", "02-explorer", "mood", "Actually feeling great.")
+        result = self.store.submit_contribution("2026-09-28", "02-explorer", "mood", "Update: see full text." , "Actually feeling great.")
         contrib = next(c for c in result["contributions"] if c["agent"] == "02-explorer")
         self.assertEqual(contrib["review_status"], "pending")
         self.assertIsNone(contrib["reviewed_by"])
 
     def test_pending_review_count(self):
         self.assertEqual(self.store.pending_review_count("2026-09-28"), 0)
-        self.store.submit_contribution("2026-09-28", "02-explorer", "mood", "Feeling good.")
-        self.store.submit_contribution("2026-09-28", "03-librarian", "wishes", "More disk space please.")
+        self.store.submit_contribution("2026-09-28", "02-explorer", "mood", "Update: see full text." , "Feeling good.")
+        self.store.submit_contribution("2026-09-28", "03-librarian", "wishes", "Update: see full text." , "More disk space please.")
         self.assertEqual(self.store.pending_review_count("2026-09-28"), 2)
         self.store.review_contribution("2026-09-28", "02-explorer", "mood", REVIEWER_AGENT, "approve")
         self.assertEqual(self.store.pending_review_count("2026-09-28"), 1)
@@ -226,9 +250,9 @@ class CompileEditionTests(unittest.TestCase):
             self.store.compile_edition("1999-01-01")
 
     def test_only_approved_contributions_appear(self):
-        self.store.submit_contribution("2026-09-28", "02-explorer", "mood", "Approved text should show up.")
-        self.store.submit_contribution("2026-09-28", "03-librarian", "wishes", "Pending text must not show up.")
-        self.store.submit_contribution("2026-09-28", "04-artisan", "topics", "Rejected text must not show up.")
+        self.store.submit_contribution("2026-09-28", "02-explorer", "mood", "Update: see full text." , "Approved text should show up.")
+        self.store.submit_contribution("2026-09-28", "03-librarian", "wishes", "Update: see full text." , "Pending text must not show up.")
+        self.store.submit_contribution("2026-09-28", "04-artisan", "topics", "Update: see full text." , "Rejected text must not show up.")
         self.store.review_contribution("2026-09-28", "02-explorer", "mood", REVIEWER_AGENT, "approve")
         self.store.review_contribution("2026-09-28", "04-artisan", "topics", REVIEWER_AGENT, "reject")
         rendered = self.store.compile_edition("2026-09-28")
@@ -237,7 +261,7 @@ class CompileEditionTests(unittest.TestCase):
         self.assertNotIn("Rejected text must not show up.", rendered)
 
     def test_content_is_html_escaped(self):
-        self.store.submit_contribution("2026-09-28", "02-explorer", "mood", "<script>alert(1)</script>")
+        self.store.submit_contribution("2026-09-28", "02-explorer", "mood", "Update: see full text." , "<script>alert(1)</script>")
         self.store.review_contribution("2026-09-28", "02-explorer", "mood", REVIEWER_AGENT, "approve")
         rendered = self.store.compile_edition("2026-09-28")
         self.assertNotIn("<script>alert(1)</script>", rendered)
@@ -248,6 +272,47 @@ class CompileEditionTests(unittest.TestCase):
         rendered = self.store.compile_edition("2026-09-28")
         self.assertIn("Ausgabe Nr. 2", rendered)
         self.assertIn("2026-09-27", rendered)
+
+    def test_headline_is_rendered_above_the_body_in_the_interview_grid(self):
+        self.store.submit_contribution("2026-09-28", "02-explorer", "mood", "Curiosity Drives Progress",
+                                        "Approved text should show up.")
+        self.store.review_contribution("2026-09-28", "02-explorer", "mood", REVIEWER_AGENT, "approve")
+        rendered = self.store.compile_edition("2026-09-28")
+        self.assertIn('<p class="headline">Curiosity Drives Progress</p>', rendered)
+        self.assertLess(rendered.index("Curiosity Drives Progress"),
+                         rendered.index("Approved text should show up."))
+
+    def test_headline_is_rendered_as_a_heading_for_village_news_and_columns(self):
+        self.store.submit_contribution("2026-09-28", "02-explorer", "village_news", "Well Repaired",
+                                        "The village fountain was fixed today.")
+        self.store.review_contribution("2026-09-28", "02-explorer", "village_news", REVIEWER_AGENT, "approve")
+        rendered = self.store.compile_edition("2026-09-28")
+        self.assertIn("<h4>Well Repaired</h4>", rendered)
+
+    def test_column_gets_its_own_section(self):
+        # P69 (operator feedback): "Gelegentlich Kolumnen waeren schoen."
+        self.store.submit_contribution("2026-09-28", "02-explorer", "column", "A Deep Dive Into Compression",
+                                        "An in-depth, longer-form piece.")
+        self.store.review_contribution("2026-09-28", "02-explorer", "column", REVIEWER_AGENT, "approve")
+        rendered = self.store.compile_edition("2026-09-28")
+        self.assertIn("<h2>Kolumne</h2>", rendered)
+        self.assertIn("An in-depth, longer-form piece.", rendered)
+        # A column must not also show up in the per-resident interview grid.
+        self.assertNotIn("<h3>02-explorer</h3>", rendered)
+
+    def test_missing_headline_does_not_break_rendering(self):
+        # Defensive: a pre-P69 row (already-archived editions) has no
+        # headline (migration default ''); compile_edition() must never be
+        # invoked against such data again in practice (archives are
+        # write-once), but must not crash if it ever were.
+        with self.store._conn() as c:
+            c.execute(
+                "INSERT INTO gazette_contributions(edition_id,agent,kind,headline,content,created_at,updated_at,review_status,reviewed_by) "
+                "VALUES('2026-09-28','02-explorer','mood','','No headline here.','x','x','approved','01-king')")
+            c.commit()
+        rendered = self.store.compile_edition("2026-09-28")
+        self.assertIn("No headline here.", rendered)
+        self.assertNotIn("<h4></h4>", rendered)
 
     def test_first_edition_has_no_previous_edition_reference(self):
         rendered = self.store.compile_edition("2026-09-28")
@@ -260,7 +325,7 @@ class CloseEditionTests(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
         self.store = GazetteStore(self.tmp / "coordination.sqlite3")
         self.store.open_edition("01-king", PEERS, edition_id="2026-09-28", rng=random.Random(1))
-        self.store.submit_contribution("2026-09-28", "02-explorer", "mood", "Feeling good.")
+        self.store.submit_contribution("2026-09-28", "02-explorer", "mood", "Update: see full text." , "Feeling good.")
         self.store.review_contribution("2026-09-28", "02-explorer", "mood", REVIEWER_AGENT, "approve")
 
     def test_unknown_edition_is_rejected(self):

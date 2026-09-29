@@ -74,8 +74,8 @@ class EditionSectionsTests(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
         self.store = GazetteStore(self.tmp / "coordination.sqlite3")
         self.store.open_edition("01-king", PEERS, edition_id="2026-09-28", rng=random.Random(1))
-        self.store.submit_contribution("2026-09-28", "02-explorer", "mood", "Approved mood text.")
-        self.store.submit_contribution("2026-09-28", "03-librarian", "wishes", "Rejected wish text.")
+        self.store.submit_contribution("2026-09-28", "02-explorer", "mood", "Update: see full text." , "Approved mood text.")
+        self.store.submit_contribution("2026-09-28", "03-librarian", "wishes", "Update: see full text." , "Rejected wish text.")
         self.store.review_contribution("2026-09-28", "02-explorer", "mood", "01-king", "approve")
         self.store.review_contribution("2026-09-28", "03-librarian", "wishes", "01-king", "reject", "off-topic")
 
@@ -87,7 +87,7 @@ class EditionSectionsTests(unittest.TestCase):
 
     def test_issue_number_and_previous_edition_appear_in_the_header(self):
         yesterday = self.store.open_edition("01-king", PEERS, edition_id="2026-09-27")
-        self.store.submit_contribution(yesterday["id"], "02-explorer", "mood", "Yesterday.")
+        self.store.submit_contribution(yesterday["id"], "02-explorer", "mood", "Update: see full text." , "Yesterday.")
         self.store.review_contribution(yesterday["id"], "02-explorer", "mood", "01-king", "approve")
         self.store.close_edition("2026-09-27", "01-king")
         result = self.store.close_edition("2026-09-28", "01-king")
@@ -95,6 +95,35 @@ class EditionSectionsTests(unittest.TestCase):
         joined = " ".join(text for _, text in sections)
         self.assertIn(f"Ausgabe Nr. {result['issue_number']}", joined)
         self.assertIn("Vorherige Ausgabe: 2026-09-27", joined)
+
+    def test_headline_becomes_a_bold_subhead_line(self):
+        self.store.submit_contribution("2026-09-28", "04-artisan", "village_news", "Well Repaired",
+                                        "The fountain was fixed.")
+        self.store.review_contribution("2026-09-28", "04-artisan", "village_news", "01-king", "approve")
+        result = self.store.close_edition("2026-09-28", "01-king")
+        sections = edition_sections(result, result["issue_number"], result["previous_id"])
+        subheads = [text for level, text in sections if level == "subhead"]
+        self.assertIn("Well Repaired", subheads)
+
+    def test_column_gets_its_own_heading_section(self):
+        self.store.submit_contribution("2026-09-28", "04-artisan", "column", "A Deep Dive",
+                                        "An in-depth, longer-form piece.")
+        self.store.review_contribution("2026-09-28", "04-artisan", "column", "01-king", "approve")
+        result = self.store.close_edition("2026-09-28", "01-king")
+        sections = edition_sections(result, result["issue_number"], result["previous_id"])
+        headings = [text for level, text in sections if level == "heading"]
+        self.assertIn("Kolumne", headings)
+        joined = " ".join(text for _, text in sections)
+        self.assertIn("An in-depth, longer-form piece.", joined)
+
+    def test_pdf_renders_the_headline_in_bold_courier(self):
+        self.store.submit_contribution("2026-09-28", "04-artisan", "village_news", "Well Repaired",
+                                        "The fountain was fixed.")
+        self.store.review_contribution("2026-09-28", "04-artisan", "village_news", "01-king", "approve")
+        result = self.store.close_edition("2026-09-28", "01-king")
+        pdf = render_edition_pdf(result, result["issue_number"], result["previous_id"])
+        self.assertIn(b"(Well Repaired) Tj", pdf)
+        self.assertIn(b"/F2 10 Tf", pdf)  # bold Courier at body size for the subhead
 
 
 if __name__ == "__main__":
