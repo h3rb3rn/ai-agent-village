@@ -48,7 +48,15 @@ CONTRIBUTION_KINDS = (
     "game_result", # Ergebnis/Verlauf des Tagesspiels, nur fuer die geloosten Teilnehmer
     "village_news",# eine faktische Kurzmeldung zum Dorfgeschehen, jeder darf
 )
-MAX_CONTRIBUTION_CHARS = 400
+# P67 (operator feedback, 2026-09-29, after reading the first real edition):
+# "ernuechternd wenig Inhalt, nur drei Beitraege und alle nur aus Headlines
+# ... echte Texte mit ausfuehrlichen Informationen ... Zeitung darf aus
+# etwas, aber nicht zu viel Prosa bestehen. Schau dir echte Zeitungen und
+# Fachartikel an." 400 chars is roughly one sentence - a headline, not an
+# item. Raised to a short-newspaper-item length (a concrete lede sentence
+# plus a few sentences of real detail) without going to full-essay length,
+# which the operator explicitly did not want either.
+MAX_CONTRIBUTION_CHARS = 1200
 
 # A small, low-format-risk pool of daily "games" in place of a sports
 # section - each expressible in one or two short board messages, nothing

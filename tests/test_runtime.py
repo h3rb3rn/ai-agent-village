@@ -248,7 +248,35 @@ class RuntimeTests(unittest.TestCase):
         king.gazette.assign_kinds(king.gazette.list_editions(1)[0]['id'], '01-king', ['02-b', '03-c'])
         with patch.object(king, 'memory', return_value={'items': []}):
             after = json.loads(king.snapshot())
-        self.assertNotIn('gazette_daily_note', after)
+        # P67: King himself is entirely inside this branch, so the generic
+        # contributor hint below (the `else:` branch) never reached him -
+        # he was never once prompted to submit his own assigned piece
+        # (live evidence: assigned 'learning', never contributed it). The
+        # hint must now survive open+announce+assign too, until King has
+        # submitted his own contribution.
+        self.assertIn('gazette_daily_note', after)
+        self.assertIn('you have not yet submitted your own', after['gazette_daily_note'])
+        edition_id = king.gazette.list_editions(1)[0]['id']
+        assigned_kind = king.gazette.get_assignment(edition_id, '01-king')
+        king.gazette.submit_contribution(edition_id, '01-king', assigned_kind, 'King contributed too.')
+        with patch.object(king, 'memory', return_value={'items': []}):
+            fully_done = json.loads(king.snapshot())
+        # King is also REVIEWER_AGENT (P61), so his own fresh submission is
+        # immediately a pending review - reviewer_pending has top priority,
+        # so the hint correctly switches to that rather than disappearing.
+        self.assertIn('gazette_daily_note', fully_done)
+        self.assertIn('editorial review', fully_done['gazette_daily_note'])
+        king.gazette.review_contribution(edition_id, '01-king', assigned_kind, '01-king', 'approve')
+        with patch.object(king, 'memory', return_value={'items': []}):
+            reviewed = json.loads(king.snapshot())
+        # Fully reviewed but not yet closed (P63): the hint correctly
+        # cascades once more instead of disappearing.
+        self.assertIn('gazette_daily_note', reviewed)
+        self.assertIn('operation=close', reviewed['gazette_daily_note'])
+        king.gazette.close_edition(edition_id, '01-king')
+        with patch.object(king, 'memory', return_value={'items': []}):
+            all_clear = json.loads(king.snapshot())
+        self.assertNotIn('gazette_daily_note', all_clear)
 
     def test_non_king_sees_no_gazette_hint_before_an_edition_exists(self):
         with patch.object(self.agent, 'memory', return_value={'items': []}):

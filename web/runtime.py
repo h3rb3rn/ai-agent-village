@@ -45,6 +45,7 @@ from village.teams import TeamStore
 from village.research import ResearchBroker
 from village.meetings import MeetingStore
 from village.gazette import GazetteStore
+from village.gazette import MAX_CONTRIBUTION_CHARS as GAZETTE_MAX_CHARS
 from village.gazette import today as gazette_today
 from village.gazette import REVIEWER_AGENT as GAZETTE_REVIEWER
 from village.gazette_pdf import render_edition_pdf
@@ -460,6 +461,18 @@ class Resident:
         # can happen anytime once that backlog is cleared.
         reviewer_pending = self.gazette_pending_reviews() if self.id == GAZETTE_REVIEWER else []
         closable = self.gazette_closable_editions() if self.id == '01-king' else []
+        # P67 (operator feedback after reading the first real edition):
+        # "nur Headlines ... echte Texte mit ausfuehrlichen Informationen
+        # ... aber nicht zu viel Prosa - schau dir echte Zeitungen und
+        # Fachartikel an." Shared by every contribute-hint below (King's own
+        # and every other resident's) so the guidance is identical either way.
+        gazette_style_hint = (
+            "Write it like a short newspaper item, not a one-line answer "
+            "and not an essay: one concrete sentence stating the key fact, "
+            "then 2-4 more sentences of real detail - what specifically "
+            "happened, a concrete number or example, what worked or did "
+            f"not, what should change. Max {GAZETTE_MAX_CHARS} chars."
+        )
         if reviewer_pending:
             # P55: the editorial gate itself must not become the exact
             # reliability bottleneck this session spent P48-P54 fixing -
@@ -520,6 +533,19 @@ class Resident:
                         "who writes what: call gazette_operation with operation=assign once to "
                         "give every resident one specific contribution kind."
                     )
+                elif not any(c['agent'] == self.id for c in gazette_edition['contributions']):
+                    # P67: King himself is entirely inside this exclusive
+                    # branch, so the contributor hint below (the `else:`
+                    # branch) never reaches him - he was never once prompted
+                    # to submit his own assigned piece. Live evidence: he was
+                    # assigned 'learning' for 2026-09-28 and never
+                    # contributed it; only 3 of 9 residents did.
+                    assigned_kind = gazette_edition.get('assignments', {}).get(self.id)
+                    context['gazette_daily_note'] = (
+                        f"Today's Gazette is open, announced and assigned, but you have not yet "
+                        f"submitted your own '{assigned_kind}' contribution: send one "
+                        f"gazette_operation contribute with kind='{assigned_kind}'. {gazette_style_hint}"
+                    )
         else:
             # P52: a one-off broadcast from King asking everyone to
             # contribute had the identical problem the direct nudge to King
@@ -538,14 +564,14 @@ class Resident:
                     context['gazette_daily_note'] = (
                         f"Today's AI Village Gazette edition is open. King has assigned you the "
                         f"'{assigned_kind}' section - send one gazette_operation contribute with "
-                        f"kind='{assigned_kind}' and a short (max 400 chars) entry."
+                        f"kind='{assigned_kind}'. {gazette_style_hint}"
                     )
                 else:
                     context['gazette_daily_note'] = (
                         "Today's AI Village Gazette edition is open and you have not contributed "
-                        "yet. Send one short gazette_operation contribute (max 400 chars) - pick "
-                        "any kind that fits: state/mood/wishes/topics/suggestions/learning/outlook/"
-                        "village_news (game_result is reserved for today's drawn pair)."
+                        "yet. Send one gazette_operation contribute - pick any kind that fits: "
+                        "state/mood/wishes/topics/suggestions/learning/outlook/village_news "
+                        f"(game_result is reserved for today's drawn pair). {gazette_style_hint}"
                     )
         if own_project and own_project.get('blockers'):
             context['task_blocker_guidance'] = (

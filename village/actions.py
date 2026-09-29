@@ -8,6 +8,9 @@ from __future__ import annotations
 
 from typing import Any, Dict, Iterable, List, Optional
 
+from village.gazette import MAX_CONTRIBUTION_CHARS as _GAZETTE_MAX_CHARS
+from village.gazette import REVIEWER_AGENT as _GAZETTE_REVIEWER
+
 STR = {"type": "string"}
 
 
@@ -89,14 +92,24 @@ ACTION_SPECS: Dict[str, Dict[str, Any]] = {
             "status": {"enum": ["open", "adopted"]}},
         "required": ["operation"]},
     "gazette_operation": {
+        # P61: reviewer identity interpolated from village/gazette.py's
+        # REVIEWER_AGENT rather than hardcoded - this exact string used to
+        # say "09-chronicler only" for weeks after the role moved to
+        # 01-king, silently contradicting the runtime's own permission
+        # check and misleading every agent's own tool list.
+        # P67 (operator feedback): "a short fact, not an essay" produced
+        # exactly that - one-sentence contributions. Reworded toward a
+        # short-newspaper-item length/shape instead of "short fact".
         "doc": "operation=open(King only, starts today's AI Village Gazette edition and draws the "
               "day's game+pair)|assign(King only, delegates one contribution kind to each resident)|"
-              "contribute(kind,content)|review(09-chronicler only, agent,kind,decision=approve|reject,note?)"
+              "contribute(kind,content)|"
+              f"review({_GAZETTE_REVIEWER} only, agent,kind,decision=approve|reject,note?)"
               "|close(King only, compiles all approved contributions into the archived edition)"
               "|view(edition_id?) -> the daily village paper; kind is one of "
               "state/mood/wishes/topics/suggestions/learning/outlook/game_result/village_news, "
-              "content max 400 chars - a short fact, not an essay. Only 09-chronicler-approved "
-              "contributions ever appear in the compiled edition.",
+              f"content max {_GAZETTE_MAX_CHARS} chars - a short newspaper item (a concrete lede "
+              f"fact plus a few sentences of real detail), not a one-liner and not an essay. Only "
+              f"{_GAZETTE_REVIEWER}-approved contributions ever appear in the compiled edition.",
         "properties": {
             "operation": {"enum": ["open", "assign", "contribute", "review", "close", "view"]},
             "kind": {"enum": ["state", "mood", "wishes", "topics", "suggestions", "learning",
