@@ -22,6 +22,18 @@ class MeetingSchedulerPolicyTests(unittest.TestCase):
         self.assertIn('continue', text)
         self.assertIsNotNone(tree)
 
+    def test_poll_interval_is_far_shorter_than_the_staleness_threshold(self):
+        # P59-follow-up: the loop used to sleep the full (default 6h)
+        # INTERVAL between staleness checks while a meeting was active -
+        # longer than the 4h staleness threshold itself, so a stale meeting
+        # (and the meeting_unreported recording depending on the loop
+        # actually waking to see it) could sit unclosed for up to ~2h past
+        # when it should have closed.
+        self.assertLess(meeting_scheduler.POLL_SECONDS, 4 * 3600)
+        text = (ROOT / 'scripts/meeting-scheduler.py').read_text()
+        self.assertNotIn('time.sleep(max(60, INTERVAL))', text)
+        self.assertNotIn('time.sleep(max(60,INTERVAL))', text)
+
 
 class RecordUnreportedTests(unittest.TestCase):
     """P58-follow-up (operator directive: 'Nicht nur beobachten wenn du GAPs

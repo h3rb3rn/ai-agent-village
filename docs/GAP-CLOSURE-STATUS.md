@@ -94,6 +94,7 @@ Pro Paket Nachweis unter `docs/evidence/Pxx.md` anlegen, sobald tatsächlich dar
 | P56 | Meeting-Report-Hinweis unbegrenzt ignorierbar (gleiche Lücke wie P51, andere Stelle) – Deckelung ergänzt | Live-Beobachtung (Chronicler-Blockade bei P55-Validierung), Betreiberauftrag "nachhaltige Lösung" | LOCAL_VERIFIED | [docs/evidence/P56.md](evidence/P56.md) |
 | P57 | Sichtbare Eskalation bei wiederholt selbst erkannten, ungelösten Jour-Fixe-Blockern (neue Auditor-Signatur `recurring_meeting_blocker`) | Live-Auswertung Jour-Fixe-Effektivität, Betreiberauftrag "müssen sanktioniert werden" | LOCAL_VERIFIED | [docs/evidence/P57.md](evidence/P57.md) |
 | P58 | Meeting-Gate-Hinweis mit kopierbarem JSON-Beispiel statt Feldnamen-Prosa (gleiches Muster wie `VALID_ENVELOPE_EXAMPLE`) | Live-Beobachtung (Chronicler 12+ Blocks ohne Wechsel), Betreiberfrage "sinnvollste Maßnahme" | LOCAL_VERIFIED | [docs/evidence/P58.md](evidence/P58.md) |
+| P59 | Verfallene Meetings: Nichtteilnahme wird jetzt aufgezeichnet (`meeting_unreported` + Auditor-Signatur) statt spurlos gelöscht; Nebenfund: Prüfintervall (6h) war länger als Verfallsschwelle (4h) | Live-Beobachtung, Betreiberauftrag "proaktiv lösen" | LOCAL_VERIFIED | [docs/evidence/P59.md](evidence/P59.md) |
 
 ## Fortschrittsbuch
 

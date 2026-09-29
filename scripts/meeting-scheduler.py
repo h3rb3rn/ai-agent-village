@@ -12,6 +12,14 @@ ROOT=Path(os.environ.get('VILLAGE_ROOT','/var/lib/ai-village'))
 DB=ROOT/'board'/'coordination.sqlite3'
 INTERVAL=float(os.environ.get('VILLAGE_MEETING_INTERVAL_SECONDS','21600'))
 PEERS_FILE=Path(os.environ.get('VILLAGE_PEERS_FILE', '/etc/ai-village/runtime-peers.json'))
+# P59-follow-up: the loop used to sleep the full INTERVAL (default 6h) between
+# staleness checks while a meeting was active - longer than the 4h staleness
+# threshold itself, so a stale meeting (and the meeting_unreported recording
+# that now depends on this loop actually waking up to see it) could sit
+# unclosed for up to ~2h past when it should have been. Poll far more often
+# than the threshold it is checking, independent of how rarely a brand new
+# meeting needs to be opened.
+POLL_SECONDS=min(300.0, INTERVAL)
 
 def resident_ids():
     try:
@@ -54,7 +62,7 @@ def main():
         # one is still open. The newest open meeting is the only social round;
         # stale rounds are closed by the bounded cleanup above.
         if meetings.active():
-            time.sleep(max(60, INTERVAL))
+            time.sleep(max(60, POLL_SECONDS))
             continue
         stamp=datetime.now(timezone.utc).strftime('%Y%m%dT%H%MZ')
         kind='daily_standup' if datetime.now(timezone.utc).hour % 24 == 8 else 'jour_fixe'
@@ -64,5 +72,5 @@ def main():
             board.post_inbox_message('board','village-council',f'Meeting {kind} {mid} is open. Report achieved work, evidence, next step and blockers with meeting_operation; do not create status-only Board posts.',None,None,msg_id=f'{mid}_agenda')
             append_event(ROOT/'board'/'events.jsonl', source='village-council', kind='meeting_opened',
                          detail=m['agenda'], meeting_id=mid, meeting_kind=kind)
-        time.sleep(max(60,INTERVAL))
+        time.sleep(max(60, POLL_SECONDS))
 if __name__=='__main__': main()
