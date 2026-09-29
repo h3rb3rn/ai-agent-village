@@ -70,6 +70,14 @@ COLLABORATION_PRESSURE_CEILING = 10
 # comment at its use site).
 MEETING_REPORT_CEILING = 10
 
+# P60: same rationale and value again, for the Gazette editorial-review
+# nudge (P55). Observed live: the Chronicler hint (P57/P59, confirmed
+# correctly delivered, cross-day-persistent) produced zero reviews over
+# 40+ minutes with no gate behind it - the exact unbounded-advisory gap
+# COLLABORATION_PRESSURE_CEILING/MEETING_REPORT_CEILING already closed
+# elsewhere, just never applied to this third nudge.
+GAZETTE_REVIEW_CEILING = 10
+
 
 def now():
     return datetime.now(timezone.utc).isoformat()
@@ -259,6 +267,20 @@ class Resident:
         with urllib.request.urlopen(request, timeout=10) as response:
             return json.load(response)
 
+    def gazette_pending_reviews(self):
+        """(edition_id, contribution) pairs still awaiting the Chronicler's
+        editorial review (P55), across every non-compiled edition - not
+        just today's (P59-follow-up: a review is an outstanding obligation
+        against whatever was submitted, not a daily assignment, so it must
+        not go blind the moment the calendar day rolls over). Shared by
+        snapshot() (the hint) and guard() (the P60 gate), so both always
+        agree on exactly what is outstanding."""
+        open_editions = [e for e in self.gazette.list_editions(limit=10) if e['status'] != 'compiled']
+        return [
+            (edition['id'], c) for edition in open_editions for c in edition['contributions']
+            if c.get('review_status') == 'pending'
+        ]
+
     def snapshot(self):
         peers = read_json(Path('/etc/ai-village/runtime-peers.json'), [])
         events = tail(self.board / 'events.jsonl', 800)
@@ -442,21 +464,7 @@ class Resident:
             # here; falls back to an open choice only while King has not
             # yet delegated.
             gazette_edition = self.gazette.get_edition(gazette_today())
-            if self.id == GAZETTE_REVIEWER:
-                # P59-follow-up: scoping this to gazette_today() went blind
-                # the moment the calendar day rolled over - review is not a
-                # daily assignment like a contribution slot, it is an
-                # outstanding obligation against whatever was actually
-                # submitted, on any day, until the edition is compiled.
-                # Yesterday's still-open edition with pending reviews would
-                # otherwise silently vanish from this hint forever.
-                open_editions = [e for e in self.gazette.list_editions(limit=10) if e['status'] != 'compiled']
-                pending_reviews = [
-                    (edition['id'], c) for edition in open_editions for c in edition['contributions']
-                    if c.get('review_status') == 'pending'
-                ]
-            else:
-                pending_reviews = []
+            pending_reviews = self.gazette_pending_reviews() if self.id == GAZETTE_REVIEWER else []
             if self.id == GAZETTE_REVIEWER and pending_reviews:
                 # P55: the editorial gate itself must not become the exact
                 # reliability bottleneck this session spent P48-P54 fixing -
@@ -724,6 +732,34 @@ class Resident:
                     self.event('meeting_gate', f"meeting_id={mid}; pressure={count}")
                     return False
                 self.feedback(name, f"Meeting report requested: {mid}. Submit one meeting_operation report when possible; continuing this reversible action.", True)
+
+        # P60 (operator: "Nicht nur beobachten wenn du GAPs identifizierst,
+        # sondern proaktiv loesen"): live observation showed the Chronicler's
+        # correctly-delivered, cross-day-persistent review hint (P57/P59)
+        # produce zero reviews over 40+ minutes with no gate behind it - the
+        # exact unbounded-advisory gap already closed for collaboration
+        # checkpoints (P51) and meeting reports (P56/P58), just never
+        # applied to this third nudge. Same fix: a pressure ceiling, and the
+        # gate message includes a ready-to-submit example from the start
+        # (P58 already proved naming fields in prose is not enough).
+        if self.id == GAZETTE_REVIEWER and name not in ('gazette_operation', 'idle'):
+            pending_reviews = self.gazette_pending_reviews()
+            if not pending_reviews:
+                self.state['gazette_review_pressure'] = 0
+            else:
+                pressure = int(self.state.get('gazette_review_pressure', 0)) + 1
+                self.state['gazette_review_pressure'] = pressure
+                self.event('gazette_review_required', f"pending={len(pending_reviews)}; pressure={pressure}")
+                if pressure >= GAZETTE_REVIEW_CEILING:
+                    eid, first = pending_reviews[0]
+                    example = ('{"name":"gazette_operation","arguments":{"operation":"review",'
+                               f'"edition_id":"{eid}","agent":"{first["agent"]}","kind":"{first["kind"]}",'
+                               '"decision":"approve"}}')
+                    self.feedback(name, f"Editorial review required before more solo work: "
+                                        f"{len(pending_reviews)} Gazette contribution(s) pending. Submit exactly "
+                                        f"this envelope for one of them (or decision=\"reject\" with a note): {example}", False)
+                    self.event('gazette_review_gate', f"pending={len(pending_reviews)}; pressure={pressure}")
+                    return False
 
         norm_name = name
         norm_args = dict(args)

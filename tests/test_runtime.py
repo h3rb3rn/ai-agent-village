@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'web'))
-from runtime import Resident,Tasks,resource_snapshot,tail,event_time,COLLABORATION_PRESSURE_CEILING,MEETING_REPORT_CEILING
+from runtime import Resident,Tasks,resource_snapshot,tail,event_time,COLLABORATION_PRESSURE_CEILING,MEETING_REPORT_CEILING,GAZETTE_REVIEW_CEILING
 from decision import decision
 from village.collaboration import CooperationCheckpoint
 
@@ -349,6 +349,49 @@ class RuntimeTests(unittest.TestCase):
             ctx = json.loads(chronicler.snapshot())
         self.assertIn('gazette_daily_note', ctx)
         self.assertIn('2026-09-27/01-a/mood', ctx['gazette_daily_note'])
+
+    def test_gazette_review_gate_eventually_blocks_other_actions(self):
+        # P60 (operator: "Nicht nur beobachten wenn du GAPs identifizierst,
+        # sondern proaktiv loesen"): live observation showed the correctly-
+        # delivered, cross-day-persistent review hint (P57/P59) produce zero
+        # reviews over 40+ minutes with no gate behind it - the same
+        # unbounded-advisory gap already closed for collaboration
+        # checkpoints (P51) and meeting reports (P56/P58).
+        chronicler_env = dict(self.env, AGENT_ID='09-chronicler', AGENT_NAME='chronicler', AGENT_ROLE='steward')
+        chronicler = Resident(chronicler_env)
+        edition = chronicler.gazette.open_edition('01-king', ['01-a'])
+        chronicler.gazette.submit_contribution(edition['id'], '01-a', 'mood', 'Feeling good.')
+        for i in range(GAZETTE_REVIEW_CEILING - 1):
+            chronicler.execute({'tool_call': {'name': 'execute_bash', 'arguments': {'command': f'printf ok{i}'}}})
+        self.assertTrue(chronicler.state['last_result']['ok'])  # not yet gated
+        chronicler.execute({'tool_call': {'name': 'execute_bash', 'arguments': {'command': f'printf ok{GAZETTE_REVIEW_CEILING}'}}})
+        self.assertFalse(chronicler.state['last_result']['ok'])
+        result = chronicler.state['last_result']['result']
+        self.assertIn('Editorial review required', result)
+        self.assertIn('"name":"gazette_operation"', result)
+        self.assertIn('"operation":"review"', result)
+        self.assertIn(f'"edition_id":"{edition["id"]}"', result)
+
+    def test_gazette_operation_itself_is_never_gated_by_review_pressure(self):
+        chronicler_env = dict(self.env, AGENT_ID='09-chronicler', AGENT_NAME='chronicler', AGENT_ROLE='steward')
+        chronicler = Resident(chronicler_env)
+        edition = chronicler.gazette.open_edition('01-king', ['01-a'])
+        chronicler.gazette.submit_contribution(edition['id'], '01-a', 'mood', 'Feeling good.')
+        for i in range(GAZETTE_REVIEW_CEILING + 5):
+            chronicler.execute({'tool_call': {'name': 'execute_bash', 'arguments': {'command': f'printf ok{i}'}}})
+        chronicler.execute({'tool_call': {'name': 'gazette_operation', 'arguments': {
+            'operation': 'review', 'edition_id': edition['id'], 'agent': '01-a', 'kind': 'mood', 'decision': 'approve'}}})
+        self.assertTrue(chronicler.state['last_result']['ok'])
+
+    def test_gazette_review_gate_resets_once_nothing_pending(self):
+        chronicler_env = dict(self.env, AGENT_ID='09-chronicler', AGENT_NAME='chronicler', AGENT_ROLE='steward')
+        chronicler = Resident(chronicler_env)
+        edition = chronicler.gazette.open_edition('01-king', ['01-a'])
+        chronicler.gazette.submit_contribution(edition['id'], '01-a', 'mood', 'Feeling good.')
+        chronicler.gazette.review_contribution(edition['id'], '01-a', 'mood', '09-chronicler', 'approve')
+        for i in range(GAZETTE_REVIEW_CEILING + 5):
+            chronicler.execute({'tool_call': {'name': 'execute_bash', 'arguments': {'command': f'printf ok{i}'}}})
+        self.assertTrue(chronicler.state['last_result']['ok'])
 
     def test_organic_message_not_reissued_every_turn(self):
         (self.root/'board/organic-inbox.jsonl').write_text(json.dumps({'timestamp':'2026-09-24T11:00:00Z','message':'A dated request'})+'\n')
