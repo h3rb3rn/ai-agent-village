@@ -47,6 +47,7 @@ from village.meetings import MeetingStore
 from village.gazette import GazetteStore
 from village.gazette import today as gazette_today
 from village.gazette import REVIEWER_AGENT as GAZETTE_REVIEWER
+from village.gazette_pdf import render_edition_pdf
 from village.collaboration import assess as assess_collaboration, is_checkpoint_action
 from village.lifecycle import InferenceState, InferenceTracker, classify_error
 from village.security import redact_text, sanitize_tool_env
@@ -1249,6 +1250,8 @@ class Resident:
                             # on the first real compile (close_edition() is
                             # idempotent), and the file itself is never overwritten.
                             compiled_html = result.pop('compiled_html', None)
+                            issue_number = result.pop('issue_number', None)
+                            previous_id = result.pop('previous_id', None)
                             if compiled_html:
                                 archive_root = self.root / 'gazette'
                                 archive_dir = archive_root / 'archive' / edition_id
@@ -1270,6 +1273,20 @@ class Resident:
                                     archive_path.write_text(compiled_html, encoding='utf-8')
                                     try: archive_path.chmod(0o640)
                                     except OSError: pass
+                                # P66: Gazette PDF export (Stufe 4, Teil 2) -
+                                # same write-once archive guarantee as the
+                                # HTML file. A rendering failure here must
+                                # never lose the already-written, more
+                                # important HTML archive or block the close
+                                # itself - logged and skipped, not raised.
+                                pdf_path = archive_dir / 'gazette.pdf'
+                                if not pdf_path.exists():
+                                    try:
+                                        pdf_bytes = render_edition_pdf(result, issue_number, previous_id)
+                                        pdf_path.write_bytes(pdf_bytes)
+                                        pdf_path.chmod(0o640)
+                                    except Exception as exc:
+                                        self.event('gazette_pdf_failed', f'edition={edition_id}; error={exc}')
                             self.event('gazette_compiled', f'edition={edition_id}')
                             self.feedback(name, json.dumps(result, ensure_ascii=False)[:2000], True)
                 elif op == 'view':

@@ -367,6 +367,20 @@ class GazetteStore:
                 (now(), edition_id),
             )
             c.commit()
+            # P66: issue_number/previous_id are already computed inside
+            # compile_edition() for the HTML header, but not returned - the
+            # PDF writer (village/gazette_pdf.py) needs the same two values
+            # for its own header, so they are recomputed here (cheap, two
+            # indexed SELECTs) rather than changing compile_edition()'s
+            # already-tested string-returning contract.
+            issue_number = c.execute(
+                "SELECT COUNT(*) FROM gazette_editions WHERE id <= ?", (edition_id,)
+            ).fetchone()[0]
+            prev_row = c.execute(
+                "SELECT id FROM gazette_editions WHERE id < ? ORDER BY id DESC LIMIT 1", (edition_id,)
+            ).fetchone()
         result = self.get_edition(edition_id)
         result["compiled_html"] = compiled_html  # type: ignore
+        result["issue_number"] = issue_number  # type: ignore
+        result["previous_id"] = prev_row["id"] if prev_row else None  # type: ignore
         return result  # type: ignore

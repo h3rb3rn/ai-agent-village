@@ -24,6 +24,18 @@ class DashboardContractTests(unittest.TestCase):
         self.assertIn("tabindex", self.js)
         self.assertIn("aria-label", self.js)
 
+    def test_gazette_view_never_polls_for_live_updates(self):
+        # Operator feedback (2026-09-29): a published Gazette edition should
+        # read like a stable newspaper page, not a live dashboard - the
+        # periodic 15s refresh() reloading content while someone is reading
+        # an article was reported as disruptive. refresh() must bail out
+        # immediately for the gazette view, before its own reschedule/fetch
+        # logic runs, and before anything else in the function body.
+        match = re.search(r"async function refresh\(\)\{([^}]*)", self.js)
+        self.assertIsNotNone(match, "refresh() not found")
+        self.assertTrue(match.group(1).startswith("if(view==='gazette')return;"),
+                         "refresh() must bail out for the gazette view as its very first statement")
+
 
 if __name__ == "__main__":
     unittest.main()

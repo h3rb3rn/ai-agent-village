@@ -18,6 +18,7 @@ sys.path.insert(0, os.path.abspath("web"))
 from http.server import ThreadingHTTPServer
 from web import webui
 from village.gazette import GazetteStore
+from village.gazette_pdf import render_edition_pdf
 
 
 class GazetteDashboardTests(unittest.TestCase):
@@ -49,6 +50,8 @@ class GazetteDashboardTests(unittest.TestCase):
         archive_dir = webui.GAZETTE_ARCHIVE / edition["id"]
         archive_dir.mkdir(parents=True, exist_ok=True)
         (archive_dir / "index.html").write_text(compiled["compiled_html"], encoding="utf-8")
+        (archive_dir / "gazette.pdf").write_bytes(
+            render_edition_pdf(compiled, compiled["issue_number"], compiled["previous_id"]))
 
         # A second edition that is still open with an unreviewed contribution -
         # must never appear on the list, regardless of how it is filtered.
@@ -65,12 +68,13 @@ class GazetteDashboardTests(unittest.TestCase):
         webui.ROOT, webui.GAZETTE_ARCHIVE, webui.EVENTS, webui.INBOX, webui.AGENT_TELEMETRY, webui.ASSETS = cls.saved
         cls.tmp.cleanup()
 
-    def request(self, path):
+    def request(self, path, raw=False):
         conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
         conn.request("GET", path)
         response = conn.getresponse()
-        data = response.read().decode("utf-8", "replace")
-        result = (response.status, data)
+        raw_body = response.read()
+        data = raw_body if raw else raw_body.decode("utf-8", "replace")
+        result = (response.status, data, response) if raw else (response.status, data)
         conn.close()
         return result
 
@@ -97,6 +101,19 @@ class GazetteDashboardTests(unittest.TestCase):
         self.assertIn("Feeling good.", body)
         self.assertNotIn("More books please.", body)  # rejected content never appears
 
+    def test_archive_pdf_is_served_for_a_compiled_edition(self):
+        status, body, response = self.request("/gazette/2026-09-20.pdf", raw=True)
+        self.assertEqual(status, 200)
+        self.assertTrue(body.startswith(b"%PDF-1.4"))
+        self.assertIn(b"Feeling good.", body)
+        self.assertNotIn(b"More books please.", body)  # rejected content never appears
+        self.assertEqual(response.getheader("Content-Type"), "application/pdf")
+        self.assertIn("attachment", response.getheader("Content-Disposition", ""))
+
+    def test_archive_pdf_404s_when_no_archive_file_exists(self):
+        status, _ = self.request("/gazette/2026-09-21.pdf")  # open, never compiled/archived
+        self.assertEqual(status, 404)
+
     def test_archive_html_404s_when_no_archive_file_exists(self):
         status, _ = self.request("/gazette/2026-09-21.html")  # open, never compiled/archived
         self.assertEqual(status, 404)
@@ -104,7 +121,8 @@ class GazetteDashboardTests(unittest.TestCase):
         self.assertEqual(status, 404)
 
     def test_archive_route_rejects_non_date_and_traversal_ids(self):
-        for bad in ("/gazette/../../../etc/passwd.html", "/gazette/not-a-date.html", "/gazette/2026-09-20/../secret.html"):
+        for bad in ("/gazette/../../../etc/passwd.html", "/gazette/not-a-date.html", "/gazette/2026-09-20/../secret.html",
+                    "/gazette/../../../etc/passwd.pdf", "/gazette/not-a-date.pdf"):
             status, _ = self.request(bad)
             self.assertEqual(status, 404, bad)
 

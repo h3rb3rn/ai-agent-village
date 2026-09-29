@@ -327,6 +327,13 @@ class RuntimeTests(unittest.TestCase):
             self.assertTrue(stat.S_IMODE(level.stat().st_mode) & 0o050, f'{level} not group-readable/traversable')
         self.assertTrue(stat.S_IMODE(archive_path.stat().st_mode) & 0o040, 'archive file not group-readable')
         self.assertIn('Feeling good.', archive_path.read_text())
+        # P66: PDF export archives alongside the HTML, same write-once and
+        # group-readable guarantees.
+        pdf_path = archive_path.parent / 'gazette.pdf'
+        self.assertTrue(pdf_path.exists())
+        self.assertTrue(pdf_path.read_bytes().startswith(b'%PDF-1.4'))
+        self.assertIn(b'Feeling good.', pdf_path.read_bytes())
+        self.assertTrue(stat.S_IMODE(pdf_path.stat().st_mode) & 0o040, 'PDF not group-readable')
 
     def test_chronicler_sees_pending_review_hint_until_cleared(self):
         # The review gate itself must not become the exact reliability

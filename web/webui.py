@@ -53,11 +53,13 @@ def append(path, value):
         handle.write(json.dumps(value, ensure_ascii=False) + "\n")
         fcntl.flock(handle, fcntl.LOCK_UN)
 
-def send(handler, status, body, content_type="text/html; charset=utf-8"):
-    encoded = body.encode("utf-8")
+def send(handler, status, body, content_type="text/html; charset=utf-8", disposition=None):
+    encoded = body if isinstance(body, (bytes, bytearray)) else body.encode("utf-8")
     handler.send_response(status)
     handler.send_header("Content-Type", content_type)
     handler.send_header("Content-Length", str(len(encoded)))
+    if disposition:
+        handler.send_header("Content-Disposition", disposition)
     handler.send_header("X-Content-Type-Options", "nosniff")
     handler.send_header("X-Frame-Options", "DENY")
     handler.send_header("Referrer-Policy", "no-referrer")
@@ -253,6 +255,18 @@ class Handler(BaseHTTPRequestHandler):
             except OSError:
                 return send(self, HTTPStatus.NOT_FOUND, 'not found', 'text/plain')
             return send(self, HTTPStatus.OK, body)
+        if route.startswith('/gazette/') and route.endswith('.pdf'):
+            edition_id = route.removeprefix('/gazette/').removesuffix('.pdf')
+            if not re.fullmatch(r'[0-9]{4}-[0-9]{2}-[0-9]{2}', edition_id):
+                return send(self, HTTPStatus.NOT_FOUND, 'not found', 'text/plain')
+            target = GAZETTE_ARCHIVE / edition_id / 'gazette.pdf'
+            if not target.is_file():
+                return send(self, HTTPStatus.NOT_FOUND, 'not found', 'text/plain')
+            try:
+                body = target.read_bytes()
+            except OSError:
+                return send(self, HTTPStatus.NOT_FOUND, 'not found', 'text/plain')
+            return send(self, HTTPStatus.OK, body, 'application/pdf', f'attachment; filename="gazette-{edition_id}.pdf"')
         if route == '/contact':
             if not signal_authorized(self): return auth_required(self)
             return send(self, HTTPStatus.OK, page("Signal-Zugang bestätigt", "<p>Die Anmeldung ist aktiv. Kehre zu <a href=\"/signals#contact\">Signale & Kontakt</a> zurück und sende deine Nachricht.</p>"))
