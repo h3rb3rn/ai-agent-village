@@ -6,6 +6,7 @@ from pathlib import Path
 
 from village.calendar import CalendarStore, is_workday, weekday_of
 from village.calendar import today as calendar_today
+from village.calendar import shift_date, time_to_minutes
 
 
 class WeekdayHelperTests(unittest.TestCase):
@@ -17,6 +18,18 @@ class WeekdayHelperTests(unittest.TestCase):
                             ("2026-10-01", True), ("2026-10-02", True),
                             ("2026-10-03", False), ("2026-10-04", False)]:
             self.assertEqual(is_workday(d), expected, d)
+
+    def test_shift_date_forward_and_backward_across_month_boundaries(self):
+        self.assertEqual(shift_date("2026-09-28", 1), "2026-09-29")
+        self.assertEqual(shift_date("2026-09-30", 1), "2026-10-01")
+        self.assertEqual(shift_date("2026-10-01", -1), "2026-09-30")
+        self.assertEqual(shift_date("2026-09-28", 0), "2026-09-28")
+
+    def test_time_to_minutes(self):
+        self.assertEqual(time_to_minutes("09:00"), 540)
+        self.assertEqual(time_to_minutes("00:00"), 0)
+        self.assertEqual(time_to_minutes("23:59"), 1439)
+        self.assertEqual(time_to_minutes(""), 0)  # malformed input never raises
 
 
 class CreateEventTests(unittest.TestCase):
@@ -285,6 +298,60 @@ class QueryHelperTests(unittest.TestCase):
 
     def test_list_in_range_empty_when_nothing_scheduled(self):
         self.assertEqual(self.store.list_in_range("2020-01-01", "2020-01-01"), [])
+
+    def test_has_ever_scheduled_true_once_organized_or_attended(self):
+        self.assertFalse(self.store.has_ever_scheduled("01-king", "reflection"))
+        self.store.create_event("01-king", "Weekly review", "reflection", "2026-09-28", "16:00", 30)
+        self.assertTrue(self.store.has_ever_scheduled("01-king", "reflection"))
+        self.assertFalse(self.store.has_ever_scheduled("02-explorer", "reflection"))
+        self.store.create_event("03-librarian", "Sync", "meeting", "2026-09-28", "09:00", 30,
+                                attendees=["02-explorer"])
+        self.assertTrue(self.store.has_ever_scheduled("02-explorer", "meeting"))  # as attendee
+
+
+class DayGapsTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="village-calendar-"))
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.store = CalendarStore(self.tmp / "coordination.sqlite3")
+
+    def test_empty_day_is_one_full_window_gap(self):
+        gaps = self.store.day_gaps("01-king", "2026-09-28")
+        self.assertEqual(gaps, [(9 * 60, 17 * 60)])
+
+    def test_fully_covered_day_has_no_gaps(self):
+        self.store.create_event("01-king", "Morning", "focus", "2026-09-28", "09:00", 240)  # 09:00-13:00
+        self.store.create_event("01-king", "Afternoon", "focus", "2026-09-28", "13:00", 240)  # 13:00-17:00
+        self.assertEqual(self.store.day_gaps("01-king", "2026-09-28"), [])
+
+    def test_gap_between_two_events_is_reported(self):
+        self.store.create_event("01-king", "Morning", "focus", "2026-09-28", "09:00", 60)  # 09:00-10:00
+        self.store.create_event("01-king", "Afternoon", "focus", "2026-09-28", "15:00", 60)  # 15:00-16:00
+        gaps = self.store.day_gaps("01-king", "2026-09-28")
+        # 10:00-15:00 (300min, exceeds the 60min tolerance) is reported;
+        # 16:00-17:00 (exactly 60min) sits AT the tolerance, not over it.
+        self.assertEqual(gaps, [(600, 900)])
+
+    def test_short_gap_within_tolerance_is_not_reported(self):
+        self.store.create_event("01-king", "Morning", "focus", "2026-09-28", "09:00", 240)  # 09:00-13:00
+        # 20-minute gap, then resumes - well under the 60-minute tolerance.
+        self.store.create_event("01-king", "Afternoon", "focus", "2026-09-28", "13:20", 220)  # 13:20-17:00
+        self.assertEqual(self.store.day_gaps("01-king", "2026-09-28"), [])
+
+    def test_cancelled_events_do_not_count_as_coverage(self):
+        event = self.store.create_event("01-king", "Morning", "focus", "2026-09-28", "09:00", 480)
+        self.store.cancel_event(event["id"], "01-king")
+        self.assertEqual(self.store.day_gaps("01-king", "2026-09-28"), [(9 * 60, 17 * 60)])
+
+    def test_overlapping_events_are_merged_not_double_counted(self):
+        self.store.create_event("01-king", "A", "focus", "2026-09-28", "09:00", 300)  # 09:00-14:00
+        self.store.create_event("01-king", "B", "meeting", "2026-09-28", "12:00", 300)  # 12:00-17:00
+        self.assertEqual(self.store.day_gaps("01-king", "2026-09-28"), [])
+
+    def test_attendee_coverage_counts_same_as_organizer(self):
+        self.store.create_event("02-explorer", "Their meeting", "meeting", "2026-09-28", "09:00", 480,
+                                attendees=["01-king"])
+        self.assertEqual(self.store.day_gaps("01-king", "2026-09-28"), [])
 
 
 if __name__ == "__main__":

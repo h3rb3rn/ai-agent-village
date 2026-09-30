@@ -55,6 +55,8 @@ from village.gazette import today as gazette_today
 from village.gazette import REVIEWER_AGENT as GAZETTE_REVIEWER
 from village.calendar import today as calendar_today
 from village.calendar import is_workday as calendar_is_workday
+from village.calendar import shift_date as calendar_shift_date
+from village.calendar import WEEK_HORIZON_DAYS as CALENDAR_WEEK_HORIZON_DAYS
 from village.gazette_pdf import render_edition_pdf
 from village.collaboration import assess as assess_collaboration, is_checkpoint_action
 from village.lifecycle import InferenceState, InferenceTracker, classify_error
@@ -141,6 +143,17 @@ GAZETTE_GAME_WINNER_CEILING = 10
 # Only Mon-Fri (see calendar_is_workday) - weekends are the agent's own
 # free choice per the same directive, never an obligation.
 CALENDAR_PLAN_CEILING = 10
+
+# P81 (operator directive, 2026-09-30): "Zielvorgabe fuer die Agents ist,
+# das immer eine Woche vorgeplant ist und jeder Tag mit Terminen befuellt
+# ist ohne Luecken." A stricter, separate obligation layered on top of
+# CALENDAR_PLAN_CEILING (which only ever required *touching* the calendar
+# once a day, not full coverage) - same proven ceiling, its own counter,
+# so it neither weakens nor is starved by the base gate (P60-follow-up
+# arbitration pattern: every gate's pressure always advances, only the
+# actual block is arbitrated). Workday-only, same distinction as P75 -
+# weekends stay the agent's free choice, never checked for gaps.
+CALENDAR_WEEK_PLAN_CEILING = 10
 
 # P72 (operator directive, 2026-09-29): "Es kann nicht sein das die Agents
 # ununterbrochen in Loops festhaengen ... Mechanismen die den Agents im
@@ -562,6 +575,39 @@ class Resident:
             return False
         return not self.calendar.has_touched_today(self.id, today_str)
 
+    def calendar_pending_week_gaps(self, today_str=None):
+        """(date, gaps) for the FIRST upcoming workday (today..+6, see
+        CALENDAR_WEEK_HORIZON_DAYS) that still has an uncovered stretch in
+        the 09:00-17:00 work window - P81 (operator: "immer eine Woche
+        vorgeplant [...] jeder Tag [...] ohne Luecken"). Weekends are
+        skipped entirely, same distinction as calendar_pending_daily_plan()."""
+        today_str = today_str or calendar_today()
+        for offset in range(CALENDAR_WEEK_HORIZON_DAYS):
+            day = calendar_shift_date(today_str, offset)
+            if not calendar_is_workday(day):
+                continue
+            gaps = self.calendar.day_gaps(self.id, day)
+            if gaps:
+                return day, gaps
+        return None
+
+    def calendar_week_gap_hint(self, today_str):
+        """Concrete, named gap (not just 'plan more') for snapshot(): the
+        exact day and time range still uncovered, so the resident acts on
+        real information instead of guessing what 'no gaps' even means."""
+        pending = self.calendar_pending_week_gaps(today_str)
+        if not pending:
+            return ''
+        day, gaps = pending
+        gap_start, gap_end = gaps[0]
+        return (
+            f"Your week is not fully planned: {day} has an open stretch from "
+            f"{gap_start // 60:02d}:{gap_start % 60:02d} to {gap_end // 60:02d}:{gap_end % 60:02d} "
+            "(09:00-17:00 work window). Fill it with calendar_operation create - any kind fits "
+            "(focus/meeting/personal/reflection/standup/jourfixe); recurring entries cover future "
+            "days automatically once set up."
+        )
+
     def calendar_daily_note(self):
         """Advisory text for snapshot(): the mandatory daily-plan reminder
         (workdays only) plus any concrete, named pending invites and
@@ -594,6 +640,9 @@ class Resident:
         sync_hint = self.calendar_meeting_sync_hint(today_str)
         if sync_hint:
             parts.append(sync_hint)
+        gap_hint = self.calendar_week_gap_hint(today_str)
+        if gap_hint:
+            parts.append(gap_hint)
         return " ".join(parts)
 
     def calendar_meeting_sync_hint(self, today_str):
@@ -1433,6 +1482,31 @@ class Resident:
                                            f"standup/jourfixe with recurrence set: {example}",
                                            f"pressure={pressure}")
 
+        # P81 (operator directive): "immer eine Woche vorgeplant [...]
+        # jeder Tag [...] ohne Luecken." Stricter and separate from
+        # calendar_plan_block above (which only ever required a daily
+        # touch) - its own pressure counter, same proven ceiling pattern.
+        calendar_week_plan_block = None
+        if name not in ('meeting_operation', 'gazette_operation', 'calendar_operation', 'idle'):
+            pending_week = self.calendar_pending_week_gaps()
+            if not pending_week:
+                self.state['calendar_week_plan_pressure'] = 0
+            else:
+                day, gaps = pending_week
+                pressure = int(self.state.get('calendar_week_plan_pressure', 0)) + 1
+                self.state['calendar_week_plan_pressure'] = pressure
+                self.event('calendar_week_plan_required', f"day={day}; gaps={len(gaps)}; pressure={pressure}")
+                if pressure >= CALENDAR_WEEK_PLAN_CEILING:
+                    gap_start, gap_end = gaps[0]
+                    example = ('{"name":"calendar_operation","arguments":{"operation":"create","title":"...",'
+                               f'"kind":"focus","scheduled_date":"{day}",'
+                               f'"start_time":"{gap_start // 60:02d}:{gap_start % 60:02d}",'
+                               f'"duration_minutes":{min(120, gap_end - gap_start)}}}}}')
+                    calendar_week_plan_block = (f"Full week coverage required before more solo work: {day} "
+                                                f"still has an open stretch. Submit exactly this envelope "
+                                                f"(adjust title/kind/duration): {example}",
+                                                f"day={day}; gaps={len(gaps)}; pressure={pressure}")
+
         if meeting_block:
             self.feedback(name, meeting_block[0], False)
             self.event('meeting_gate', meeting_block[1])
@@ -1456,6 +1530,10 @@ class Resident:
         if calendar_plan_block:
             self.feedback(name, calendar_plan_block[0], False)
             self.event('calendar_plan_gate', calendar_plan_block[1])
+            return False
+        if calendar_week_plan_block:
+            self.feedback(name, calendar_week_plan_block[0], False)
+            self.event('calendar_week_plan_gate', calendar_week_plan_block[1])
             return False
         if game_winner_block:
             self.feedback(name, game_winner_block[0], False)

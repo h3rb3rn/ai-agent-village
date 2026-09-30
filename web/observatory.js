@@ -96,8 +96,8 @@ async function loadGazette(){try{const r=await fetch('/api/gazette',{cache:'no-s
 // that scale), color-coded per agent so overlap is still visible within
 // a day; an agent toggle row (default: all) scopes every view.
 const CALENDAR_WINDOW_START=6*60, CALENDAR_WINDOW_END=22*60;
-const CALENDAR_KIND_LABELS={standup:'StandUp',jourfixe:'JourFixe',meeting:'Meeting',focus:'Fokusarbeit',personal:'Persönlich',weekend_project:'Wochenende · Projekt',weekend_social:'Wochenende · Gemeinsam',weekend_idle:'Wochenende · Pause',weekend_dream:'Wochenende · Träumen',other:'Sonstiges'};
-const CALENDAR_KIND_COLORS={standup:'#55dccb',jourfixe:'#b6a0ff',meeting:'#f3bb69',focus:'#7fb3ff',personal:'#9bacc0',weekend_project:'#8fd694',weekend_social:'#f2a6c9',weekend_idle:'#6b7d8f',weekend_dream:'#c9a4ff',other:'#9bacc0'};
+const CALENDAR_KIND_LABELS={standup:'StandUp',jourfixe:'JourFixe',meeting:'Meeting',focus:'Fokusarbeit',personal:'Persönlich',reflection:'Selbstreflektion',weekend_project:'Wochenende · Projekt',weekend_social:'Wochenende · Gemeinsam',weekend_idle:'Wochenende · Pause',weekend_dream:'Wochenende · Träumen',other:'Sonstiges'};
+const CALENDAR_KIND_COLORS={standup:'#55dccb',jourfixe:'#b6a0ff',meeting:'#f3bb69',focus:'#7fb3ff',personal:'#9bacc0',reflection:'#e0c341',weekend_project:'#8fd694',weekend_social:'#f2a6c9',weekend_idle:'#6b7d8f',weekend_dream:'#c9a4ff',other:'#9bacc0'};
 const CALENDAR_RESPONSE_LABELS={pending:'Ausstehend',accepted:'Zugesagt',declined:'Abgesagt',proposed_alternative:'Alternative vorgeschlagen'};
 const CALENDAR_STATUS_LABELS={planned:'Geplant',confirmed:'Bestätigt',rescheduled:'Verschoben',cancelled:'Abgesagt'};
 const CALENDAR_AGENT_PALETTE=['#55dccb','#b6a0ff','#f3bb69','#ff9494','#7fb3ff','#8fd694','#f2a6c9','#e0c341','#9bacc0'];

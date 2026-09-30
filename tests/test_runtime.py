@@ -8,8 +8,10 @@ import tempfile
 import unittest
 from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'web'))
-from runtime import Resident,Tasks,resource_snapshot,tail,event_time,COLLABORATION_PRESSURE_CEILING,MEETING_REPORT_CEILING,GAZETTE_REVIEW_CEILING,GAZETTE_CLOSE_CEILING,GAZETTE_CLOSE_MIN_HOURS,GAZETTE_CONTRIBUTE_CEILING,GAZETTE_GAME_RESULT_CEILING,GAZETTE_GAME_WINNER_CEILING,CALENDAR_PLAN_CEILING
+from runtime import Resident,Tasks,resource_snapshot,tail,event_time,COLLABORATION_PRESSURE_CEILING,MEETING_REPORT_CEILING,GAZETTE_REVIEW_CEILING,GAZETTE_CLOSE_CEILING,GAZETTE_CLOSE_MIN_HOURS,GAZETTE_CONTRIBUTE_CEILING,GAZETTE_GAME_RESULT_CEILING,GAZETTE_GAME_WINNER_CEILING,CALENDAR_PLAN_CEILING,CALENDAR_WEEK_PLAN_CEILING
 from village.gazette import REVIEWER_AGENT
+from village.calendar import today as calendar_today
+from village.calendar import is_workday as real_calendar_is_workday
 from decision import decision
 from village.collaboration import CooperationCheckpoint
 
@@ -979,6 +981,72 @@ class RuntimeTests(unittest.TestCase):
         self.agent.calendar.create_event('01-a', 'Standup', 'standup', '2026-09-30', '08:04', 15,
                                          recurrence='daily_weekday')
         self.assertEqual(self.agent.calendar_meeting_sync_hint('2026-09-30'), '')
+
+    def test_calendar_pending_week_gaps_finds_the_first_open_workday(self):
+        # P81 (operator: "immer eine Woche vorgeplant [...] jeder Tag [...]
+        # ohne Luecken"). setUp() pins calendar_is_workday to False by
+        # default (see class setUp) - patch it back on for this check.
+        with patch('runtime.calendar_is_workday', return_value=True):
+            pending = self.agent.calendar_pending_week_gaps('2026-09-28')
+        self.assertIsNotNone(pending)
+        day, gaps = pending
+        self.assertEqual(day, '2026-09-28')
+        self.assertEqual(gaps, [(9 * 60, 17 * 60)])
+
+    def test_calendar_pending_week_gaps_none_once_fully_covered(self):
+        # A recurring series, not a single day - the 7-day horizon checks
+        # every upcoming workday, not just the first. Real is_workday as
+        # the patch target (not a blanket True) so the check agrees with
+        # the recurrence materialization's own real-weekday logic - a
+        # blanket True would wrongly expect coverage on real weekends too,
+        # which daily_weekday correctly never creates.
+        self.agent.calendar.create_event('01-a', 'All week', 'focus', '2026-09-28', '09:00', 480,
+                                         recurrence='daily_weekday')
+        with patch('runtime.calendar_is_workday', side_effect=real_calendar_is_workday):
+            self.assertIsNone(self.agent.calendar_pending_week_gaps('2026-09-28'))
+
+    def test_calendar_week_gap_hint_names_the_concrete_gap(self):
+        with patch('runtime.calendar_is_workday', return_value=True):
+            hint = self.agent.calendar_week_gap_hint('2026-09-28')
+        self.assertIn('2026-09-28', hint)
+        self.assertIn('09:00', hint)
+        self.assertIn('17:00', hint)
+
+    def test_calendar_week_plan_gate_eventually_blocks_other_actions(self):
+        # Satisfy the separate, lower-bar P75 daily-touch gate first (any
+        # touch, any date) so only the stricter P81 week-coverage gate is
+        # under test here - both share the same ceiling and would
+        # otherwise both fire on the same call, and P75's is checked first.
+        self.agent.calendar.create_event('01-a', 'satisfies daily touch', 'other', '2099-01-01', '09:00', 15)
+        with patch('runtime.calendar_is_workday', return_value=True):
+            for i in range(CALENDAR_WEEK_PLAN_CEILING - 1):
+                self.agent.execute({'tool_call': {'name': 'execute_bash', 'arguments': {'command': f'printf ok{i}'}}})
+            self.assertTrue(self.agent.state['last_result']['ok'])  # not yet gated
+            self.agent.execute({'tool_call': {'name': 'execute_bash', 'arguments': {'command': f'printf ok{CALENDAR_WEEK_PLAN_CEILING}'}}})
+        self.assertFalse(self.agent.state['last_result']['ok'])
+        result = self.agent.state['last_result']['result']
+        self.assertIn('Full week coverage required', result)
+        self.assertIn('"operation":"create"', result)
+
+    def test_calendar_week_plan_gate_resets_once_the_week_is_covered(self):
+        self.agent.calendar.create_event('01-a', 'All week', 'focus', calendar_today(), '09:00', 480,
+                                         recurrence='daily_weekday')
+        # Real is_workday (see test above) - daily_weekday only ever
+        # covers real weekdays, so the check must agree on which days
+        # those are rather than treating every offset as a workday.
+        with patch('runtime.calendar_is_workday', side_effect=real_calendar_is_workday):
+            for i in range(CALENDAR_WEEK_PLAN_CEILING + 5):
+                self.agent.execute({'tool_call': {'name': 'execute_bash', 'arguments': {'command': f'printf ok{i}'}}})
+        self.assertEqual(self.agent.state.get('calendar_week_plan_pressure', 0), 0)
+
+    def test_calendar_operation_itself_is_never_gated_by_week_plan_pressure(self):
+        with patch('runtime.calendar_is_workday', return_value=True):
+            for i in range(CALENDAR_WEEK_PLAN_CEILING + 5):
+                self.agent.execute({'tool_call': {'name': 'execute_bash', 'arguments': {'command': f'printf ok{i}'}}})
+            self.agent.execute({'tool_call': {'name': 'calendar_operation', 'arguments': {
+                'operation': 'create', 'title': 'Focus block', 'kind': 'focus',
+                'scheduled_date': calendar_today(), 'start_time': '09:00', 'duration_minutes': 60}}})
+        self.assertTrue(self.agent.state['last_result']['ok'])
 
     def test_sparring_partner_hint_appears_with_a_task_blocker(self):
         item = self.agent.tasks.operate('01-a', dict(action='create', title='X', success_criterion='y'))

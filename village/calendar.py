@@ -43,13 +43,41 @@ def is_workday(date_str: str) -> bool:
     return weekday_of(date_str) < 5
 
 
+def shift_date(date_str: str, days: int) -> str:
+    return (datetime.strptime(date_str, "%Y-%m-%d") + timedelta(days=days)).strftime("%Y-%m-%d")
+
+
+def time_to_minutes(t: str) -> int:
+    hh, _, mm = str(t or "0:0").partition(":")
+    try:
+        return int(hh) * 60 + int(mm or 0)
+    except ValueError:
+        return 0
+
+
+# P81 (operator directive, 2026-09-30): "Zielvorgabe fuer die Agents ist,
+# das immer eine Woche vorgeplant ist und jeder Tag mit Terminen befuellt
+# ist ohne Luecken." A conventional workday window and a tolerance below
+# which a short breathing gap does not count as a real scheduling hole -
+# nobody needs back-to-back minute-perfect blocks.
+WORK_WINDOW_START_MINUTES = 9 * 60
+WORK_WINDOW_END_MINUTES = 17 * 60
+MAX_GAP_MINUTES = 60
+WEEK_HORIZON_DAYS = 7
+
+
 # Recognized event kinds - deliberately including the two named-by-the-
 # operator recurring structures (standup/jourfixe) as first-class values
 # so "eine Struktur wie taegliche StandUps, Jourfixes" is actually visible
 # in the data, not just free text. The weekend_* kinds mirror the
-# operator's explicit menu of Saturday/Sunday choices.
+# operator's explicit menu of Saturday/Sunday choices. 'reflection' (P80,
+# operator: "einen Termin [...] zur Selbstreflektion und persoenlichen
+# Weiterentwicklung") is its own first-class kind rather than folded into
+# 'personal' - same reasoning as 'meetings' in P73: a named category
+# actually shows up as real, queryable data instead of only ever being a
+# free-text convention nobody follows.
 EVENT_KINDS = (
-    "standup", "jourfixe", "meeting", "focus", "personal",
+    "standup", "jourfixe", "meeting", "focus", "personal", "reflection",
     "weekend_project", "weekend_social", "weekend_idle", "weekend_dream", "other",
 )
 STATUSES = ("planned", "confirmed", "rescheduled", "cancelled")
@@ -355,3 +383,51 @@ class CalendarStore:
                 (agent, date_str or today()),
             ).fetchone()
             return row is not None
+
+    def has_ever_scheduled(self, agent: str, kind: str) -> bool:
+        """Whether this agent has ever organized or attended an event of
+        this kind, any date - the one-time nudge signal (P80) for a
+        recurring commitment like 'reflection' that only needs setting up
+        once, unlike the daily calendar-touch obligation (P75): a
+        recurring series, once created, repeats itself."""
+        with self._conn() as c:
+            row = c.execute(
+                "SELECT 1 FROM calendar_events e LEFT JOIN calendar_attendees a ON a.event_id=e.id "
+                "WHERE e.kind=? AND (e.organizer=? OR a.agent_id=?) LIMIT 1",
+                (kind, agent, agent),
+            ).fetchone()
+            return row is not None
+
+    def day_gaps(self, agent: str, date_str: str, window_start: int = WORK_WINDOW_START_MINUTES,
+                window_end: int = WORK_WINDOW_END_MINUTES, max_gap: int = MAX_GAP_MINUTES) -> List[tuple]:
+        """Uncovered stretches longer than max_gap minutes within
+        [window_start, window_end) on this date, for this agent as
+        organizer or attendee - the concrete signal for P81 ("jeder Tag
+        mit Terminen befuellt ist ohne Luecken"). Cancelled events never
+        count as coverage; overlapping/adjacent events are merged first so
+        two back-to-back meetings never register as a false gap between
+        them. Returns [(gap_start_minutes, gap_end_minutes), ...]."""
+        events = [e for e in self.list_for_agent(agent, date_str, date_str) if e["status"] != "cancelled"]
+        intervals = []
+        for e in events:
+            start = time_to_minutes(e["start_time"])
+            end = start + max(0, int(e["duration_minutes"] or 0))
+            clipped_start, clipped_end = max(window_start, start), min(window_end, end)
+            if clipped_end > clipped_start:
+                intervals.append((clipped_start, clipped_end))
+        intervals.sort()
+        merged: List[tuple] = []
+        for start, end in intervals:
+            if merged and start <= merged[-1][1]:
+                merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+            else:
+                merged.append((start, end))
+        gaps = []
+        cursor = window_start
+        for start, end in merged:
+            if start - cursor > max_gap:
+                gaps.append((cursor, start))
+            cursor = max(cursor, end)
+        if window_end - cursor > max_gap:
+            gaps.append((cursor, window_end))
+        return gaps
