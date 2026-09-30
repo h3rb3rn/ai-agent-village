@@ -200,14 +200,17 @@ def signal_index(limit=500):
         pass
     return rows
 
-def calendar_index(day):
+def calendar_index(date_from, date_to):
     # P77 (operator directive): "im Dashboard unter Agents die Kalender
     # der Agents hinzu und lasse die Kalender der Agents übereinander
-    # legen" - one real day's events across every agent, read-only, same
-    # defensive-empty-on-error pattern as gazette_index().
+    # legen" - every event across every agent for a date range, read-only,
+    # same defensive-empty-on-error pattern as gazette_index(). P78
+    # (operator: "auch noch Tag/Woche/Monats Ansicht") widened this from a
+    # single day to a range so the frontend's day/week/month views can all
+    # share one route.
     try:
         store = CalendarStore(ROOT / "board" / "coordination.sqlite3")
-        return store.list_in_range(day, day)
+        return store.list_in_range(date_from, date_to)
     except OSError:
         return []
 
@@ -256,11 +259,23 @@ class Handler(BaseHTTPRequestHandler):
         if route == '/api/gazette':
             return send(self, HTTPStatus.OK, json.dumps(gazette_index(), ensure_ascii=False), 'application/json; charset=utf-8')
         if route == '/api/calendar':
+            # P78 (operator: "auch noch Tag/Woche/Monats Ansicht"): a range
+            # instead of a single day, so day/week/month all share this one
+            # route. date_from/date_to fall back to today when missing or
+            # malformed; a bare ?date= (P77) still works as date_from=date_to.
             params = parse_qs(urlsplit(self.path).query)
-            day = params.get('date', [''])[0]
-            if not re.fullmatch(r'[0-9]{4}-[0-9]{2}-[0-9]{2}', day):
-                day = datetime.now(timezone.utc).strftime('%Y-%m-%d')
-            return send(self, HTTPStatus.OK, json.dumps(calendar_index(day), ensure_ascii=False), 'application/json; charset=utf-8')
+            today_str = datetime.now(timezone.utc).strftime('%Y-%m-%d')
+            date_from = params.get('date_from', [''])[0] or params.get('date', [''])[0]
+            date_to = params.get('date_to', [''])[0] or date_from
+            if not re.fullmatch(r'[0-9]{4}-[0-9]{2}-[0-9]{2}', date_from):
+                date_from = today_str
+            if not re.fullmatch(r'[0-9]{4}-[0-9]{2}-[0-9]{2}', date_to) or date_to < date_from:
+                date_to = date_from
+            # Defensive cap: a month view is ~42 days at most (6 leading/
+            # trailing weeks); nothing legitimate ever needs more.
+            if (datetime.strptime(date_to, '%Y-%m-%d') - datetime.strptime(date_from, '%Y-%m-%d')).days > 60:
+                date_to = date_from
+            return send(self, HTTPStatus.OK, json.dumps(calendar_index(date_from, date_to), ensure_ascii=False), 'application/json; charset=utf-8')
         if route.startswith('/gazette/') and route.endswith('.html'):
             edition_id = route.removeprefix('/gazette/').removesuffix('.html')
             if not re.fullmatch(r'[0-9]{4}-[0-9]{2}-[0-9]{2}', edition_id):

@@ -47,7 +47,9 @@ class CalendarDashboardTests(unittest.TestCase):
                                         attendees=["02-explorer"])
         cls.personal = store.create_event("03-librarian", "Fokusarbeit", "focus", cls.today, "10:00", 60)
         # A different day - must never appear in a query for cls.today.
-        store.create_event("01-king", "Nächste Woche", "meeting", "2099-01-01", "09:00", 30)
+        cls.far_future = store.create_event("01-king", "Nächste Woche", "meeting", "2099-01-01", "09:00", 30)
+        # Fixed, "today"-independent dates for the range tests below.
+        cls.mid_week = store.create_event("02-explorer", "Sprint-Planung", "meeting", "2026-09-29", "14:00", 45)
 
         cls.server = ThreadingHTTPServer(("127.0.0.1", 0), webui.Handler)
         cls.port = cls.server.server_address[1]
@@ -101,6 +103,29 @@ class CalendarDashboardTests(unittest.TestCase):
         status, body = self.request("/api/calendar?date=2020-01-01")
         self.assertEqual(status, 200)
         self.assertEqual(json.loads(body), [])
+
+    def test_api_calendar_accepts_a_date_from_date_to_range(self):
+        # P78 (operator: "auch noch Tag/Woche/Monats Ansicht"): the range
+        # variant week/month views use.
+        status, body = self.request("/api/calendar?date_from=2026-09-28&date_to=2026-10-04")
+        self.assertEqual(status, 200)
+        ids = [e["id"] for e in json.loads(body)]
+        self.assertIn(self.mid_week["id"], ids)
+        self.assertNotIn(self.far_future["id"], ids)
+
+    def test_api_calendar_date_to_before_date_from_falls_back_to_date_from_only(self):
+        status, body = self.request("/api/calendar?date_from=2026-09-29&date_to=2020-01-01")
+        self.assertEqual(status, 200)
+        ids = [e["id"] for e in json.loads(body)]
+        self.assertEqual(ids, [self.mid_week["id"]])
+
+    def test_api_calendar_caps_an_excessively_wide_range(self):
+        # A > 60 day span collapses to date_from alone rather than
+        # returning an unbounded cross-year query.
+        status, body = self.request("/api/calendar?date_from=2000-01-01&date_to=2099-01-01")
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body), [])  # nothing scheduled on 2000-01-01 itself
+        self.assertNotIn(self.far_future["id"], [e["id"] for e in json.loads(body)])
 
 
 if __name__ == "__main__":

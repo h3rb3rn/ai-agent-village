@@ -8,7 +8,7 @@ const stamp = value => typeof value==='number' ? value : Date.parse(value) || 0;
 const time = value => stamp(value) ? new Date(value).toLocaleTimeString('de-DE') : '—';
 const age = value => {const s=Math.max(0,Math.round((Date.now()-stamp(value))/1000)); return !stamp(value)?'unbekannt':s<60?`${s} s`:`${Math.floor(s/60)} min`;};
 let data=null, paused=false, timer, selected=null, mapSelection=null, eventPage=0, signalPage=0, signals=[], boardCategory='all', boardThread=null, gazetteEditions=[], gazetteSelected=null, gazetteBodies={};
-let calendarDate=new Date().toISOString().slice(0,10), calendarEvents=[];
+let calendarDate=new Date().toISOString().slice(0,10), calendarEvents=[], calendarView='day', calendarSelectedAgents=null;
 const view=location.pathname.split('/')[1] || 'dashboard';
 // Do not carry the previous long-page scroll position into another top-level view.
 if('scrollRestoration' in history) history.scrollRestoration='manual';
@@ -87,29 +87,80 @@ function renderGazette(){
 async function loadGazette(){try{const r=await fetch('/api/gazette',{cache:'no-store',signal:AbortSignal.timeout(8000)});if(r.ok){gazetteEditions=await r.json();renderGazette();}}catch(e){if($('gazette-info'))$('gazette-info').textContent='Ausgaben konnten nicht geladen werden.';}}
 // P77 (operator directive): "im Dashboard unter Agents die Kalender der
 // Agents [...] und lasse die Kalender der Agents uebereinander legen um
-// gemeinsame Termine besser zu visualisieren." One day, one column per
+// gemeinsame Termine besser zu visualisieren." Day view: one column per
 // agent, a shared time axis - a shared standup/jourfixe lands at the same
 // height in every attending agent's column, making the overlap visible.
+// P78 (operator: "auch noch Tag/Woche/Monats Ansicht und selber
+// entscheiden [...] von welchen Agents"): week/month views add day
+// columns/cells instead (9 agent columns per day would be unreadable at
+// that scale), color-coded per agent so overlap is still visible within
+// a day; an agent toggle row (default: all) scopes every view.
 const CALENDAR_WINDOW_START=6*60, CALENDAR_WINDOW_END=22*60;
 const CALENDAR_KIND_LABELS={standup:'StandUp',jourfixe:'JourFixe',meeting:'Meeting',focus:'Fokusarbeit',personal:'Persönlich',weekend_project:'Wochenende · Projekt',weekend_social:'Wochenende · Gemeinsam',weekend_idle:'Wochenende · Pause',weekend_dream:'Wochenende · Träumen',other:'Sonstiges'};
 const CALENDAR_KIND_COLORS={standup:'#55dccb',jourfixe:'#b6a0ff',meeting:'#f3bb69',focus:'#7fb3ff',personal:'#9bacc0',weekend_project:'#8fd694',weekend_social:'#f2a6c9',weekend_idle:'#6b7d8f',weekend_dream:'#c9a4ff',other:'#9bacc0'};
 const CALENDAR_RESPONSE_LABELS={pending:'Ausstehend',accepted:'Zugesagt',declined:'Abgesagt',proposed_alternative:'Alternative vorgeschlagen'};
 const CALENDAR_STATUS_LABELS={planned:'Geplant',confirmed:'Bestätigt',rescheduled:'Verschoben',cancelled:'Abgesagt'};
+const CALENDAR_AGENT_PALETTE=['#55dccb','#b6a0ff','#f3bb69','#ff9494','#7fb3ff','#8fd694','#f2a6c9','#e0c341','#9bacc0'];
+const CALENDAR_WEEKDAYS=['Mo','Di','Mi','Do','Fr','Sa','So'];
 function calendarMinutes(t){const p=String(t||'0:0').split(':');return (Number(p[0])||0)*60+(Number(p[1])||0);}
 function calendarAgents(){return data?.current?.agents||[];}
 function calendarAgentName(id){return calendarAgents().find(a=>a.id===id)?.name||id;}
-function calendarShiftDate(d,delta){const dt=new Date(d+'T00:00:00');dt.setDate(dt.getDate()+delta);return dt.toISOString().slice(0,10);}
-async function loadCalendar(){try{const r=await fetch(`/api/calendar?date=${encodeURIComponent(calendarDate)}`,{cache:'no-store',signal:AbortSignal.timeout(8000)});if(r.ok){calendarEvents=await r.json();renderCalendar();}}catch(e){if($('calendar-info'))$('calendar-info').textContent='Kalenderdaten konnten nicht geladen werden.';}}
+function calendarAgentColor(id){const i=calendarAgents().findIndex(a=>a.id===id);return CALENDAR_AGENT_PALETTE[i>=0?i%CALENDAR_AGENT_PALETTE.length:CALENDAR_AGENT_PALETTE.length-1];}
+function calendarIsSelected(id){return calendarSelectedAgents===null||calendarSelectedAgents.has(id);}
+function calendarSelectedAgentList(){return calendarAgents().filter(a=>calendarIsSelected(a.id));}
+// UTC throughout: scheduled_date is a server/UTC calendar date (see
+// village/calendar.py's today()) - local-time Date arithmetic could roll
+// week/month boundaries onto the wrong day depending on the viewer's
+// timezone offset from UTC.
+function calendarParseUTC(s){const p=String(s||'').split('-').map(Number);return new Date(Date.UTC(p[0]||1970,(p[1]||1)-1,p[2]||1));}
+function calendarFmtUTC(d){return `${d.getUTCFullYear()}-${String(d.getUTCMonth()+1).padStart(2,'0')}-${String(d.getUTCDate()).padStart(2,'0')}`;}
+function calendarShiftDate(s,deltaDays){const d=calendarParseUTC(s);d.setUTCDate(d.getUTCDate()+deltaDays);return calendarFmtUTC(d);}
+function calendarShiftMonth(s,deltaMonths){const d=calendarParseUTC(s);d.setUTCMonth(d.getUTCMonth()+deltaMonths);return calendarFmtUTC(d);}
+function calendarWeekBounds(s){const d=calendarParseUTC(s),dow=(d.getUTCDay()+6)%7;const mon=new Date(d);mon.setUTCDate(d.getUTCDate()-dow);const sun=new Date(mon);sun.setUTCDate(mon.getUTCDate()+6);return [calendarFmtUTC(mon),calendarFmtUTC(sun)];}
+function calendarMonthBounds(s){const d=calendarParseUTC(s);const first=new Date(Date.UTC(d.getUTCFullYear(),d.getUTCMonth(),1));const last=new Date(Date.UTC(d.getUTCFullYear(),d.getUTCMonth()+1,0));return [calendarFmtUTC(first),calendarFmtUTC(last)];}
+function calendarRange(){if(calendarView==='week')return calendarWeekBounds(calendarDate);if(calendarView==='month')return calendarMonthBounds(calendarDate);return [calendarDate,calendarDate];}
+function calendarEventsOn(day,agentIds){return calendarEvents.filter(e=>e.scheduled_date===day&&(agentIds.includes(e.organizer)||(e.attendees||[]).some(a=>agentIds.includes(a.agent_id))));}
+// Greedy interval-overlap lane assignment (week view): events at the same
+// moment land in side-by-side lanes at the same vertical position instead
+// of hiding behind each other - the actual "overlay" signal for a day
+// that holds several agents' events.
+function calendarAssignLanes(events){
+ const sorted=events.map(e=>{const start=calendarMinutes(e.start_time),dur=Math.max(15,Number(e.duration_minutes)||30);return {e,start,end:start+dur};}).sort((a,b)=>a.start-b.start);
+ const laneEnds=[],placed=[];
+ for(const item of sorted){let lane=laneEnds.findIndex(end=>end<=item.start);if(lane===-1){lane=laneEnds.length;laneEnds.push(item.end);}else laneEnds[lane]=item.end;placed.push({...item,lane});}
+ const laneCount=Math.max(1,laneEnds.length);
+ return placed.map(p=>({...p,laneCount}));
+}
+function renderCalendarAgentToggles(){
+ const agents=calendarAgents();
+ $('calendar-agent-toggles').innerHTML=`<button class="calendar-agent-chip${calendarSelectedAgents===null?' active':''}" type="button" data-agent-all>Alle</button>`+
+   agents.map(a=>`<button class="calendar-agent-chip${calendarIsSelected(a.id)?' active':''}" type="button" data-agent-toggle="${esc(a.id)}" style="--chip-color:${calendarAgentColor(a.id)}">${esc(a.name)}</button>`).join('');
+}
+async function loadCalendar(){
+ const [from,to]=calendarRange();
+ try{const r=await fetch(`/api/calendar?date_from=${encodeURIComponent(from)}&date_to=${encodeURIComponent(to)}`,{cache:'no-store',signal:AbortSignal.timeout(8000)});if(r.ok){calendarEvents=await r.json();renderCalendar();}}catch(e){if($('calendar-info'))$('calendar-info').textContent='Kalenderdaten konnten nicht geladen werden.';}
+}
 function renderCalendar(){
  if(!$('calendar-panel')||$('calendar-panel').hidden)return;
- const agents=calendarAgents(),dateObj=new Date(calendarDate+'T00:00:00');
- $('calendar-date-label').textContent=dateObj.toLocaleDateString('de-DE',{weekday:'long',day:'2-digit',month:'2-digit',year:'numeric'});
+ renderCalendarAgentToggles();
+ const agents=calendarSelectedAgentList();
+ if(!calendarAgents().length){$('calendar-date-label').textContent='';$('calendar-legend').innerHTML='';$('calendar-grid').innerHTML='<div class="calendar-empty">Agentenliste wird geladen …</div>';$('calendar-info').textContent='';return;}
+ if(calendarView==='day')return renderCalendarDay(agents);
+ if(calendarView==='week')return renderCalendarWeek(agents);
+ return renderCalendarMonth(agents);
+}
+function renderCalendarDay(agents){
+ const dateObj=calendarParseUTC(calendarDate);
+ $('calendar-date-label').textContent=dateObj.toLocaleDateString('de-DE',{weekday:'long',day:'2-digit',month:'2-digit',year:'numeric',timeZone:'UTC'});
  $('calendar-legend').innerHTML=Object.entries(CALENDAR_KIND_LABELS).map(([k,label])=>`<span style="color:${CALENDAR_KIND_COLORS[k]}">● ${esc(label)}</span>`).join('');
- if(!agents.length){$('calendar-grid').innerHTML='<div class="calendar-empty">Agentenliste wird geladen …</div>';return;}
+ $('calendar-grid').className='calendar-grid view-day';
+ if(!agents.length){$('calendar-grid').innerHTML='<div class="calendar-empty">Keine Agenten ausgewählt.</div>';$('calendar-info').textContent='';return;}
  const span=CALENDAR_WINDOW_END-CALENDAR_WINDOW_START,hours=[];for(let m=CALENDAR_WINDOW_START;m<=CALENDAR_WINDOW_END;m+=60)hours.push(m);
  const hourCol=`<div class="calendar-head"></div><div class="calendar-hours">${hours.map(m=>`<span class="calendar-hour-label" style="top:${((m-CALENDAR_WINDOW_START)/span*100).toFixed(2)}%">${String(Math.floor(m/60)).padStart(2,'0')}:00</span>`).join('')}</div>`;
+ let shown=0;
  const cols=agents.map(a=>{
-   const events=calendarEvents.filter(e=>e.organizer===a.id||(e.attendees||[]).some(x=>x.agent_id===a.id));
+   const events=calendarEvents.filter(e=>e.scheduled_date===calendarDate&&(e.organizer===a.id||(e.attendees||[]).some(x=>x.agent_id===a.id)));
+   shown+=events.length;
    const blocks=events.map(e=>{
      const start=calendarMinutes(e.start_time),dur=Math.max(15,Number(e.duration_minutes)||30);
      const from=Math.max(CALENDAR_WINDOW_START,start),to=Math.min(CALENDAR_WINDOW_END,start+dur);
@@ -121,7 +172,57 @@ function renderCalendar(){
    return `<div class="calendar-head"><strong>${esc(a.name)}</strong><small>${esc(a.role||'')}</small></div><div class="calendar-track" data-agent="${esc(a.id)}">${blocks}</div>`;
  }).join('');
  $('calendar-grid').innerHTML=hourCol+cols;
- $('calendar-info').textContent=`${calendarEvents.length} Termin${calendarEvents.length===1?'':'e'} am ${esc(dateObj.toLocaleDateString('de-DE'))} · Zeitfenster 06–22 Uhr · Spalten sind übereinandergelegt, damit gemeinsame Termine auf gleicher Höhe erkennbar sind. Klick auf einen Termin zeigt Details.`;
+ $('calendar-info').textContent=`${shown} Termin${shown===1?'':'e'} am ${esc(dateObj.toLocaleDateString('de-DE',{timeZone:'UTC'}))} · Zeitfenster 06–22 Uhr · Spalten sind übereinandergelegt, damit gemeinsame Termine auf gleicher Höhe erkennbar sind. Klick auf einen Termin zeigt Details.`;
+}
+function renderCalendarWeek(agents){
+ const [from,to]=calendarWeekBounds(calendarDate),agentIds=agents.map(a=>a.id);
+ $('calendar-date-label').textContent=`${esc(calendarParseUTC(from).toLocaleDateString('de-DE',{day:'2-digit',month:'2-digit',timeZone:'UTC'}))} – ${esc(calendarParseUTC(to).toLocaleDateString('de-DE',{day:'2-digit',month:'2-digit',year:'numeric',timeZone:'UTC'}))}`;
+ $('calendar-legend').innerHTML=agents.map(a=>`<span style="color:${calendarAgentColor(a.id)}">● ${esc(a.name)}</span>`).join('')||'<span>Keine Agenten ausgewählt</span>';
+ $('calendar-grid').className='calendar-grid view-week';
+ if(!agents.length){$('calendar-grid').innerHTML='<div class="calendar-empty">Keine Agenten ausgewählt.</div>';$('calendar-info').textContent='';return;}
+ const span=CALENDAR_WINDOW_END-CALENDAR_WINDOW_START,hours=[];for(let m=CALENDAR_WINDOW_START;m<=CALENDAR_WINDOW_END;m+=60)hours.push(m);
+ const hourCol=`<div class="calendar-head"></div><div class="calendar-hours">${hours.map(m=>`<span class="calendar-hour-label" style="top:${((m-CALENDAR_WINDOW_START)/span*100).toFixed(2)}%">${String(Math.floor(m/60)).padStart(2,'0')}:00</span>`).join('')}</div>`;
+ const days=[];for(let i=0;i<7;i++)days.push(calendarShiftDate(from,i));
+ let shown=0;
+ const today=new Date().toISOString().slice(0,10);
+ const cols=days.map((day,i)=>{
+   const events=calendarEventsOn(day,agentIds);
+   shown+=events.length;
+   const placed=calendarAssignLanes(events);
+   const blocks=placed.map(({e,start,end,lane,laneCount})=>{
+     const from2=Math.max(CALENDAR_WINDOW_START,start),to2=Math.min(CALENDAR_WINDOW_END,end);
+     if(to2<=from2)return '';
+     const top=((from2-CALENDAR_WINDOW_START)/span*100).toFixed(2),height=Math.max(2.4,(to2-from2)/span*100).toFixed(2);
+     const width=(100/laneCount).toFixed(2),left=(lane*100/laneCount).toFixed(2);
+     const color=calendarAgentColor(e.organizer),shared=(e.attendees||[]).length>0;
+     return `<div class="calendar-event status-${esc(e.status)}${shared?' shared':''}" data-event="${esc(e.id)}" style="top:${top}%;height:${height}%;left:calc(${left}% + 2px);width:calc(${width}% - 4px);background:${color}" title="${esc(e.title)} · ${esc(calendarAgentName(e.organizer))} · ${esc(e.start_time)}"><span class="ce-time">${esc(e.start_time)}</span> ${esc(e.title)}</div>`;
+   }).join('');
+   return `<div class="calendar-head${day===today?' today':''}"><strong>${CALENDAR_WEEKDAYS[i]}</strong><small>${esc(calendarParseUTC(day).toLocaleDateString('de-DE',{day:'2-digit',month:'2-digit',timeZone:'UTC'}))}</small></div><div class="calendar-track" data-day="${esc(day)}">${blocks}</div>`;
+ }).join('');
+ $('calendar-grid').innerHTML=hourCol+cols;
+ $('calendar-info').textContent=`${shown} Termin${shown===1?'':'e'} in dieser Woche · Zeitfenster 06–22 Uhr · Farbe = Agent · sich überschneidende Termine stehen nebeneinander auf gleicher Höhe. Klick auf einen Termin zeigt Details.`;
+}
+function renderCalendarMonth(agents){
+ const [from]=calendarMonthBounds(calendarDate),agentIds=agents.map(a=>a.id),d=calendarParseUTC(calendarDate);
+ $('calendar-date-label').textContent=d.toLocaleDateString('de-DE',{month:'long',year:'numeric',timeZone:'UTC'});
+ $('calendar-legend').innerHTML=agents.map(a=>`<span style="color:${calendarAgentColor(a.id)}">● ${esc(a.name)}</span>`).join('')||'<span>Keine Agenten ausgewählt</span>';
+ $('calendar-grid').className='calendar-grid view-month';
+ if(!agents.length){$('calendar-grid').innerHTML='<div class="calendar-empty">Keine Agenten ausgewählt.</div>';$('calendar-info').textContent='';return;}
+ const gridStart=calendarShiftDate(from,-((calendarParseUTC(from).getUTCDay()+6)%7));
+ const today=new Date().toISOString().slice(0,10);
+ let shown=0;
+ const cells=[];
+ for(let i=0;i<42;i++){
+   const day=calendarShiftDate(gridStart,i),inMonth=day.slice(0,7)===calendarDate.slice(0,7);
+   const events=calendarEventsOn(day,agentIds).sort((a,b)=>calendarMinutes(a.start_time)-calendarMinutes(b.start_time));
+   if(inMonth)shown+=events.length;
+   const visible=events.slice(0,3),extra=events.length-visible.length;
+   const chips=visible.map(e=>`<button class="calendar-month-chip" type="button" data-event="${esc(e.id)}" style="background:${calendarAgentColor(e.organizer)}" title="${esc(e.title)} · ${esc(calendarAgentName(e.organizer))}">${esc(e.start_time)} ${esc(e.title)}</button>`).join('');
+   const more=extra>0?`<button class="calendar-month-more" type="button" data-goto-day="${esc(day)}">+${extra} mehr</button>`:'';
+   cells.push(`<div class="calendar-month-day${inMonth?'':' outside'}${day===today?' today':''}"><button class="calendar-month-daynum" type="button" data-goto-day="${esc(day)}">${calendarParseUTC(day).getUTCDate()}</button><div class="calendar-month-events">${chips}${more}</div></div>`);
+ }
+ $('calendar-grid').innerHTML=CALENDAR_WEEKDAYS.map(w=>`<div class="calendar-month-headcell">${w}</div>`).join('')+cells.join('');
+ $('calendar-info').textContent=`${shown} Termin${shown===1?'':'e'} im ${esc(d.toLocaleDateString('de-DE',{month:'long',year:'numeric',timeZone:'UTC'}))} · Farbe = Agent · Klick auf einen Termin zeigt Details, Klick auf einen Tag wechselt zur Tagesansicht.`;
 }
 function showCalendarEvent(id){
  const e=calendarEvents.find(x=>x.id===id);if(!e)return;
@@ -218,9 +319,21 @@ $('range').onchange=()=>{if(paused){paused=false;$('pause').textContent='Live pa
 for(const id of ['agent-filter','kind-filter','search','event-group'])$(id).addEventListener('input',()=>{eventPage=0;if(data)renderEvents();});$('event-prev').onclick=()=>{eventPage--;renderEvents();};$('event-next').onclick=()=>{eventPage++;renderEvents();};for(const id of ['signal-search','signal-sort','signal-size'])$(id).addEventListener('input',()=>{signalPage=0;renderSignals();});$('signal-prev').onclick=()=>{signalPage--;renderSignals();};$('signal-next').onclick=()=>{signalPage++;renderSignals();};
 for(const b of document.querySelectorAll('[data-board-category]'))b.onclick=()=>{boardCategory=b.dataset.boardCategory;document.querySelectorAll('.board-tab').forEach(x=>x.classList.toggle('active',x===b));renderBoard();};$('board-agent')?.addEventListener('input',renderBoard);$('board-search')?.addEventListener('input',renderBoard);$('board-threads')?.addEventListener('click',e=>{const row=e.target.closest('[data-thread]');if(!row)return;boardThread={key:row.dataset.thread};renderBoard();});
 $('gazette-editions')?.addEventListener('click',e=>{const row=e.target.closest('[data-edition]');if(!row)return;gazetteSelected=row.dataset.edition;renderGazette();});
-$('calendar-grid')?.addEventListener('click',e=>{const b=e.target.closest('[data-event]');if(b)showCalendarEvent(b.dataset.event);});
-$('calendar-prev')?.addEventListener('click',()=>{calendarDate=calendarShiftDate(calendarDate,-1);loadCalendar();});
-$('calendar-next')?.addEventListener('click',()=>{calendarDate=calendarShiftDate(calendarDate,1);loadCalendar();});
+$('calendar-grid')?.addEventListener('click',e=>{
+ const ev=e.target.closest('[data-event]');if(ev){showCalendarEvent(ev.dataset.event);return;}
+ const goto=e.target.closest('[data-goto-day]');if(goto){calendarDate=goto.dataset.gotoDay;calendarView='day';document.querySelectorAll('#calendar-view-tabs .board-tab').forEach(x=>x.classList.toggle('active',x.dataset.calendarView==='day'));loadCalendar();}
+});
+$('calendar-view-tabs')?.addEventListener('click',e=>{const b=e.target.closest('[data-calendar-view]');if(!b)return;calendarView=b.dataset.calendarView;document.querySelectorAll('#calendar-view-tabs .board-tab').forEach(x=>x.classList.toggle('active',x===b));loadCalendar();});
+$('calendar-agent-toggles')?.addEventListener('click',e=>{
+ if(e.target.closest('[data-agent-all]')){calendarSelectedAgents=null;renderCalendar();return;}
+ const b=e.target.closest('[data-agent-toggle]');if(!b)return;
+ const id=b.dataset.agentToggle;
+ if(calendarSelectedAgents===null)calendarSelectedAgents=new Set(calendarAgents().map(a=>a.id));
+ if(calendarSelectedAgents.has(id))calendarSelectedAgents.delete(id);else calendarSelectedAgents.add(id);
+ renderCalendar();
+});
+$('calendar-prev')?.addEventListener('click',()=>{calendarDate=calendarView==='month'?calendarShiftMonth(calendarDate,-1):calendarShiftDate(calendarDate,calendarView==='week'?-7:-1);loadCalendar();});
+$('calendar-next')?.addEventListener('click',()=>{calendarDate=calendarView==='month'?calendarShiftMonth(calendarDate,1):calendarShiftDate(calendarDate,calendarView==='week'?7:1);loadCalendar();});
 $('calendar-today')?.addEventListener('click',()=>{calendarDate=new Date().toISOString().slice(0,10);loadCalendar();});
 const contactForm=$('contact'),contactMessage=$('contact-message'),contactCount=$('contact-count');if(contactMessage&&contactCount){const updateContactCount=()=>{contactCount.textContent=`${contactMessage.value.length.toLocaleString('de-DE')} / 4.000`;};contactMessage.addEventListener('input',updateContactCount);updateContactCount();const csrfField=document.createElement('input');csrfField.type='hidden';csrfField.name='csrf_token';contactForm.append(csrfField);const authNote=document.createElement('p');authNote.className='contact-auth';contactMessage.closest('form')?.querySelector('.contact-intro')?.after(authNote);const applyContactAuth=(authenticated,csrf='')=>{csrfField.value=csrf;for(const field of contactForm.querySelectorAll('input,textarea,button'))field.disabled=!authenticated;const fields=contactForm.querySelector('.contact-fields'),footer=contactForm.querySelector('.contact-footer');if(fields)fields.hidden=!authenticated;if(footer)footer.hidden=!authenticated;authNote.innerHTML=authenticated?'<span class="auth-ok">✓ Angemeldet · Nachricht kann gesendet werden</span> <a href="/contact/logout">Abmelden</a>':'<a href="/contact">① Erst anmelden, dann Nachricht verfassen</a><span> · geschützter Sendezugang</span>';};fetch('/contact/status',{cache:'no-store'}).then(r=>r.ok?r.json():{authenticated:false}).then(x=>applyContactAuth(Boolean(x.authenticated),x.csrf_token||'')).catch(()=>applyContactAuth(false));}
 document.addEventListener('visibilitychange',()=>{if(!document.hidden&&!paused)refresh();});
