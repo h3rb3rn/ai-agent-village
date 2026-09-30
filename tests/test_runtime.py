@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'web'))
-from runtime import Resident,Tasks,resource_snapshot,tail,event_time,COLLABORATION_PRESSURE_CEILING,MEETING_REPORT_CEILING,GAZETTE_REVIEW_CEILING,GAZETTE_CLOSE_CEILING,GAZETTE_CLOSE_MIN_HOURS,GAZETTE_CONTRIBUTE_CEILING,GAZETTE_GAME_RESULT_CEILING,GAZETTE_GAME_WINNER_CEILING,CALENDAR_PLAN_CEILING,CALENDAR_WEEK_PLAN_CEILING
+from runtime import Resident,Tasks,resource_snapshot,tail,event_time,COLLABORATION_PRESSURE_CEILING,MEETING_REPORT_CEILING,GAZETTE_REVIEW_CEILING,GAZETTE_CLOSE_CEILING,GAZETTE_CLOSE_MIN_HOURS,GAZETTE_CONTRIBUTE_CEILING,GAZETTE_GAME_RESULT_CEILING,GAZETTE_GAME_WINNER_CEILING,CALENDAR_PLAN_CEILING,CALENDAR_WEEK_PLAN_CEILING,GAZETTE_CONTRIBUTE_DEADLINE_HOUR_UTC,GAZETTE_PUBLISH_DEADLINE_HOUR_UTC,gazette_deadline_passed
 from village.gazette import REVIEWER_AGENT
 from village.calendar import today as calendar_today
 from village.calendar import is_workday as real_calendar_is_workday
@@ -31,6 +31,14 @@ class RuntimeTests(unittest.TestCase):
         self._calendar_workday_patch = patch('runtime.calendar_is_workday', return_value=False)
         self._calendar_workday_patch.start()
         self.addCleanup(self._calendar_workday_patch.stop)
+        # P81: the Gazette contribute/close gates now also bypass their
+        # pressure ceiling once a real wall-clock UTC deadline has passed -
+        # defaulting that check to "not yet" keeps every pre-existing gate
+        # test in this class immune to which real hour the suite happens
+        # to run in; deadline-specific tests below patch it back to True.
+        self._gazette_deadline_patch = patch('runtime.gazette_deadline_passed', return_value=False)
+        self._gazette_deadline_patch.start()
+        self.addCleanup(self._gazette_deadline_patch.stop)
         self.agent=Resident(self.env)
     def tearDown(self): self.tmp.cleanup()
     def execute(self,name,**args): self.agent.execute({'tool_call':{'name':name,'arguments':args}})
@@ -1191,6 +1199,65 @@ class RuntimeTests(unittest.TestCase):
         self.assertTrue(self.agent.state['last_result']['ok'])
         runs = json.loads(self.agent.state['last_result']['result'])
         self.assertEqual(len(runs), 1)
+
+    def test_gazette_deadline_passed_basic_boundary(self):
+        # Hour 0 is always reached at some point in any day; hour 24 never
+        # is (valid hours are 0-23) - deterministic without mocking the
+        # clock.
+        self.assertTrue(gazette_deadline_passed(0))
+        self.assertFalse(gazette_deadline_passed(24))
+
+    def test_gazette_closable_once_the_publish_deadline_passes_even_with_nothing_approved(self):
+        # P81 (operator: "Spaetestens 15 Uhr soll veroeffentlicht werden"):
+        # overrides "at least one approved" and "nothing pending" both.
+        king_env = dict(self.env, AGENT_ID='01-king', AGENT_NAME='king', AGENT_ROLE='king')
+        king = Resident(king_env)
+        edition = king.gazette.open_edition('01-king', ['01-a'])
+        king.gazette.submit_contribution(edition['id'], '01-a', 'mood', 'Update', 'Feeling good.')  # still pending
+        self.assertEqual(king.gazette_closable_editions(), [])  # not yet, deadline patched False by default
+        with patch('runtime.gazette_deadline_passed', return_value=True):
+            closable = king.gazette_closable_editions()
+        self.assertEqual([e['id'] for e in closable], [edition['id']])
+
+    def test_gazette_contribute_gate_blocks_immediately_once_the_deadline_passes(self):
+        edition = self.agent.gazette.open_edition('01-king', ['01-a', '02-b'])
+        assignments = self.agent.gazette.assign_kinds(edition['id'], '01-king', ['01-a', '02-b'])
+        with patch('runtime.gazette_deadline_passed', return_value=True):
+            self.agent.execute({'tool_call': {'name': 'execute_bash', 'arguments': {'command': 'printf ok'}}})
+        self.assertFalse(self.agent.state['last_result']['ok'])
+        result = self.agent.state['last_result']['result']
+        self.assertIn('contribution deadline has passed', result)
+        self.assertIn(f'"kind":"{assignments["01-a"]}"', result)
+
+    def test_gazette_game_result_gate_blocks_immediately_once_the_deadline_passes(self):
+        self.agent.gazette.open_edition('01-king', ['01-a', '02-b'])
+        with patch('runtime.gazette_deadline_passed', return_value=True):
+            self.agent.execute({'tool_call': {'name': 'execute_bash', 'arguments': {'command': 'printf ok'}}})
+        self.assertFalse(self.agent.state['last_result']['ok'])
+        self.assertIn('contribution deadline has passed', self.agent.state['last_result']['result'])
+
+    def test_gazette_close_gate_blocks_immediately_once_the_deadline_passes(self):
+        king_env = dict(self.env, AGENT_ID='01-king', AGENT_NAME='king', AGENT_ROLE='king')
+        king = Resident(king_env)
+        edition = king.gazette.open_edition('01-king', ['01-a'])
+        king.gazette.submit_contribution(edition['id'], '01-a', 'mood', 'Update', 'Feeling good.')
+        king.gazette.review_contribution(edition['id'], '01-a', 'mood', '01-king', 'approve')
+        with patch('runtime.gazette_deadline_passed', return_value=True):
+            king.execute({'tool_call': {'name': 'execute_bash', 'arguments': {'command': 'printf ok'}}})
+        self.assertFalse(king.state['last_result']['ok'])
+        result = king.state['last_result']['result']
+        self.assertIn('publish deadline has passed', result)
+        self.assertIn(f'"edition_id":"{edition["id"]}"', result)
+
+    def test_gazette_deadline_hints_appear_before_the_hard_gate_fires(self):
+        # Advance notice, not just a sudden block - the advisory hint
+        # names the same deadline the gate will eventually enforce.
+        self.agent.gazette.open_edition('01-king', ['01-a', '02-b'])
+        edition_id = self.agent.gazette.list_editions(1)[0]['id']
+        self.agent.gazette.assign_kinds(edition_id, '01-king', ['01-a', '02-b'])
+        with patch.object(self.agent, 'memory', return_value={'items': []}):
+            ctx = json.loads(self.agent.snapshot())
+        self.assertIn(f'{GAZETTE_CONTRIBUTE_DEADLINE_HOUR_UTC}:00 UTC', ctx['gazette_daily_note'])
 
     def test_organic_message_not_reissued_every_turn(self):
         (self.root/'board/organic-inbox.jsonl').write_text(json.dumps({'timestamp':'2026-09-24T11:00:00Z','message':'A dated request'})+'\n')

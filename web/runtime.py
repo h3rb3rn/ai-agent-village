@@ -106,6 +106,21 @@ GAZETTE_CLOSE_CEILING = 10
 # have passed since opening - whichever comes first.
 GAZETTE_CLOSE_MIN_HOURS = 6
 
+# P81 (operator directive, 2026-09-30): "Wir fuehren eine Deadline ein,
+# bis 13 Uhr muss jeder Agent seinen Beitrag erstellt und eingereicht
+# haben. Spaetestens 15 Uhr soll veroeffentlicht werden." Absolute daily
+# wall-clock deadlines (UTC, matching every other time convention in this
+# codebase - village/calendar.py's today(), the meeting scheduler's
+# hour==8 standup check) layered on top of the existing pressure-based
+# gates (P73/P74/P63): once a deadline hour has passed, the affected
+# gate's ceiling is bypassed entirely - the very next guarded call blocks,
+# instead of waiting out GAZETTE_CONTRIBUTE_CEILING/GAZETTE_CLOSE_CEILING
+# failed attempts first. GAZETTE_CLOSE_MIN_HOURS above stays as the
+# elapsed-time floor for a *fast*-moving edition; this is the separate,
+# absolute ceiling for a *slow* one.
+GAZETTE_CONTRIBUTE_DEADLINE_HOUR_UTC = 13
+GAZETTE_PUBLISH_DEADLINE_HOUR_UTC = 15
+
 # P73 (operator directive, 2026-09-30, "Untersuche warum die Contribute-
 # Aktionen ausbleiben"): live audit found the reviewer-review and King-close
 # gates above (P55/P60/P63) both work as designed, but an ordinary
@@ -229,6 +244,14 @@ def event_time(row):
         return datetime.fromisoformat(row.get('timestamp','')).timestamp()
     except (ValueError, TypeError):
         return 0
+
+
+def gazette_deadline_passed(hour_utc):
+    """True from that UTC hour until midnight, every day (P81) - a plain
+    wall-clock check, deliberately independent of when any particular
+    edition happened to open, so a slow day's deadline pressure is exactly
+    as real as a fast day's."""
+    return datetime.now(timezone.utc).hour >= hour_utc
 
 
 def normalize_command(command: str) -> str:
@@ -451,10 +474,22 @@ class Resident:
         residents have contributed, or GAZETTE_CLOSE_MIN_HOURS have passed
         since opening (whichever comes first) - mirrors the "Redaktionsschluss"
         (editorial deadline) already named in docs/analysis/GAZETTE-PLAN-2026-09-28.md's
-        Stufe 3, never actually implemented until now."""
+        Stufe 3, never actually implemented until now.
+
+        P81 (operator directive): "Spaetestens 15 Uhr soll veroeffentlicht
+        werden" - an absolute daily deadline that overrides every condition
+        above, including "at least one approved" and "nothing pending": once
+        GAZETTE_PUBLISH_DEADLINE_HOUR_UTC has passed, every open edition is
+        closable no matter how thin or how much is still unreviewed. A
+        publish that goes out on schedule with whatever is ready beats one
+        that never goes out at all."""
         open_editions = [e for e in self.gazette.list_editions(limit=10) if e['status'] != 'compiled']
         result = []
+        deadline_passed = gazette_deadline_passed(GAZETTE_PUBLISH_DEADLINE_HOUR_UTC)
         for edition in open_editions:
+            if deadline_passed:
+                result.append(edition)
+                continue
             pending = [c for c in edition['contributions'] if c.get('review_status') == 'pending']
             approved = [c for c in edition['contributions'] if c.get('review_status') == 'approved']
             if not approved or pending:
@@ -912,7 +947,8 @@ class Resident:
                 f"Gazette edition {edition['id']} has {len(approved)} reviewed contribution(s) and "
                 "none left awaiting review. Call gazette_operation with operation=close and "
                 f"edition_id='{edition['id']}' once to compile and archive it - anything submitted "
-                "afterwards goes into a later edition instead."
+                f"afterwards goes into a later edition instead. Publish deadline: "
+                f"{GAZETTE_PUBLISH_DEADLINE_HOUR_UTC}:00 UTC."
             )
         elif self.id == '01-king':
             gazette_edition = self.gazette.get_edition(self.gazette_active_edition_id())
@@ -963,7 +999,8 @@ class Resident:
                     context['gazette_daily_note'] = (
                         f"Today's Gazette is open, announced and assigned, but you have not yet "
                         f"submitted your own '{assigned_kind}' contribution: send one "
-                        f"gazette_operation contribute with kind='{assigned_kind}'. "
+                        f"gazette_operation contribute with kind='{assigned_kind}'. Deadline: "
+                        f"{GAZETTE_CONTRIBUTE_DEADLINE_HOUR_UTC}:00 UTC. "
                         f"{gazette_style_hint}{meetings_addendum}"
                     )
         else:
@@ -986,7 +1023,8 @@ class Resident:
                     context['gazette_daily_note'] = (
                         f"Today's AI Village Gazette edition is open. King has assigned you the "
                         f"'{assigned_kind}' section - send one gazette_operation contribute with "
-                        f"kind='{assigned_kind}'. {gazette_style_hint}{meetings_addendum}"
+                        f"kind='{assigned_kind}'. Deadline: {GAZETTE_CONTRIBUTE_DEADLINE_HOUR_UTC}:00 UTC. "
+                        f"{gazette_style_hint}{meetings_addendum}"
                     )
                 else:
                     context['gazette_daily_note'] = (
@@ -1360,13 +1398,19 @@ class Resident:
                 pressure = int(self.state.get('gazette_contribute_pressure', 0)) + 1
                 self.state['gazette_contribute_pressure'] = pressure
                 self.event('gazette_contribute_required', f"edition={eid}; kind={kind}; pressure={pressure}")
-                if pressure >= GAZETTE_CONTRIBUTE_CEILING:
+                # P81 (operator: "bis 13 Uhr muss jeder Agent seinen
+                # Beitrag [...] eingereicht haben"): past the deadline the
+                # ceiling is bypassed outright - the very next call blocks.
+                past_deadline = gazette_deadline_passed(GAZETTE_CONTRIBUTE_DEADLINE_HOUR_UTC)
+                if pressure >= GAZETTE_CONTRIBUTE_CEILING or past_deadline:
                     example = ('{"name":"gazette_operation","arguments":{"operation":"contribute",'
                                f'"edition_id":"{eid}","kind":"{kind}","headline":"...","content":"..."}}')
-                    contribute_block = (f"Gazette contribution required before more solo work: submit "
-                                        f"exactly this envelope for your assigned '{kind}' section "
+                    deadline_note = (f" The {GAZETTE_CONTRIBUTE_DEADLINE_HOUR_UTC}:00 UTC contribution "
+                                     "deadline has passed." if past_deadline else "")
+                    contribute_block = (f"Gazette contribution required before more solo work:{deadline_note} "
+                                        f"submit exactly this envelope for your assigned '{kind}' section "
                                         f"(fill in headline and content): {example}",
-                                        f"edition={eid}; kind={kind}; pressure={pressure}")
+                                        f"edition={eid}; kind={kind}; pressure={pressure}; deadline={past_deadline}")
 
         # P74 (operator feedback, "es ist nicht ersichtlich [...] womit
         # gewonnen hat"): 'game_result' is excluded from assign_kinds()'s
@@ -1383,13 +1427,16 @@ class Resident:
                 pressure = int(self.state.get('gazette_game_result_pressure', 0)) + 1
                 self.state['gazette_game_result_pressure'] = pressure
                 self.event('gazette_game_result_required', f"edition={eid}; pressure={pressure}")
-                if pressure >= GAZETTE_GAME_RESULT_CEILING:
+                past_deadline = gazette_deadline_passed(GAZETTE_CONTRIBUTE_DEADLINE_HOUR_UTC)
+                if pressure >= GAZETTE_GAME_RESULT_CEILING or past_deadline:
                     example = ('{"name":"gazette_operation","arguments":{"operation":"contribute",'
                                f'"edition_id":"{eid}","kind":"game_result","headline":"...","content":"..."}}')
-                    game_result_block = (f"Today's game result required before more solo work: submit "
-                                         f"exactly this envelope, naming the posed task, your own "
+                    deadline_note = (f" The {GAZETTE_CONTRIBUTE_DEADLINE_HOUR_UTC}:00 UTC contribution "
+                                     "deadline has passed." if past_deadline else "")
+                    game_result_block = (f"Today's game result required before more solo work:{deadline_note} "
+                                         f"submit exactly this envelope, naming the posed task, your own "
                                          f"solution, and who you think won: {example}",
-                                         f"edition={eid}; pressure={pressure}")
+                                         f"edition={eid}; pressure={pressure}; deadline={past_deadline}")
 
         # P60 (operator: "Nicht nur beobachten wenn du GAPs identifizierst,
         # sondern proaktiv loesen"): live observation showed the Chronicler's
@@ -1431,13 +1478,19 @@ class Resident:
                 pressure = int(self.state.get('gazette_close_pressure', 0)) + 1
                 self.state['gazette_close_pressure'] = pressure
                 self.event('gazette_close_required', f"closable={len(closable)}; pressure={pressure}")
-                if pressure >= GAZETTE_CLOSE_CEILING:
+                # P81 (operator: "Spaetestens 15 Uhr soll veroeffentlicht
+                # werden"): past the deadline the ceiling is bypassed
+                # outright, same as the contribution deadline above.
+                past_deadline = gazette_deadline_passed(GAZETTE_PUBLISH_DEADLINE_HOUR_UTC)
+                if pressure >= GAZETTE_CLOSE_CEILING or past_deadline:
                     edition = closable[0]
                     example = ('{"name":"gazette_operation","arguments":{"operation":"close",'
                                f'"edition_id":"{edition["id"]}"}}')
-                    close_block = (f"Compile required before more solo work: edition {edition['id']} is "
-                                   f"fully reviewed and still open. Submit exactly this envelope: {example}",
-                                   f"closable={len(closable)}; pressure={pressure}")
+                    deadline_note = (f" The {GAZETTE_PUBLISH_DEADLINE_HOUR_UTC}:00 UTC publish deadline has "
+                                     "passed." if past_deadline else "")
+                    close_block = (f"Compile required before more solo work:{deadline_note} edition "
+                                   f"{edition['id']} is ready. Submit exactly this envelope: {example}",
+                                   f"closable={len(closable)}; pressure={pressure}; deadline={past_deadline}")
 
         # P74: King's own separate arbiter act (GAME_POOL's own text: "King
         # kuert einen Favoriten") - only fires once BOTH drawn participants
