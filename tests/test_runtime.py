@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'web'))
-from runtime import Resident,Tasks,resource_snapshot,tail,event_time,COLLABORATION_PRESSURE_CEILING,MEETING_REPORT_CEILING,GAZETTE_REVIEW_CEILING,GAZETTE_CLOSE_CEILING,GAZETTE_CLOSE_MIN_HOURS
+from runtime import Resident,Tasks,resource_snapshot,tail,event_time,COLLABORATION_PRESSURE_CEILING,MEETING_REPORT_CEILING,GAZETTE_REVIEW_CEILING,GAZETTE_CLOSE_CEILING,GAZETTE_CLOSE_MIN_HOURS,GAZETTE_CONTRIBUTE_CEILING
 from village.gazette import REVIEWER_AGENT
 from decision import decision
 from village.collaboration import CooperationCheckpoint
@@ -679,6 +679,113 @@ class RuntimeTests(unittest.TestCase):
         chronicler.execute({'tool_call': {'name': 'execute_bash', 'arguments': {'command': 'printf done'}}})
         self.assertFalse(chronicler.state['last_result']['ok'])
         self.assertIn('Editorial review required', chronicler.state['last_result']['result'])
+
+    def test_gazette_contribute_gate_eventually_blocks_other_actions(self):
+        # P73 (operator directive, "Untersuche warum die Contribute-Aktionen
+        # ausbleiben"): unlike the reviewer/close gates above, an ordinary
+        # resident's own assigned contribution was only ever the advisory
+        # gazette_daily_note hint - live audit found fresh contributions
+        # from only 1 of 9 assigned residents on the last real edition
+        # (docs/evidence/P73.md). Same proven ceiling pattern, generalized
+        # to every resident instead of one named role.
+        edition = self.agent.gazette.open_edition('01-king', ['01-a', '02-b', '03-c'])
+        assignments = self.agent.gazette.assign_kinds(edition['id'], '01-king', ['01-a', '02-b', '03-c'])
+        assigned_kind = assignments['01-a']
+        for i in range(GAZETTE_CONTRIBUTE_CEILING - 1):
+            self.agent.execute({'tool_call': {'name': 'execute_bash', 'arguments': {'command': f'printf ok{i}'}}})
+        self.assertTrue(self.agent.state['last_result']['ok'])  # not yet gated
+        self.agent.execute({'tool_call': {'name': 'execute_bash', 'arguments': {'command': f'printf ok{GAZETTE_CONTRIBUTE_CEILING}'}}})
+        self.assertFalse(self.agent.state['last_result']['ok'])
+        result = self.agent.state['last_result']['result']
+        self.assertIn('Gazette contribution required', result)
+        self.assertIn('"operation":"contribute"', result)
+        self.assertIn(f'"edition_id":"{edition["id"]}"', result)
+        self.assertIn(f'"kind":"{assigned_kind}"', result)
+
+    def test_gazette_contribute_operation_itself_is_never_gated_by_contribute_pressure(self):
+        edition = self.agent.gazette.open_edition('01-king', ['01-a', '02-b'])
+        assignments = self.agent.gazette.assign_kinds(edition['id'], '01-king', ['01-a', '02-b'])
+        for i in range(GAZETTE_CONTRIBUTE_CEILING + 5):
+            self.agent.execute({'tool_call': {'name': 'execute_bash', 'arguments': {'command': f'printf ok{i}'}}})
+        self.agent.execute({'tool_call': {'name': 'gazette_operation', 'arguments': {
+            'operation': 'contribute', 'kind': assignments['01-a'], 'headline': 'Update',
+            'content': 'Feeling productive today.'}}})
+        self.assertTrue(self.agent.state['last_result']['ok'])
+
+    def test_gazette_contribute_gate_resets_once_submitted(self):
+        edition = self.agent.gazette.open_edition('01-king', ['01-a', '02-b'])
+        assignments = self.agent.gazette.assign_kinds(edition['id'], '01-king', ['01-a', '02-b'])
+        self.agent.gazette.submit_contribution(edition['id'], '01-a', assignments['01-a'], 'Update', 'Feeling good.')
+        for i in range(GAZETTE_CONTRIBUTE_CEILING + 5):
+            self.agent.execute({'tool_call': {'name': 'execute_bash', 'arguments': {'command': f'printf ok{i}'}}})
+        self.assertEqual(self.agent.state.get('gazette_contribute_pressure', 0), 0)
+
+    def test_gazette_contribute_gate_also_applies_to_kings_own_assigned_piece(self):
+        # P73: King's own contribute hint (P67) was exactly as
+        # advisory-only as everyone else's before this fix.
+        king_env = dict(self.env, AGENT_ID='01-king', AGENT_NAME='king', AGENT_ROLE='king')
+        king = Resident(king_env)
+        edition = king.gazette.open_edition('01-king', ['01-a'])
+        assignments = king.gazette.assign_kinds(edition['id'], '01-king', ['01-a'])
+        assigned_kind = assignments['01-king']
+        for i in range(GAZETTE_CONTRIBUTE_CEILING - 1):
+            king.execute({'tool_call': {'name': 'execute_bash', 'arguments': {'command': f'printf ok{i}'}}})
+        self.assertTrue(king.state['last_result']['ok'])
+        king.execute({'tool_call': {'name': 'execute_bash', 'arguments': {'command': f'printf ok{GAZETTE_CONTRIBUTE_CEILING}'}}})
+        self.assertFalse(king.state['last_result']['ok'])
+        result = king.state['last_result']['result']
+        self.assertIn('Gazette contribution required', result)
+        self.assertIn(f'"kind":"{assigned_kind}"', result)
+
+    def test_gazette_contribute_gate_does_not_fire_without_an_assignment(self):
+        # An edition open but not yet assigned (King hasn't delegated) must
+        # not gate anyone - there is nothing concrete to submit yet.
+        self.agent.gazette.open_edition('01-king', ['01-a', '02-b'])
+        for i in range(GAZETTE_CONTRIBUTE_CEILING + 5):
+            self.agent.execute({'tool_call': {'name': 'execute_bash', 'arguments': {'command': f'printf ok{i}'}}})
+        self.assertTrue(self.agent.state['last_result']['ok'])
+
+    def test_gazette_meetings_hint_surfaces_real_closed_meeting_and_decision_data(self):
+        # P73 (operator directive): "Ich moechte in der Gazette eine
+        # Zusammenfassung der JourFixe und StandUp Meetings haben mit
+        # Abstimmungen, Entscheidungen etc." - the assigned resident must
+        # see the real underlying data, not just a generic style hint, so
+        # the article is faithful rather than invented.
+        # A generous context window: this test is about the data actually
+        # surfacing, not about the separate P48 budget-trimming behaviour
+        # (already covered elsewhere) - the default 8192-token test budget
+        # is tight enough that this payload can legitimately be trimmed
+        # away first, same as it would for a genuinely small-context agent.
+        roomy_env = dict(self.env, OLLAMA_NUM_CTX='32768')
+        agent = Resident(roomy_env)
+        edition = agent.gazette.open_edition('01-king', ['01-a', '02-b'])
+        agent.gazette.assign_kinds(edition['id'], '01-king', ['01-a', '02-b'])
+        # Force '01-a' onto 'meetings' regardless of the random rotation.
+        with agent.gazette._conn() as c:
+            c.execute("UPDATE gazette_assignments SET kind='meetings' WHERE edition_id=? AND agent='01-a'",
+                     (edition['id'],))
+            c.commit()
+        agent.meetings.schedule('standup', 'daily', 'now', '01-king', 'm1')
+        agent.meetings.report('m1', '01-a', achieved='shipped a fix', next_step='verify', blockers='none')
+        agent.meetings.close('m1')
+        with patch.object(agent, 'memory', return_value={'items': []}):
+            ctx = json.loads(agent.snapshot())
+        self.assertIn('recent_meetings_closed_untrusted', ctx)
+        self.assertEqual(ctx['recent_meetings_closed_untrusted'][0]['id'], 'm1')
+        self.assertIn('recent_meetings_closed_untrusted', ctx['gazette_daily_note'])
+        self.assertIn('never invent', ctx['gazette_daily_note'])
+
+    def test_gazette_style_hint_bans_notepad_style_for_every_kind(self):
+        # P73 (operator directive): "soll sich wie ein echter ausgearbeiteter
+        # Artikel und nicht wie ein Notizzettel lesen. Das gilt fuer alle
+        # Beitraege der Gazette."
+        self.agent.gazette.open_edition('01-king', ['01-a', '02-b'])
+        edition_id = self.agent.gazette.list_editions(1)[0]['id']
+        self.agent.gazette.assign_kinds(edition_id, '01-king', ['01-a', '02-b'])
+        with patch.object(self.agent, 'memory', return_value={'items': []}):
+            ctx = json.loads(self.agent.snapshot())
+        self.assertIn('bullet list', ctx['gazette_daily_note'])
+        self.assertIn('flowing prose', ctx['gazette_daily_note'])
 
     def test_organic_message_not_reissued_every_turn(self):
         (self.root/'board/organic-inbox.jsonl').write_text(json.dumps({'timestamp':'2026-09-24T11:00:00Z','message':'A dated request'})+'\n')

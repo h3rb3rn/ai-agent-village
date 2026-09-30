@@ -99,6 +99,19 @@ GAZETTE_CLOSE_CEILING = 10
 # have passed since opening - whichever comes first.
 GAZETTE_CLOSE_MIN_HOURS = 6
 
+# P73 (operator directive, 2026-09-30, "Untersuche warum die Contribute-
+# Aktionen ausbleiben"): live audit found the reviewer-review and King-close
+# gates above (P55/P60/P63) both work as designed, but an ordinary
+# resident's own assigned contribution - including King's own - was ONLY
+# ever the advisory gazette_daily_note hint, never backed by a pressure gate.
+# That is the exact "advisory nudge loses to competing context" pattern
+# already found and fixed three times this session (collaboration
+# checkpoints P51, meeting reports P56/P58, editorial review P60) - just
+# never generalized to this fourth, most basic Gazette obligation. Live
+# evidence: edition 2026-09-30 closed with fresh contributions from only 1
+# of 9 assigned residents (docs/evidence/P73.md). Same proven ceiling.
+GAZETTE_CONTRIBUTE_CEILING = 10
+
 # P72 (operator directive, 2026-09-29): "Es kann nicht sein das die Agents
 # ununterbrochen in Loops festhaengen ... Mechanismen die den Agents im
 # Zweifel Hilfe zur Selbsthilfe geben und Loops identifizieren sowie
@@ -424,6 +437,49 @@ class Resident:
         open_editions = [e for e in self.gazette.list_editions(limit=5) if e['status'] != 'compiled']
         return open_editions[0]['id'] if open_editions else gazette_today()
 
+    def gazette_pending_own_contribution(self):
+        """(edition_id, assigned_kind) if THIS agent has an assigned kind on
+        the active edition and has not yet submitted it - None otherwise.
+
+        P73: the real gate counterpart to the gazette_daily_note hint below.
+        Unlike gazette_pending_reviews()/gazette_closable_editions() (both
+        King/reviewer-only), this applies to every resident, King included -
+        his own assigned piece was exactly as advisory-only as everyone
+        else's before this fix."""
+        edition = self.gazette.get_edition(self.gazette_active_edition_id())
+        if not edition or edition['status'] == 'compiled':
+            return None
+        assigned_kind = edition.get('assignments', {}).get(self.id)
+        if not assigned_kind:
+            return None
+        if any(c['agent'] == self.id and c['kind'] == assigned_kind for c in edition['contributions']):
+            return None
+        return edition['id'], assigned_kind
+
+    def gazette_meetings_source_hint(self, context):
+        """When assigned the 'meetings' kind (P73, operator directive: "eine
+        Zusammenfassung der JourFixe und StandUp Meetings [...] mit
+        Abstimmungen, Entscheidungen etc."), surface real closed-meeting
+        reports and decided role proposals into context and point the
+        contribution at them by name - the same anti-hallucination
+        discipline compile_edition() already applies (no LLM-generated
+        connective text there; here, no invented meetings/votes either)."""
+        recent_meetings = self.meetings.recent_closed(limit=4)
+        recent_decisions = self.teams.recent_decisions(limit=4)
+        if recent_meetings:
+            context['recent_meetings_closed_untrusted'] = recent_meetings
+        if recent_decisions:
+            context['recent_role_decisions_untrusted'] = recent_decisions
+        if not recent_meetings and not recent_decisions:
+            return (" No closed meetings or decided role proposals are on record yet - state that "
+                    "plainly rather than inventing a JourFixe/StandUp summary.")
+        return (" Base this specifically on recent_meetings_closed_untrusted (closed JourFixe/"
+                "StandUp meetings with every resident's achieved/next_step/blockers report) and "
+                "recent_role_decisions_untrusted (role proposals actually decided, with their "
+                "accept/reject vote tally) now in your context - name which meeting(s) and "
+                "decisions you are summarizing, and never invent a vote count or decision that "
+                "is not there.")
+
     def snapshot(self):
         peers = read_json(Path('/etc/ai-village/runtime-peers.json'), [])
         events = tail(self.board / 'events.jsonl', 800)
@@ -580,16 +636,24 @@ class Resident:
         # P69: real newspaper items have a distinct headline above the body
         # (previously the field did not even exist), plus room for genuinely
         # complex topics via the optional, occasional 'column' kind.
+        # P73 (operator directive, 2026-09-30): "Das ganze soll sich wie ein
+        # echter ausgearbeiteter Artikel und nicht wie ein Notizzettel
+        # lesen. Das gilt fuer alle Beitraege der Gazette." Explicit ban on
+        # notepad/bullet/label-dump style, on top of the P67 length
+        # discipline - both apply to every kind, not just the new one below.
         gazette_style_hint = (
             f"Include both a headline (max {GAZETTE_HEADLINE_MAX_CHARS} chars, one or two lines, "
             "reads like a real newspaper headline stating the key fact - not the kind name repeated) "
-            "and body content written like a short newspaper item, not a one-line answer and not an "
-            "essay: one concrete sentence restating/expanding the key fact, then 2-4 more sentences "
-            "of real detail - what specifically happened, a concrete number or example, what worked "
-            f"or did not, what should change. Max {GAZETTE_MAX_CHARS} chars for regular kinds. If the "
-            "topic is genuinely complex and needs more room, use kind='column' instead (an occasional, "
-            f"longer-form piece, max {GAZETTE_MAX_COLUMN_CHARS} chars) rather than stretching a regular "
-            "entry."
+            "and body content written like a finished newspaper article: flowing prose in complete, "
+            "connected sentences, not a one-line answer and not an essay. Never a bullet list, a "
+            "dash-prefixed list, or a dump of 'Label: value' fragments - if you catch yourself "
+            "writing that shape, rewrite it as narrative sentences instead. One concrete sentence "
+            "restating/expanding the key fact, then 2-4 more sentences of real, specific detail - "
+            "what actually happened, a concrete number or example, what worked or did not, what "
+            f"should change. Max {GAZETTE_MAX_CHARS} chars for regular kinds. If the topic is "
+            "genuinely complex and needs more room, use kind='column' instead (an occasional, "
+            f"longer-form piece, max {GAZETTE_MAX_COLUMN_CHARS} chars) rather than stretching a "
+            "regular entry."
         )
         if reviewer_pending:
             # P55: the editorial gate itself must not become the exact
@@ -659,10 +723,13 @@ class Resident:
                     # assigned 'learning' for 2026-09-28 and never
                     # contributed it; only 3 of 9 residents did.
                     assigned_kind = gazette_edition.get('assignments', {}).get(self.id)
+                    meetings_addendum = (self.gazette_meetings_source_hint(context)
+                                         if assigned_kind == 'meetings' else '')
                     context['gazette_daily_note'] = (
                         f"Today's Gazette is open, announced and assigned, but you have not yet "
                         f"submitted your own '{assigned_kind}' contribution: send one "
-                        f"gazette_operation contribute with kind='{assigned_kind}'. {gazette_style_hint}"
+                        f"gazette_operation contribute with kind='{assigned_kind}'. "
+                        f"{gazette_style_hint}{meetings_addendum}"
                     )
         else:
             # P52: a one-off broadcast from King asking everyone to
@@ -679,10 +746,12 @@ class Resident:
             if gazette_edition and not any(c['agent'] == self.id for c in gazette_edition['contributions']):
                 assigned_kind = gazette_edition.get('assignments', {}).get(self.id)
                 if assigned_kind:
+                    meetings_addendum = (self.gazette_meetings_source_hint(context)
+                                         if assigned_kind == 'meetings' else '')
                     context['gazette_daily_note'] = (
                         f"Today's AI Village Gazette edition is open. King has assigned you the "
                         f"'{assigned_kind}' section - send one gazette_operation contribute with "
-                        f"kind='{assigned_kind}'. {gazette_style_hint}"
+                        f"kind='{assigned_kind}'. {gazette_style_hint}{meetings_addendum}"
                     )
                 else:
                     context['gazette_daily_note'] = (
@@ -750,7 +819,8 @@ class Resident:
         # losing a few stale task rows is a much smaller loss than an agent
         # never seeing a message addressed directly to it.
         for field in ('retrieved_memory_untrusted','untrusted_peer_messages','own_recent_results','projects',
-                      'recent_organic_messages_untrusted','untrusted_direct_messages'):
+                      'recent_organic_messages_untrusted','untrusted_direct_messages',
+                      'recent_meetings_closed_untrusted','recent_role_decisions_untrusted'):
             while context.get(field) and len(json.dumps(context,ensure_ascii=False))>budget:
                 # 'projects' is pre-sorted highest-priority-first
                 # (task_priority(), reverse=True) - unlike every other field
@@ -987,6 +1057,34 @@ class Resident:
                 else:
                     self.feedback(name, f"Meeting report requested: {mid}. Submit one meeting_operation report when possible; continuing this reversible action.", True)
 
+        # P73 (operator directive, 2026-09-30): unlike the reviewer/close
+        # gates below, an ordinary resident's own assigned contribution -
+        # including King's own - was only ever the advisory gazette_daily_note
+        # hint (see snapshot()), never backed by a pressure gate. Live audit:
+        # edition 2026-09-30 closed with fresh contributions from 1 of 9
+        # assigned residents (docs/evidence/P73.md). Same proven ceiling
+        # pattern, applied to every resident rather than one named role -
+        # this is the most basic Gazette obligation of all four gates here,
+        # so it is checked (and its pressure resets/advances) before the
+        # review/close gates below, which only ever concern King/reviewer.
+        contribute_block = None
+        if name not in ('meeting_operation', 'gazette_operation', 'idle'):
+            pending_own = self.gazette_pending_own_contribution()
+            if not pending_own:
+                self.state['gazette_contribute_pressure'] = 0
+            else:
+                eid, kind = pending_own
+                pressure = int(self.state.get('gazette_contribute_pressure', 0)) + 1
+                self.state['gazette_contribute_pressure'] = pressure
+                self.event('gazette_contribute_required', f"edition={eid}; kind={kind}; pressure={pressure}")
+                if pressure >= GAZETTE_CONTRIBUTE_CEILING:
+                    example = ('{"name":"gazette_operation","arguments":{"operation":"contribute",'
+                               f'"edition_id":"{eid}","kind":"{kind}","headline":"...","content":"..."}}')
+                    contribute_block = (f"Gazette contribution required before more solo work: submit "
+                                        f"exactly this envelope for your assigned '{kind}' section "
+                                        f"(fill in headline and content): {example}",
+                                        f"edition={eid}; kind={kind}; pressure={pressure}")
+
         # P60 (operator: "Nicht nur beobachten wenn du GAPs identifizierst,
         # sondern proaktiv loesen"): live observation showed the Chronicler's
         # correctly-delivered, cross-day-persistent review hint (P57/P59)
@@ -1038,6 +1136,10 @@ class Resident:
         if meeting_block:
             self.feedback(name, meeting_block[0], False)
             self.event('meeting_gate', meeting_block[1])
+            return False
+        if contribute_block:
+            self.feedback(name, contribute_block[0], False)
+            self.event('gazette_contribute_gate', contribute_block[1])
             return False
         if gazette_block:
             self.feedback(name, gazette_block[0], False)

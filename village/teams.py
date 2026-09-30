@@ -254,6 +254,30 @@ class TeamStore:
             result["votes"] = [dict(x) for x in db.execute("SELECT * FROM role_votes WHERE proposal_id=?", (proposal_id,))]
             return result
 
+    def recent_decisions(self, limit: int = 6) -> List[Dict[str, Any]]:
+        """Recently decided (accepted or rejected) role proposals with their
+        vote tally - the real "Abstimmungen, Entscheidungen" source for the
+        Gazette's 'meetings' contribution kind (P73). Bounded and read-only;
+        never touches 'open' proposals, which are not decisions yet."""
+        with self._conn() as db:
+            rows = db.execute(
+                "SELECT rp.id, rp.team_id, t.project, rp.proposer, rp.role, rp.rationale, "
+                "rp.status, rp.created_at, rp.decided_at FROM role_proposals rp "
+                "JOIN teams t ON t.id = rp.team_id "
+                "WHERE rp.status IN ('accepted','rejected') ORDER BY rp.decided_at DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+            result = []
+            for row in rows:
+                d = dict(row)
+                tally = db.execute(
+                    "SELECT choice, COUNT(*) AS n FROM role_votes WHERE proposal_id=? GROUP BY choice",
+                    (d["id"],),
+                ).fetchall()
+                d["votes"] = {r["choice"]: r["n"] for r in tally}
+                result.append(d)
+            return result
+
     def list_for_agent(self, agent: str, limit: int = 12) -> List[Dict[str, Any]]:
         with self._conn() as db:
             rows = db.execute("SELECT t.id FROM teams t JOIN team_members m ON m.team_id=t.id WHERE m.agent_id=? AND m.status='active' AND t.status!='closed' ORDER BY t.updated_at DESC LIMIT ?", (agent, limit)).fetchall()

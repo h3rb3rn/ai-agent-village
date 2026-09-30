@@ -56,6 +56,22 @@ class MeetingStore:
             c.commit()
         return {'meeting_id':meeting_id,'agent_id':agent_id,'saved':True}
 
+    def recent_closed(self, limit=4):
+        """Recently closed meetings (JourFixe/Standup) with every resident's
+        report - the real, faithful source for the Gazette's 'meetings'
+        contribution kind (P73), so a summary article is built from what
+        was actually reported rather than invented."""
+        with sqlite3.connect(self.db_path) as c:
+            c.row_factory = sqlite3.Row
+            meetings = [dict(r) for r in c.execute(
+                "SELECT * FROM meetings WHERE status='closed' ORDER BY closed_at DESC LIMIT ?", (limit,)
+            ).fetchall()]
+            for m in meetings:
+                m["reports"] = [dict(r) for r in c.execute(
+                    "SELECT * FROM meeting_reports WHERE meeting_id=? ORDER BY created_at", (m["id"],)
+                ).fetchall()]
+            return meetings
+
     def close(self, meeting_id):
         with sqlite3.connect(self.db_path, timeout=30) as c:
             c.execute("UPDATE meetings SET status='closed',closed_at=? WHERE id=?",(now(),meeting_id)); c.commit()

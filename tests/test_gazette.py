@@ -115,6 +115,9 @@ class AssignKindsTests(unittest.TestCase):
             # mandatory per-resident rotation.
             self.assertNotEqual(kind, "column")
         self.assertEqual(self.store.get_edition("2026-09-28")["assignments"], assignments)
+        # P73: 'meetings' is a regular, rotation-assigned kind (unlike
+        # 'column') - it must actually turn up across a big enough roster.
+        self.assertIn("meetings", assignments.values())
 
     def test_assignment_is_idempotent_like_the_game(self):
         first = self.store.assign_kinds("2026-09-28", "01-king", PEERS, rng=random.Random(1))
@@ -207,6 +210,15 @@ class SubmitContributionTests(unittest.TestCase):
         # angemessen viel Spielraum fuer Text geben."
         result = self.store.submit_contribution("2026-09-28", "03-librarian", "column", "A deep dive", "x" * 5000)
         contrib = next(c for c in result["contributions"] if c["kind"] == "column")
+        self.assertGreater(len(contrib["content"]), MAX_CONTRIBUTION_CHARS)
+        self.assertLessEqual(len(contrib["content"]), MAX_COLUMN_CHARS)
+
+    def test_meetings_kind_also_gets_the_longer_column_budget(self):
+        # P73 (operator directive): a JourFixe/StandUp summary with
+        # decisions/votes needs the same long-form room as 'column', not
+        # the everyday newspaper-item length.
+        result = self.store.submit_contribution("2026-09-28", "03-librarian", "meetings", "Sitzung entschied", "x" * 2500)
+        contrib = next(c for c in result["contributions"] if c["kind"] == "meetings")
         self.assertGreater(len(contrib["content"]), MAX_CONTRIBUTION_CHARS)
         self.assertLessEqual(len(contrib["content"]), MAX_COLUMN_CHARS)
 
@@ -343,6 +355,19 @@ class CompileEditionTests(unittest.TestCase):
         self.assertIn("<h2>Kolumne</h2>", rendered)
         self.assertIn("An in-depth, longer-form piece.", rendered)
         # A column must not also show up in the per-resident interview grid.
+        self.assertNotIn("<h3>02-explorer</h3>", rendered)
+
+    def test_meetings_gets_its_own_section(self):
+        # P73 (operator directive): "eine Zusammenfassung der JourFixe und
+        # StandUp Meetings [...] mit Abstimmungen, Entscheidungen etc." -
+        # same prominence as Dorfmeldungen/Kolumne, not buried in the grid.
+        self.store.submit_contribution("2026-09-28", "02-explorer", "meetings", "JourFixe beschliesst Rollenwechsel",
+                                        "Zusammenfassung der Sitzung mit Abstimmungsergebnis.")
+        self.store.review_contribution("2026-09-28", "02-explorer", "meetings", REVIEWER_AGENT, "approve")
+        rendered = self.store.compile_edition("2026-09-28")
+        self.assertIn("<h2>Aus den Sitzungen</h2>", rendered)
+        self.assertIn("Zusammenfassung der Sitzung mit Abstimmungsergebnis.", rendered)
+        # Must not also show up in the per-resident interview grid.
         self.assertNotIn("<h3>02-explorer</h3>", rendered)
 
     def test_missing_headline_does_not_break_rendering(self):

@@ -47,6 +47,13 @@ CONTRIBUTION_KINDS = (
     "outlook",     # Ausblick auf morgen
     "game_result", # Ergebnis/Verlauf des Tagesspiels, nur fuer die geloosten Teilnehmer
     "village_news",# eine faktische Kurzmeldung zum Dorfgeschehen, jeder darf
+    # P73 (operator directive): "eine Zusammenfassung der JourFixe und
+    # StandUp Meetings [...] mit Abstimmungen, Entscheidungen etc." - a
+    # regular, rotation-assigned kind (unlike 'column'), built from real
+    # closed-meeting reports and decided role_proposals/role_votes now
+    # surfaced into context (see runtime.py's recent_meetings_closed_untrusted
+    # / recent_role_decisions_untrusted), never invented from scratch.
+    "meetings",    # Zusammenfassung von JourFixe/StandUp inkl. Beschluesse
     # P69 (operator feedback): "Fuer komplexe Themen sollte es auch
     # angemessen viel Spielraum fuer Text geben. Gelegentlich Kolumnen
     # waeren schoen." An occasional, opt-in, longer-form opinion/feature
@@ -79,7 +86,10 @@ HEADLINE_MAX_CHARS = 120
 
 
 def max_chars_for_kind(kind: str) -> int:
-    return MAX_COLUMN_CHARS if kind == "column" else MAX_CONTRIBUTION_CHARS
+    # P73: 'meetings' must synthesize potentially several closed meetings
+    # plus any decided role proposals into one coherent article - the same
+    # long-form room as 'column', not the everyday newspaper-item length.
+    return MAX_COLUMN_CHARS if kind in ("column", "meetings") else MAX_CONTRIBUTION_CHARS
 
 # A small, low-format-risk pool of daily "games" in place of a sports
 # section - each expressible in one or two short board messages, nothing
@@ -105,6 +115,7 @@ KIND_LABELS = {
     "outlook": "Ausblick",
     "game_result": "Spielergebnis",
     "village_news": "Dorfmeldungen",
+    "meetings": "Aus den Sitzungen",
     "column": "Kolumne",
 }
 
@@ -430,6 +441,16 @@ class GazetteStore:
             parts.append(article(c_))
         parts.append("</section>")
 
+        if by_kind.get("meetings"):
+            # P73 (operator directive): JourFixe/StandUp summaries with
+            # decisions/votes get their own section, same prominence as
+            # Dorfmeldungen/Kolumne, distinct from the per-resident interview
+            # grid below.
+            parts.append("<section><h2>Aus den Sitzungen</h2>")
+            for c_ in by_kind["meetings"]:
+                parts.append(article(c_))
+            parts.append("</section>")
+
         if by_kind.get("column"):
             # P69 (operator feedback): "Gelegentlich Kolumnen waeren schoen" -
             # occasional, longer-form pieces get their own section, distinct
@@ -439,7 +460,7 @@ class GazetteStore:
                 parts.append(article(c_))
             parts.append("</section>")
 
-        interview_kinds = [k for k in CONTRIBUTION_KINDS if k not in ("village_news", "game_result", "column")]
+        interview_kinds = [k for k in CONTRIBUTION_KINDS if k not in ("village_news", "game_result", "meetings", "column")]
         agents_with_content = sorted({c_["agent"] for k in interview_kinds for c_ in by_kind.get(k, [])})
         if agents_with_content:
             parts.append("<section><h2>Interviews</h2>")

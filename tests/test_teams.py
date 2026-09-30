@@ -52,6 +52,26 @@ class TeamStoreTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.store.claim_subtask("01-alpha", sub["id"])
 
+    def test_recent_decisions_returns_only_decided_proposals_with_vote_tally(self):
+        # P73: the real "Abstimmungen, Entscheidungen" source for the
+        # Gazette's 'meetings' kind - an open (undecided) proposal must
+        # never appear, and the tally must reflect the actual votes cast.
+        team = self.store.create("01-alpha", {"project": "p", "goal": "goal with evidence", "role": "builder"})
+        self.store.join("02-beta", team["id"])
+        self.store.join("03-gamma", team["id"])
+        accepted = self.store.propose_role("02-beta", team["id"], "critic", "independent review is the bottleneck")
+        self.store.vote_role("01-alpha", accepted["id"], "accept")
+        self.store.vote_role("03-gamma", accepted["id"], "accept")
+        still_open = self.store.propose_role("01-alpha", team["id"], "archivist", "not decided yet")
+        decisions = self.store.recent_decisions(limit=6)
+        ids = [d["id"] for d in decisions]
+        self.assertIn(accepted["id"], ids)
+        self.assertNotIn(still_open["id"], ids)
+        decided = next(d for d in decisions if d["id"] == accepted["id"])
+        self.assertEqual(decided["status"], "accepted")
+        self.assertEqual(decided["votes"], {"accept": 2})
+        self.assertEqual(decided["role"], "critic")
+
 
 if __name__ == "__main__":
     unittest.main()
