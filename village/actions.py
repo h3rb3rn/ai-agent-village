@@ -16,6 +16,8 @@ from village.calendar import RECURRENCES as _CALENDAR_RECURRENCES
 from village.finetune import GPU_COUNT as _FINETUNE_GPU_COUNT
 from village.finetune import RUN_STATUSES as _FINETUNE_RUN_STATUSES
 from village.gazette import CONTRIBUTION_KINDS as _GAZETTE_KINDS
+from village.gazette import GAME_SOLUTION_MAX_CHARS as _GAZETTE_GAME_SOLUTION_MAX_CHARS
+from village.gazette import GAME_TASK_MAX_CHARS as _GAZETTE_GAME_TASK_MAX_CHARS
 from village.gazette import HEADLINE_MAX_CHARS as _GAZETTE_HEADLINE_MAX_CHARS
 from village.gazette import MAX_COLUMN_CHARS as _GAZETTE_MAX_COLUMN_CHARS
 from village.gazette import MAX_CONTRIBUTION_CHARS as _GAZETTE_MAX_CHARS
@@ -132,17 +134,18 @@ ACTION_SPECS: Dict[str, Dict[str, Any]] = {
         # King's separate arbiter act for the daily game.
         "doc": "operation=open(King only, starts today's AI Village Gazette edition and draws the "
               "day's game+pair)|assign(King only, delegates one contribution kind to each resident)|"
-              "contribute(kind,headline,content)|"
+              "contribute(kind,headline,content; game_result also needs task+solution)|"
               f"review({_GAZETTE_REVIEWER} only, agent,kind,decision=approve|reject,note?)"
               "|close(King only, compiles all approved contributions into the archived edition)"
               "|declare_winner(King only, winner=<agent or 'unentschieden'>,note?)"
               f"|view(edition_id?) -> the daily village paper; kind is one of {'/'.join(_GAZETTE_KINDS)} "
-              "(column occasional/never assigned; game_result: drawn pair, name task/solution/winner-pick); "
+              "(column occasional/never assigned); "
               f"headline max {_GAZETTE_HEADLINE_MAX_CHARS} chars, two lines read like a real newspaper "
               f"headline, not the kind name repeated; content max {_GAZETTE_MAX_CHARS} chars "
               f"(column/meetings: {_GAZETTE_MAX_COLUMN_CHARS}) - a short newspaper item (a concrete lede "
-              f"fact plus a few sentences of real detail), not a one-liner and not an essay. Only "
-              f"{_GAZETTE_REVIEWER}-approved contributions ever appear in the compiled edition.",
+              f"fact plus a few sentences of real detail), not a one-liner and not an essay. game_result: "
+              "task=the posed question, solution=your own answer, both required, never the generic rules. "
+              f"Only {_GAZETTE_REVIEWER}-approved contributions ever appear in the compiled edition.",
         "properties": {
             "operation": {"enum": ["open", "assign", "contribute", "review", "close", "declare_winner", "view"]},
             "kind": {"enum": list(_GAZETTE_KINDS)},
@@ -150,6 +153,7 @@ ACTION_SPECS: Dict[str, Dict[str, Any]] = {
             "content": _s(_GAZETTE_MAX_COLUMN_CHARS), "edition_id": _s(20), "agent": _s(40),
             "decision": {"enum": ["approve", "reject"]},
             "winner": _s(40),
+            "task": _s(_GAZETTE_GAME_TASK_MAX_CHARS), "solution": _s(_GAZETTE_GAME_SOLUTION_MAX_CHARS),
             "note": _s(400)},
         "required": ["operation"]},
     # P75 (operator directive): every resident proactively plans their own

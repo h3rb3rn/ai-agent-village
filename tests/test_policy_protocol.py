@@ -80,6 +80,15 @@ class ActionSpecTests(unittest.TestCase):
             "name": "gazette_operation",
             "arguments": {"operation": "declare_winner", "winner": "02-b"},
         }))
+        # P82: task/solution are new, optional-at-schema-level fields
+        # (enforced as required for kind='game_result' at the store level,
+        # see village/gazette.py's submit_contribution) - must be
+        # producible under grammar-constrained decoding.
+        self.assertTrue(schema_accepts(schema, {
+            "name": "gazette_operation",
+            "arguments": {"operation": "contribute", "kind": "game_result", "headline": "H", "content": "C",
+                          "task": "Frage?", "solution": "Antwort."},
+        }))
 
     def test_calendar_schema_accepts_every_kind_and_recurrence(self):
         # P75: same class of drift P74 found and fixed for the Gazette -

@@ -84,6 +84,13 @@ MAX_COLUMN_CHARS = 3000
 # time. ~60 chars/line at typical dashboard width * 2 lines.
 HEADLINE_MAX_CHARS = 120
 
+# P82 (operator feedback): the game's posed task and each participant's own
+# solution get their own bounded fields now, separate from 'content' - short
+# enough to stay a fact, not an essay, same newspaper-item discipline as the
+# rest of this module.
+GAME_TASK_MAX_CHARS = 300
+GAME_SOLUTION_MAX_CHARS = 600
+
 
 def max_chars_for_kind(kind: str) -> int:
     # P73: 'meetings' must synthesize potentially several closed meetings
@@ -151,6 +158,17 @@ class GazetteStore:
                 created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
                 UNIQUE(edition_id, agent, kind),
                 FOREIGN KEY(edition_id) REFERENCES gazette_editions(id) ON DELETE CASCADE)""")
+            # P82 (operator feedback, 2026-09-30): "Der Spielreport enthaelt
+            # nur die Auslosung, nicht die Frage und Antwort." The prose-only
+            # style hint (runtime.py's gazette_pending_game_result() text)
+            # was not enough - same lesson as P58's meeting-report example
+            # ("a literal example beats a field-name description"). These
+            # two columns are only ever populated for kind='game_result' and
+            # are enforced (non-empty) in submit_contribution() for that
+            # kind specifically, so the posed task and the agent's own
+            # solution are structurally guaranteed to survive into the
+            # compiled edition rather than depending on free-text 'content'
+            # compliance.
             c.execute("CREATE INDEX IF NOT EXISTS idx_gazette_contrib_edition ON gazette_contributions(edition_id)")
             # P55 (operator directive): "die Zeitung sollte nicht aus
             # ungeprueften Beitraegen bestehen" - a compiled edition must
@@ -172,6 +190,11 @@ class GazetteStore:
             # default, so the migration never fails against live data.
             if "headline" not in existing_cols:
                 c.execute("ALTER TABLE gazette_contributions ADD COLUMN headline TEXT NOT NULL DEFAULT ''")
+            # P82: see the CREATE TABLE comment above.
+            if "task" not in existing_cols:
+                c.execute("ALTER TABLE gazette_contributions ADD COLUMN task TEXT NOT NULL DEFAULT ''")
+            if "solution" not in existing_cols:
+                c.execute("ALTER TABLE gazette_contributions ADD COLUMN solution TEXT NOT NULL DEFAULT ''")
             # P53: a generic "pick any kind" hint proved too weak to actually
             # produce contributions (live observation: 0 after ~30 min
             # across all 9 residents despite a confirmed-delivered hint -
@@ -232,6 +255,17 @@ class GazetteStore:
             return existing
         rng = rng or random.Random()
         game = rng.choice(GAME_POOL)
+        # P82 (operator feedback: "Die Auslosung ist auch nicht eindeutig"):
+        # rng.sample() already returns the pair in random order, but nothing
+        # previously attached meaning to that order - both drawn agents got
+        # the identical symmetric instruction, so the compiled edition only
+        # ever showed an unordered "Ausgelost: A, B" with no way to tell who
+        # was meant to pose the task and who was meant to answer it. Fixed
+        # position, real meaning: pair[0] opens (poses the task/question/
+        # streitpunkt/startwort), pair[1] responds - stored as that same
+        # list order, no new column needed, and rendered explicitly in
+        # compile_edition() and named explicitly in each agent's own hint
+        # (see runtime.py's gazette_pending_game_result()).
         pair = rng.sample(peers, 2) if len(peers) >= 2 else list(peers)
         with self._conn() as c:
             c.execute(
@@ -325,7 +359,8 @@ class GazetteStore:
             )]
         return [self.get_edition(i) for i in ids]  # type: ignore
 
-    def submit_contribution(self, edition_id: str, agent: str, kind: str, headline: str, content: str) -> Dict[str, Any]:
+    def submit_contribution(self, edition_id: str, agent: str, kind: str, headline: str, content: str,
+                            task: str = "", solution: str = "") -> Dict[str, Any]:
         if kind not in CONTRIBUTION_KINDS:
             raise ValueError(f"unknown gazette contribution kind: {kind}")
         # P69 (operator feedback): a real newspaper item has a distinct
@@ -338,6 +373,23 @@ class GazetteStore:
         content = str(content).strip()[:max_chars_for_kind(kind)]
         if not content:
             raise ValueError("gazette contribution requires non-empty content")
+        # P82 (operator feedback: "enthaelt nur die Auslosung, nicht die
+        # Frage und Antwort"): the prose instruction to fold task/solution
+        # into 'content' proved as unreliable here as it was for 'meetings'
+        # - structurally required fields instead, same fix class as P58's
+        # literal JSON example. Both are cleared to '' for every other kind
+        # (a stray task/solution on a 'mood' row would never be rendered
+        # anywhere, but keeping them empty avoids silently storing noise).
+        task = str(task).strip()[:GAME_TASK_MAX_CHARS]
+        solution = str(solution).strip()[:GAME_SOLUTION_MAX_CHARS]
+        if kind == "game_result":
+            if not task:
+                raise ValueError("game_result requires a non-empty task (the concrete question/challenge posed)")
+            if not solution:
+                raise ValueError("game_result requires a non-empty solution (your own answer/move)")
+        else:
+            task = ""
+            solution = ""
         edition = self.get_edition(edition_id)
         if not edition:
             raise ValueError(f"unknown gazette edition: {edition_id}")
@@ -359,12 +411,14 @@ class GazetteStore:
             # edit to already-approved content must not silently keep the
             # old approval, since the reviewer never saw the new text.
             c.execute(
-                "INSERT INTO gazette_contributions(edition_id,agent,kind,headline,content,created_at,updated_at,review_status) "
-                "VALUES(?,?,?,?,?,?,?,'pending') "
+                "INSERT INTO gazette_contributions(edition_id,agent,kind,headline,content,task,solution,"
+                "created_at,updated_at,review_status) "
+                "VALUES(?,?,?,?,?,?,?,?,?,'pending') "
                 "ON CONFLICT(edition_id,agent,kind) DO UPDATE SET headline=excluded.headline, content=excluded.content, "
+                "task=excluded.task, solution=excluded.solution, "
                 "updated_at=excluded.updated_at, "
                 "review_status='pending', reviewed_by=NULL, reviewed_at=NULL, review_note=NULL",
-                (edition_id, agent, kind, headline, content, ts, ts),
+                (edition_id, agent, kind, headline, content, task, solution, ts, ts),
             )
             c.commit()
         return self.get_edition(edition_id)  # type: ignore
@@ -463,6 +517,17 @@ class GazetteStore:
             head = f'<h4>{esc(c_["headline"])}</h4>' if c_.get("headline") else ""
             return f'<article>{head}<p>{esc(c_["content"])}</p><p class="byline">— {esc(c_["agent"])}</p></article>'
 
+        def game_article(c_: Dict[str, Any], role_label: str) -> str:
+            # P82 (operator feedback: "enthaelt nur die Auslosung, nicht die
+            # Frage und Antwort"): the structured task/solution fields (see
+            # submit_contribution()) are rendered explicitly here, instead
+            # of relying on them having been folded into free-text 'content'
+            # - 'content' still appears underneath as optional extra colour.
+            head = f'<h4>{esc(c_["headline"])}</h4>' if c_.get("headline") else ""
+            extra = f'<p>{esc(c_["content"])}</p>' if c_.get("content") else ""
+            return (f'<article>{head}<p class="byline">{esc(c_["agent"])} ({role_label})</p>'
+                    f'<p><strong>Lösung:</strong> {esc(c_["solution"])}</p>{extra}</article>')
+
         parts = [
             "<!doctype html><html lang=\"de\"><head><meta charset=\"utf-8\">"
             f"<title>AI Village Gazette – Ausgabe {esc(edition_id)}</title></head><body>",
@@ -481,17 +546,33 @@ class GazetteStore:
 
         # P74 (operator feedback): "Es ist nicht ersichtlich welcher Agent
         # was gemacht und womit gewonnen hat [...] gestellte Aufgabe und
-        # erfolgte Loesung der Agents sowie den benannten Gewinner." Each
-        # participant's own game_result article (task posed + own
-        # solution, per the dedicated style hint in runtime.py) is already
-        # attributed by name via article()'s byline; the one piece that was
-        # genuinely missing is a single, explicit winner line.
+        # erfolgte Loesung der Agents sowie den benannten Gewinner."
+        # P82 (operator feedback, same day, next read of a real edition):
+        # "Der Spielreport enthaelt nur die Auslosung, nicht die Frage und
+        # Antwort. Die Auslosung ist auch nicht eindeutig." Both gaps
+        # closed structurally: the drawn pair now carries an explicit,
+        # unambiguous role (pair[0]=opener poses the task, pair[1]=
+        # responder answers it - see open_edition()), rendered here in
+        # plain language instead of a bare name list; the task itself is
+        # taken from whichever game_result contribution has one (normally
+        # the opener's, but either can carry it), shown once rather than
+        # buried inside prose.
         parts.append("<section><h2>Spiel des Tages</h2>")
         parts.append(f'<p>{esc(edition["game_name"])}</p>')
-        if edition["game_pair"]:
-            parts.append(f'<p class="byline">Ausgelost: {esc(", ".join(edition["game_pair"]))}</p>')
-        for c_ in by_kind.get("game_result", []):
-            parts.append(article(c_))
+        pair = edition["game_pair"]
+        role_of = {}
+        if len(pair) >= 2:
+            role_of = {pair[0]: "stellt die Aufgabe", pair[1]: "antwortet"}
+            parts.append(f'<p class="byline">Ausgelost: {esc(pair[0])} (stellt die Aufgabe) '
+                         f'vs. {esc(pair[1])} (antwortet)</p>')
+        elif pair:
+            parts.append(f'<p class="byline">Ausgelost: {esc(pair[0])}</p>')
+        game_results = by_kind.get("game_result", [])
+        task_text = next((c_["task"] for c_ in game_results if c_.get("task")), "")
+        if task_text:
+            parts.append(f'<p><strong>Aufgabe:</strong> {esc(task_text)}</p>')
+        for c_ in game_results:
+            parts.append(game_article(c_, role_of.get(c_["agent"], "Teilnehmer")))
         if edition.get("game_winner"):
             winner_label = "Unentschieden" if edition["game_winner"] == "unentschieden" else esc(edition["game_winner"])
             note = f' – {esc(edition["game_winner_note"])}' if edition.get("game_winner_note") else ""

@@ -818,6 +818,29 @@ class RuntimeTests(unittest.TestCase):
         self.assertIn('recent_meetings_closed_untrusted', ctx['gazette_daily_note'])
         self.assertIn('never invent', ctx['gazette_daily_note'])
 
+    def test_gazette_meetings_hint_gives_a_fillable_skeleton_and_bans_off_topic_content(self):
+        # P82 (operator feedback, after reading a real 'meetings' edition:
+        # a live contribution was mostly the author's own project status
+        # with only a passing meeting mention, not a synthesized article).
+        # The P73 hint above named the source fields but not a concrete
+        # shape - same fix class as P58's literal meeting-report example.
+        roomy_env = dict(self.env, OLLAMA_NUM_CTX='32768')
+        agent = Resident(roomy_env)
+        edition = agent.gazette.open_edition('01-king', ['01-a', '02-b'])
+        agent.gazette.assign_kinds(edition['id'], '01-king', ['01-a', '02-b'])
+        with agent.gazette._conn() as c:
+            c.execute("UPDATE gazette_assignments SET kind='meetings' WHERE edition_id=? AND agent='01-a'",
+                     (edition['id'],))
+            c.commit()
+        agent.meetings.schedule('standup', 'daily', 'now', '01-king', 'm1')
+        agent.meetings.report('m1', '01-a', achieved='shipped a fix', next_step='verify', blockers='none')
+        agent.meetings.close('m1')
+        with patch.object(agent, 'memory', return_value={'items': []}):
+            ctx = json.loads(agent.snapshot())
+        note = ctx['gazette_daily_note']
+        self.assertIn('not your own project status', note)
+        self.assertIn('Beim <JourFixe/StandUp>', note)
+
     def test_gazette_style_hint_bans_notepad_style_for_every_kind(self):
         # P73 (operator directive): "soll sich wie ein echter ausgearbeiteter
         # Artikel und nicht wie ein Notizzettel lesen. Das gilt fuer alle
@@ -860,12 +883,14 @@ class RuntimeTests(unittest.TestCase):
             self.agent.execute({'tool_call': {'name': 'execute_bash', 'arguments': {'command': f'printf ok{i}'}}})
         self.agent.execute({'tool_call': {'name': 'gazette_operation', 'arguments': {
             'operation': 'contribute', 'kind': 'game_result', 'headline': 'Quiz entschieden',
-            'content': 'Die gestellte Frage war X, meine Antwort war Y.'}}})
+            'content': 'Die gestellte Frage war X, meine Antwort war Y.',
+            'task': 'Frage X', 'solution': 'Antwort Y'}}})
         self.assertTrue(self.agent.state['last_result']['ok'])
 
     def test_game_result_gate_resets_once_submitted(self):
         edition = self.agent.gazette.open_edition('01-king', ['01-a', '02-b'])
-        self.agent.gazette.submit_contribution(edition['id'], '01-a', 'game_result', 'Quiz', 'Meine Antwort war Y.')
+        self.agent.gazette.submit_contribution(edition['id'], '01-a', 'game_result', 'Quiz', 'Meine Antwort war Y.',
+                                               task='Frage X', solution='Antwort Y')
         for i in range(GAZETTE_GAME_RESULT_CEILING + 5):
             self.agent.execute({'tool_call': {'name': 'execute_bash', 'arguments': {'command': f'printf ok{i}'}}})
         self.assertEqual(self.agent.state.get('gazette_game_result_pressure', 0), 0)
@@ -881,8 +906,10 @@ class RuntimeTests(unittest.TestCase):
         king = Resident(king_env)
         edition = king.gazette.open_edition('01-king', ['01-a', '02-b'])
         pair = edition['game_pair']
-        king.gazette.submit_contribution(edition['id'], pair[0], 'game_result', 'Quiz', 'Antwort A.')
-        king.gazette.submit_contribution(edition['id'], pair[1], 'game_result', 'Quiz', 'Antwort B.')
+        king.gazette.submit_contribution(edition['id'], pair[0], 'game_result', 'Quiz', 'Antwort A.',
+                                         task='Frage X', solution='Antwort A.')
+        king.gazette.submit_contribution(edition['id'], pair[1], 'game_result', 'Quiz', 'Antwort B.',
+                                         task='Frage X', solution='Antwort B.')
         king.execute({'tool_call': {'name': 'gazette_operation', 'arguments': {
             'operation': 'declare_winner', 'edition_id': edition['id'], 'winner': pair[0], 'note': 'schneller'}}})
         self.assertTrue(king.state['last_result']['ok'])
@@ -899,9 +926,11 @@ class RuntimeTests(unittest.TestCase):
         king = Resident(king_env)
         edition = king.gazette.open_edition('01-king', ['01-a', '02-b'])
         pair = edition['game_pair']
-        king.gazette.submit_contribution(edition['id'], pair[0], 'game_result', 'Quiz', 'Antwort A.')
+        king.gazette.submit_contribution(edition['id'], pair[0], 'game_result', 'Quiz', 'Antwort A.',
+                                         task='Frage X', solution='Antwort A.')
         self.assertIsNone(king.gazette_pending_game_winner())  # only one of two submitted
-        king.gazette.submit_contribution(edition['id'], pair[1], 'game_result', 'Quiz', 'Antwort B.')
+        king.gazette.submit_contribution(edition['id'], pair[1], 'game_result', 'Quiz', 'Antwort B.',
+                                         task='Frage X', solution='Antwort B.')
         self.assertEqual(king.gazette_pending_game_winner(), (edition['id'], pair))
         king.state['gazette_game_winner_pressure'] = GAZETTE_GAME_WINNER_CEILING - 1
         king.execute({'tool_call': {'name': 'execute_bash', 'arguments': {'command': 'printf ok'}}})

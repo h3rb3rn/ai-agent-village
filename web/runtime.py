@@ -541,19 +541,25 @@ class Resident:
         return edition['id'], assigned_kind
 
     def gazette_pending_game_result(self):
-        """(edition_id,) if THIS agent is part of the active edition's
+        """(edition_id, role) if THIS agent is part of the active edition's
         drawn game pair and has not yet submitted a game_result - None
         otherwise. P74: 'game_result' is deliberately excluded from
         assign_kinds()'s rotation, so gazette_pending_own_contribution()
-        never covers it - this is its own, separate obligation."""
+        never covers it - this is its own, separate obligation. P82
+        (operator feedback: "Die Auslosung ist auch nicht eindeutig"):
+        role is now always one of 'opener' (pair[0], poses the task) or
+        'responder' (pair[1], answers it) - see open_edition()'s own
+        comment for why that fixed position carries real meaning now."""
         edition = self.gazette.get_edition(self.gazette_active_edition_id())
         if not edition or edition['status'] == 'compiled':
             return None
-        if self.id not in edition.get('game_pair', []):
+        pair = edition.get('game_pair', [])
+        if self.id not in pair:
             return None
         if any(c['agent'] == self.id and c['kind'] == 'game_result' for c in edition['contributions']):
             return None
-        return (edition['id'],)
+        role = 'opener' if pair and pair[0] == self.id else 'responder'
+        return (edition['id'], role)
 
     def gazette_pending_game_winner(self):
         """(edition_id, [pair]) if THIS agent is King, the active edition
@@ -582,7 +588,18 @@ class Resident:
         reports and decided role proposals into context and point the
         contribution at them by name - the same anti-hallucination
         discipline compile_edition() already applies (no LLM-generated
-        connective text there; here, no invented meetings/votes either)."""
+        connective text there; here, no invented meetings/votes either).
+
+        P82 (operator feedback, next read of a real edition): the P73
+        version above already named the two context fields and asked for
+        real content, but a live 'meetings' contribution still turned out
+        to be mostly the author's own project-work status with only a
+        passing mention of a meeting - not a synthesized article. Same
+        lesson as P58's meeting-report example and P82's own game-result
+        fix: naming required SOURCES in prose was not enough, a literal,
+        fillable article skeleton is. Added here, plus an explicit
+        off-topic guard, since the failure mode observed was scope drift
+        into unrelated content rather than a missing-field/format error."""
         recent_meetings = self.meetings.recent_closed(limit=4)
         recent_decisions = self.teams.recent_decisions(limit=4)
         if recent_meetings:
@@ -592,12 +609,18 @@ class Resident:
         if not recent_meetings and not recent_decisions:
             return (" No closed meetings or decided role proposals are on record yet - state that "
                     "plainly rather than inventing a JourFixe/StandUp summary.")
-        return (" Base this specifically on recent_meetings_closed_untrusted (closed JourFixe/"
-                "StandUp meetings with every resident's achieved/next_step/blockers report) and "
-                "recent_role_decisions_untrusted (role proposals actually decided, with their "
-                "accept/reject vote tally) now in your context - name which meeting(s) and "
-                "decisions you are summarizing, and never invent a vote count or decision that "
-                "is not there.")
+        skeleton = ('"Beim <JourFixe/StandUp> am <Datum> berichtete(n) <Agent(en)> <Fortschritt/'
+                    'Blocker>. Entschieden wurde <Beschluss> (<X> dafuer, <Y> dagegen/enthalten). '
+                    'Naechste Schritte: <...>."')
+        return (" This kind is exclusively a synthesized article about the meetings/decisions "
+                "themselves - not your own project status, mood or tasks (use 'state'/'topics'/"
+                "'outlook' for those instead). Base it specifically on "
+                "recent_meetings_closed_untrusted (closed JourFixe/StandUp meetings with every "
+                "resident's achieved/next_step/blockers report) and recent_role_decisions_untrusted "
+                "(role proposals actually decided, with their accept/reject vote tally) now in your "
+                "context. Fill this skeleton with real values from them rather than inventing a "
+                f"structure of your own: {skeleton} Name which meeting(s) and decisions you are "
+                "summarizing, and never invent a vote count or decision that is not there.")
 
     def calendar_pending_daily_plan(self):
         """True if today is a workday (Mon-Fri) and this agent has not yet
@@ -968,10 +991,16 @@ class Resident:
                     for e in events
                 )
                 if not announced:
+                    pair = gazette_edition['game_pair']
+                    # P82 (operator feedback: "Die Auslosung ist auch nicht
+                    # eindeutig"): name the roles in King's own announce
+                    # hint too, not just a bare name list.
+                    pairing_text = (f"{pair[0]} (stellt die Aufgabe) vs. {pair[1]} (antwortet)"
+                                    if len(pair) >= 2 else ', '.join(pair))
                     context['gazette_daily_note'] = (
                         f"Today's AI Village Gazette edition is open (game: "
                         f"{gazette_edition['game_name']}; pairing: "
-                        f"{', '.join(gazette_edition['game_pair'])}). You have not yet told "
+                        f"{pairing_text}). You have not yet told "
                         "the village: send a board_message to ALL mentioning the Gazette so "
                         "peers know to contribute via gazette_operation contribute."
                     )
@@ -1042,13 +1071,29 @@ class Resident:
         # to the regular per-resident rotation P73 already covers.
         pending_game = self.gazette_pending_game_result()
         if pending_game:
+            eid, role = pending_game
+            # P82 (operator feedback: "Die Auslosung ist auch nicht
+            # eindeutig [...] nicht die Frage und Antwort"): role-specific
+            # instructions, not the old symmetric text both participants
+            # got regardless of who was meant to originate the question -
+            # and task/solution are now their own required fields (see
+            # village/gazette.py's submit_contribution), not just prose
+            # folded into 'content'.
+            if role == 'opener':
+                role_instruction = (
+                    "You are the opener: pose one concrete task/question/challenge that fits today's "
+                    "game, put it verbatim in task=..., and give your own solution=... to it."
+                )
+            else:
+                role_instruction = (
+                    "You are the responder: restate the opener's task verbatim in task=... so it is not "
+                    "lost, and give your own solution=... - your own actual answer/move, not the rules."
+                )
             game_hint = (
-                f" You are part of today's drawn game pair (edition {pending_game[0]}): submit a "
-                "gazette_operation contribute with kind='game_result' once you have actually played "
-                "your part. Write it as a real account, not a note: state the concrete task or "
-                "question that was actually posed, describe your own move/answer/solution in "
-                "specific detail, and give your own assessment of who won and why - King declares "
-                "the official winner afterwards. Do not just restate the game's generic rules."
+                f" You are part of today's drawn game pair (edition {eid}): submit a gazette_operation "
+                f"contribute with kind='game_result', task=..., solution=... once you have actually "
+                f"played your part. {role_instruction} Add a short free-text content=... assessment of "
+                "who won and why if you like - King declares the official winner afterwards."
             )
             context['gazette_daily_note'] = (context.get('gazette_daily_note', '') + game_hint).strip()
         pending_winner = self.gazette_pending_game_winner()
@@ -1423,20 +1468,26 @@ class Resident:
             if not pending_game:
                 self.state['gazette_game_result_pressure'] = 0
             else:
-                (eid,) = pending_game
+                eid, role = pending_game
                 pressure = int(self.state.get('gazette_game_result_pressure', 0)) + 1
                 self.state['gazette_game_result_pressure'] = pressure
-                self.event('gazette_game_result_required', f"edition={eid}; pressure={pressure}")
+                self.event('gazette_game_result_required', f"edition={eid}; role={role}; pressure={pressure}")
                 past_deadline = gazette_deadline_passed(GAZETTE_CONTRIBUTE_DEADLINE_HOUR_UTC)
                 if pressure >= GAZETTE_GAME_RESULT_CEILING or past_deadline:
+                    # P82: task/solution are now required, structured fields
+                    # (see village/gazette.py's submit_contribution) - the
+                    # copy-adaptable example must include them or a model
+                    # copying it verbatim would still fail validation.
                     example = ('{"name":"gazette_operation","arguments":{"operation":"contribute",'
-                               f'"edition_id":"{eid}","kind":"game_result","headline":"...","content":"..."}}')
+                               f'"edition_id":"{eid}","kind":"game_result","headline":"...",'
+                               '"task":"...","solution":"...","content":"..."}}')
                     deadline_note = (f" The {GAZETTE_CONTRIBUTE_DEADLINE_HOUR_UTC}:00 UTC contribution "
                                      "deadline has passed." if past_deadline else "")
                     game_result_block = (f"Today's game result required before more solo work:{deadline_note} "
-                                         f"submit exactly this envelope, naming the posed task, your own "
-                                         f"solution, and who you think won: {example}",
-                                         f"edition={eid}; pressure={pressure}; deadline={past_deadline}")
+                                         f"submit exactly this envelope - task=the concrete question/challenge "
+                                         f"({'you pose' if role == 'opener' else 'the opener posed, restated'}), "
+                                         f"solution=your own actual answer/move: {example}",
+                                         f"edition={eid}; role={role}; pressure={pressure}; deadline={past_deadline}")
 
         # P60 (operator: "Nicht nur beobachten wenn du GAPs identifizierst,
         # sondern proaktiv loesen"): live observation showed the Chronicler's
@@ -1966,7 +2017,9 @@ class Resident:
                     content = args.get('content', '')
                     edition_id = args.get('edition_id') or self.gazette_active_edition_id()
                     try:
-                        result = self.gazette.submit_contribution(edition_id, self.id, kind, headline, content)
+                        result = self.gazette.submit_contribution(
+                            edition_id, self.id, kind, headline, content,
+                            task=args.get('task', ''), solution=args.get('solution', ''))
                     except ValueError as exc:
                         self.feedback(name, str(exc), False)
                     else:

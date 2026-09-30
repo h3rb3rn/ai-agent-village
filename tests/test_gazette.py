@@ -151,7 +151,8 @@ class SubmitContributionTests(unittest.TestCase):
     def test_every_documented_kind_is_accepted(self):
         for kind in CONTRIBUTION_KINDS:
             agent = self.edition["game_pair"][0] if kind == "game_result" else "03-librarian"
-            self.store.submit_contribution("2026-09-28", agent, kind, "Update: see full text." , f"content for {kind}")
+            kwargs = {"task": "Was ist die Hauptstadt von Bayern?", "solution": "Muenchen"} if kind == "game_result" else {}
+            self.store.submit_contribution("2026-09-28", agent, kind, "Update: see full text." , f"content for {kind}", **kwargs)
 
     def test_unknown_kind_is_rejected(self):
         with self.assertRaises(ValueError):
@@ -176,9 +177,28 @@ class SubmitContributionTests(unittest.TestCase):
     def test_game_result_is_restricted_to_the_drawn_pair(self):
         bystander = next(p for p in PEERS if p not in self.edition["game_pair"])
         with self.assertRaises(ValueError):
-            self.store.submit_contribution("2026-09-28", bystander, "game_result", "Update: see full text." , "I won even though I wasn't picked")
+            self.store.submit_contribution("2026-09-28", bystander, "game_result", "Update: see full text." , "I won even though I wasn't picked",
+                                           task="Haiku zu Herbst", solution="Blaetter fallen leise")
         # the actually-drawn pair may submit without error
-        self.store.submit_contribution("2026-09-28", self.edition["game_pair"][0], "game_result", "Update: see full text." , "It was a close haiku duel.")
+        self.store.submit_contribution("2026-09-28", self.edition["game_pair"][0], "game_result", "Update: see full text." , "It was a close haiku duel.",
+                                       task="Haiku zu Herbst", solution="Blaetter fallen leise")
+
+    def test_game_result_requires_task_and_solution(self):
+        # P82 (operator feedback: "enthaelt nur die Auslosung, nicht die
+        # Frage und Antwort") - both are now structurally required fields,
+        # not just prose folded into 'content'.
+        opener = self.edition["game_pair"][0]
+        with self.assertRaises(ValueError):
+            self.store.submit_contribution("2026-09-28", opener, "game_result", "Update: see full text.", "body", task="", solution="Muenchen")
+        with self.assertRaises(ValueError):
+            self.store.submit_contribution("2026-09-28", opener, "game_result", "Update: see full text.", "body", task="Frage?", solution="  ")
+
+    def test_task_and_solution_are_ignored_for_other_kinds(self):
+        result = self.store.submit_contribution("2026-09-28", "03-librarian", "mood", "Update: see full text.", "Zuversichtlich.",
+                                                 task="should be dropped", solution="also dropped")
+        contrib = next(c for c in result["contributions"] if c["agent"] == "03-librarian" and c["kind"] == "mood")
+        self.assertEqual(contrib["task"], "")
+        self.assertEqual(contrib["solution"], "")
 
     def test_unknown_edition_is_rejected(self):
         with self.assertRaises(ValueError):
@@ -369,6 +389,36 @@ class CompileEditionTests(unittest.TestCase):
         self.assertIn("Zusammenfassung der Sitzung mit Abstimmungsergebnis.", rendered)
         # Must not also show up in the per-resident interview grid.
         self.assertNotIn("<h3>02-explorer</h3>", rendered)
+
+    def test_game_pairing_is_rendered_with_unambiguous_roles(self):
+        # P82 (operator feedback: "Die Auslosung ist auch nicht eindeutig") -
+        # the compiled edition must name who poses the task and who answers
+        # it, not just list two agent ids.
+        edition = self.store.get_edition("2026-09-28")
+        opener, responder = edition["game_pair"]
+        rendered = self.store.compile_edition("2026-09-28")
+        self.assertIn(f"{opener} (stellt die Aufgabe)", rendered)
+        self.assertIn(f"{responder} (antwortet)", rendered)
+
+    def test_game_result_shows_task_and_solution_structurally(self):
+        # P82 (operator feedback: "enthaelt nur die Auslosung, nicht die
+        # Frage und Antwort") - task/solution must be visible in the
+        # compiled edition, not only inside optional free-text content.
+        edition = self.store.get_edition("2026-09-28")
+        opener, responder = edition["game_pair"]
+        self.store.submit_contribution("2026-09-28", opener, "game_result", "Quizfrage gestellt",
+                                       "Ich habe nach der Hauptstadt gefragt.",
+                                       task="Was ist die Hauptstadt von Bayern?", solution="Ich habe die Frage gestellt.")
+        self.store.submit_contribution("2026-09-28", responder, "game_result", "Antwort gegeben",
+                                       "Kurze Ueberlegung, dann die Antwort.",
+                                       task="Was ist die Hauptstadt von Bayern?", solution="Muenchen")
+        self.store.review_contribution("2026-09-28", opener, "game_result", REVIEWER_AGENT, "approve")
+        self.store.review_contribution("2026-09-28", responder, "game_result", REVIEWER_AGENT, "approve")
+        rendered = self.store.compile_edition("2026-09-28")
+        self.assertIn("<strong>Aufgabe:</strong> Was ist die Hauptstadt von Bayern?", rendered)
+        self.assertIn("<strong>Lösung:</strong> Muenchen", rendered)
+        self.assertIn(f"{opener} (stellt die Aufgabe)", rendered)
+        self.assertIn(f"{responder} (antwortet)", rendered)
 
     def test_missing_headline_does_not_break_rendering(self):
         # Defensive: a pre-P69 row (already-archived editions) has no

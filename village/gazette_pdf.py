@@ -197,12 +197,33 @@ def edition_sections(edition: Dict[str, Any], issue_number: int, previous_id: st
             sections.extend(article_sections(c))
         sections.append(("gap", ""))
 
+    # P82 (operator feedback: "Der Spielreport enthaelt nur die Auslosung,
+    # nicht die Frage und Antwort. Die Auslosung ist auch nicht eindeutig.")
+    # - same structural fix as compile_edition(): explicit roles instead of
+    # a bare name pair, and the task/solution fields shown directly rather
+    # than relying on 'content' alone.
     sections.append(("heading", "Spiel des Tages"))
     sections.append(("body", edition["game_name"]))
-    if edition["game_pair"]:
-        sections.append(("body", f"Ausgelost: {', '.join(edition['game_pair'])}"))
-    for c in by_kind.get("game_result", []):
-        sections.extend(article_sections(c))
+    pair = edition["game_pair"]
+    role_of: Dict[str, str] = {}
+    if len(pair) >= 2:
+        role_of = {pair[0]: "stellt die Aufgabe", pair[1]: "antwortet"}
+        sections.append(("body", f"Ausgelost: {pair[0]} (stellt die Aufgabe) vs. {pair[1]} (antwortet)"))
+    elif pair:
+        sections.append(("body", f"Ausgelost: {pair[0]}"))
+    game_results = by_kind.get("game_result", [])
+    task_text = next((c["task"] for c in game_results if c.get("task")), "")
+    if task_text:
+        sections.append(("body", f"Aufgabe: {task_text}"))
+    for c in game_results:
+        out: List[Section] = []
+        if c.get("headline"):
+            out.append(("subhead", c["headline"]))
+        role = role_of.get(c["agent"], "Teilnehmer")
+        out.append(("body", f"Lösung: {c['solution']} — {c['agent']} ({role})"))
+        if c.get("content"):
+            out.append(("body", c["content"]))
+        sections.extend(out)
     sections.append(("gap", ""))
 
     if by_kind.get("column"):

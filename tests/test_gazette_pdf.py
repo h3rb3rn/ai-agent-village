@@ -116,6 +116,26 @@ class EditionSectionsTests(unittest.TestCase):
         joined = " ".join(text for _, text in sections)
         self.assertIn("An in-depth, longer-form piece.", joined)
 
+    def test_game_section_shows_roles_task_and_solution(self):
+        # P82 (operator feedback: "Der Spielreport enthaelt nur die
+        # Auslosung, nicht die Frage und Antwort. Die Auslosung ist auch
+        # nicht eindeutig.") - mirrors compile_edition()'s own P82 fix.
+        edition = self.store.get_edition("2026-09-28")
+        opener, responder = edition["game_pair"]
+        self.store.submit_contribution("2026-09-28", opener, "game_result", "Quizfrage gestellt",
+                                       "Ich habe gefragt.", task="Hauptstadt von Bayern?", solution="Ich habe gefragt.")
+        self.store.submit_contribution("2026-09-28", responder, "game_result", "Antwort gegeben",
+                                       "Kurz ueberlegt.", task="Hauptstadt von Bayern?", solution="Muenchen")
+        self.store.review_contribution("2026-09-28", opener, "game_result", "01-king", "approve")
+        self.store.review_contribution("2026-09-28", responder, "game_result", "01-king", "approve")
+        result = self.store.close_edition("2026-09-28", "01-king")
+        sections = edition_sections(result, result["issue_number"], result["previous_id"])
+        joined = " ".join(text for _, text in sections)
+        self.assertIn(f"{opener} (stellt die Aufgabe)", joined)
+        self.assertIn(f"{responder} (antwortet)", joined)
+        self.assertIn("Aufgabe: Hauptstadt von Bayern?", joined)
+        self.assertIn("Lösung: Muenchen", joined)
+
     def test_pdf_renders_the_headline_in_bold_courier(self):
         self.store.submit_contribution("2026-09-28", "04-artisan", "village_news", "Well Repaired",
                                         "The fountain was fixed.")
