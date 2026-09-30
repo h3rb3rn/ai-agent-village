@@ -952,6 +952,51 @@ class RuntimeTests(unittest.TestCase):
         self.assertIn(event['id'], ctx['calendar_daily_note'])
         self.assertIn('calendar_operation respond', ctx['calendar_daily_note'])
 
+    def test_calendar_meeting_sync_hint_absent_without_an_active_meeting(self):
+        self.assertEqual(self.agent.calendar_meeting_sync_hint('2026-09-30'), '')
+
+    def test_calendar_meeting_sync_hint_suggests_a_recurring_standup(self):
+        # P79 (operator: "Wann finden immer die StandUps und Jourfixes
+        # statt?"): live audit found daily_standup reliably opens once a
+        # day around the same real time - worth a genuine recurring entry.
+        self.agent.meetings.schedule('daily_standup', 'agenda', '2026-09-30T08:04:09+00:00', meeting_id='m1')
+        hint = self.agent.calendar_meeting_sync_hint('2026-09-30')
+        self.assertIn("kind='standup'", hint)
+        self.assertIn("start_time='08:04'", hint)
+        self.assertIn("recurrence='daily_weekday'", hint)
+
+    def test_calendar_meeting_sync_hint_suggests_a_one_off_jourfixe(self):
+        # jour_fixe has no fixed time (reopens irregularly) - never a
+        # recurring suggestion, only today's own occurrence.
+        self.agent.meetings.schedule('jour_fixe', 'agenda', '2026-09-30T14:37:00+00:00', meeting_id='m1')
+        hint = self.agent.calendar_meeting_sync_hint('2026-09-30')
+        self.assertIn("kind='jourfixe'", hint)
+        self.assertIn("start_time='14:37'", hint)
+        self.assertIn("recurrence='none'", hint)
+
+    def test_calendar_meeting_sync_hint_absent_once_already_mirrored(self):
+        self.agent.meetings.schedule('daily_standup', 'agenda', '2026-09-30T08:04:09+00:00', meeting_id='m1')
+        self.agent.calendar.create_event('01-a', 'Standup', 'standup', '2026-09-30', '08:04', 15,
+                                         recurrence='daily_weekday')
+        self.assertEqual(self.agent.calendar_meeting_sync_hint('2026-09-30'), '')
+
+    def test_sparring_partner_hint_appears_with_a_task_blocker(self):
+        item = self.agent.tasks.operate('01-a', dict(action='create', title='X', success_criterion='y'))
+        self.agent.tasks.operate('01-a', dict(action='claim', task_id=item['id']))
+        self.agent.tasks.operate('01-a', dict(action='progress', task_id=item['id'], blockers='stuck on X'))
+        with patch.object(self.agent, 'memory', return_value={'items': []}):
+            ctx = json.loads(self.agent.snapshot())
+        self.assertIn('task_blocker_guidance', ctx)
+        self.assertIn('sparring partner', ctx['task_blocker_guidance'])
+        self.assertIn('calendar_operation create', ctx['task_blocker_guidance'])
+
+    def test_sparring_partner_hint_appears_in_loop_breaker_note(self):
+        self.agent.state['invalid_streak'] = 999  # past LOOP_BREAKER_STREAK
+        with patch.object(self.agent, 'memory', return_value={'items': []}):
+            ctx = json.loads(self.agent.snapshot())
+        self.assertIn('loop_breaker_note', ctx)
+        self.assertIn('sparring partner', ctx['loop_breaker_note'])
+
     def test_calendar_create_reschedule_cancel_respond_end_to_end(self):
         from village.calendar import today as cal_today
         self.execute('calendar_operation', operation='create', title='Standup', kind='standup',

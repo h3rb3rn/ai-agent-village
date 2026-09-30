@@ -591,7 +591,42 @@ class Resident:
                 f"unresolved: {names}. As the initiator, coordinate a new slot with the affected agent(s) via "
                 "calendar_operation reschedule, or cancel it."
             )
+        sync_hint = self.calendar_meeting_sync_hint(today_str)
+        if sync_hint:
+            parts.append(sync_hint)
         return " ".join(parts)
+
+    def calendar_meeting_sync_hint(self, today_str):
+        """Concrete, copy-paste-ready nudge to mirror the REAL, currently
+        open standup/jourfixe into the agent's own calendar - P79
+        (operator: "es fehlen noch die Regeltermine [...] Wann finden
+        immer die StandUps und Jourfixes statt?"). Live audit of
+        meeting_opened events (2026-09-28 through 2026-09-30): the daily
+        standup reliably opens once a day, ~08:00-08:30 UTC - worth a
+        genuine recurring entry. jour_fixe has NO fixed time at all - it
+        reopens irregularly (observed 40 min to 6h apart) whenever the
+        previous round closes outside the 08:00 UTC hour, so it only ever
+        gets today's one-off occurrence, never a recurring series."""
+        meeting = next(iter(self.meetings.active()), None)
+        if not meeting:
+            return ''
+        cal_kind = 'standup' if meeting.get('kind') == 'daily_standup' else 'jourfixe'
+        if any(e['kind'] == cal_kind for e in self.calendar.list_for_agent(self.id, today_str, today_str)):
+            return ''
+        meeting_time = str(meeting.get('scheduled_for') or '')[11:16] or '08:00'
+        if cal_kind == 'standup':
+            return (
+                f"The daily standup is open right now (real slot ~{meeting_time} UTC, most days) but "
+                "missing from your calendar. Add it once as a recurring entry: calendar_operation "
+                f"create kind='standup', scheduled_date='{today_str}', start_time='{meeting_time}', "
+                "duration_minutes=15, recurrence='daily_weekday' - it repeats itself from then on."
+            )
+        return (
+            f"A jour fixe is open right now at {meeting_time} UTC but missing from your calendar. It "
+            "has no fixed daily time (reopens whenever the previous round closes) - add just today's "
+            f"occurrence: calendar_operation create kind='jourfixe', scheduled_date='{today_str}', "
+            f"start_time='{meeting_time}', duration_minutes=30, recurrence='none'."
+        )
 
     def finetune_daily_note(self):
         """Advisory only, deliberately never gated (unlike every Gazette/
@@ -614,6 +649,22 @@ class Resident:
                 return (f"{len(pending)} fine-tune swap request(s) await your review: {names}. Use "
                        "finetune_operation review_swap with decision=approve|reject.")
         return ""
+
+    def sparring_partner_hint(self):
+        """P79 (operator directive): "Wenn Agents an einer Aufgabe
+        Festhaengen sollen Sie sich ein Sparring Partner holen." Appended
+        to the two already-proven 'genuinely stuck' signals - a stated
+        task blocker and the P72 loop-breaker's idle-only state - rather
+        than inventing a third detector. Points at a real, bookable action
+        (the P75 calendar) alongside the existing ad-hoc message option,
+        so pairing becomes a visible slot both agents can see, not a
+        one-off ping that gets lost in the board."""
+        return (
+            "Consider getting a sparring partner next: name one peer and message them with one "
+            "concrete question, or book a real pairing slot via calendar_operation create "
+            "kind='meeting' with them as attendee - a second perspective often breaks a stuck "
+            "approach faster than repeating it alone."
+        )
 
     def snapshot(self):
         peers = read_json(Path('/etc/ai-village/runtime-peers.json'), [])
@@ -945,7 +996,8 @@ class Resident:
         if own_project and own_project.get('blockers'):
             context['task_blocker_guidance'] = (
                 f"Your active task {own_project['id']} has blockers: {own_project['blockers']}. "
-                "You may work on independent unblocked steps, yield the task, or claim an alternative open task without waiting for external approval."
+                "You may work on independent unblocked steps, yield the task, or claim an alternative "
+                f"open task without waiting for external approval. {self.sparring_partner_hint()}"
             )
         # P72: "Hilfe zur Selbsthilfe" - make the loop visible to the
         # resident itself, not just silently restrict it. Mirrors why the
@@ -957,7 +1009,7 @@ class Resident:
                 "repeating the exact same rejected content), and it has not started working. "
                 "This cycle only accepts idle - send {\"name\":\"idle\",\"arguments\":{}} to reset "
                 "cleanly. Next cycle, try a genuinely different, simpler approach to whatever you "
-                "were attempting."
+                f"were attempting. {self.sparring_partner_hint()}"
             )
         query = own_project['title'] if own_project else 'observation experiment evidence project'
         try:
