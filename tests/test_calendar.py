@@ -272,7 +272,19 @@ class QueryHelperTests(unittest.TestCase):
         events = self.store.list_for_agent("01-king", "2026-09-28", "2026-09-28")
         ids = {e["id"] for e in events}
         self.assertEqual(ids, {as_organizer["id"], as_attendee["id"]})
+
+    def test_list_in_range_returns_every_agents_events_not_just_ones(self):
+        # P77: the cross-agent view the dashboard's overlay needs.
+        king_event = self.store.create_event("01-king", "King's own", "focus", "2026-09-28", "09:00", 30)
+        explorer_event = self.store.create_event("02-explorer", "Explorer's own", "focus", "2026-09-28", "11:00", 30)
+        outside_range = self.store.create_event("01-king", "Later", "focus", "2026-10-15", "09:00", 30)
+        events = self.store.list_in_range("2026-09-28", "2026-09-28")
+        ids = {e["id"] for e in events}
+        self.assertEqual(ids, {king_event["id"], explorer_event["id"]})
         self.assertNotIn(outside_range["id"], ids)
+
+    def test_list_in_range_empty_when_nothing_scheduled(self):
+        self.assertEqual(self.store.list_in_range("2020-01-01", "2020-01-01"), [])
 
 
 if __name__ == "__main__":

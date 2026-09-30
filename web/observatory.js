@@ -8,6 +8,7 @@ const stamp = value => typeof value==='number' ? value : Date.parse(value) || 0;
 const time = value => stamp(value) ? new Date(value).toLocaleTimeString('de-DE') : '—';
 const age = value => {const s=Math.max(0,Math.round((Date.now()-stamp(value))/1000)); return !stamp(value)?'unbekannt':s<60?`${s} s`:`${Math.floor(s/60)} min`;};
 let data=null, paused=false, timer, selected=null, mapSelection=null, eventPage=0, signalPage=0, signals=[], boardCategory='all', boardThread=null, gazetteEditions=[], gazetteSelected=null, gazetteBodies={};
+let calendarDate=new Date().toISOString().slice(0,10), calendarEvents=[];
 const view=location.pathname.split('/')[1] || 'dashboard';
 // Do not carry the previous long-page scroll position into another top-level view.
 if('scrollRestoration' in history) history.scrollRestoration='manual';
@@ -16,10 +17,10 @@ const views={dashboard:['Übersicht','Ein Blick ins Village.','Bewohner, Aktivit
 const config=views[view]||views.dashboard;
 $('title').textContent=config[1]; $('section-label').textContent=config[0].toUpperCase(); $('subtitle').textContent=config[2];
 document.querySelector(`[data-view="${views[view]?view:'dashboard'}"]`)?.setAttribute('aria-current','page');
-const sections=['kpis','map-panel','monitor','trends','habitat','event-panel','outcome-panel','services-panel','memory-panel','auditor-panel','intelligence-panel','board-panel','gazette-panel','signals-panel'];
+const sections=['kpis','map-panel','monitor','calendar-panel','trends','habitat','event-panel','outcome-panel','services-panel','memory-panel','auditor-panel','intelligence-panel','board-panel','gazette-panel','signals-panel'];
 const show={
  dashboard:['kpis','map-panel','monitor','trends','habitat','event-panel','outcome-panel','services-panel','memory-panel','auditor-panel','intelligence-panel'],
- agents:['kpis','monitor'],
+ agents:['kpis','monitor','calendar-panel'],
  habitat:['kpis','map-panel','habitat','services-panel','memory-panel'],
  timeline:['event-panel','outcome-panel'],
  board:['board-panel'],
@@ -84,6 +85,55 @@ function renderGazette(){
  fetch(`/gazette/${encodeURIComponent(edition.id)}.html`,{cache:'no-store',signal:AbortSignal.timeout(8000)}).then(r=>r.ok?r.text():Promise.reject(Error(`HTTP ${r.status}`))).then(html=>{gazetteBodies[edition.id]=gazetteBodyOf(html);if(gazetteSelected===edition.id)renderGazette();}).catch(()=>{if(gazetteSelected===edition.id)$('gazette-edition').innerHTML=head+'<div class="post-body gazette-body">Ausgabe konnte nicht geladen werden.</div>';});
 }
 async function loadGazette(){try{const r=await fetch('/api/gazette',{cache:'no-store',signal:AbortSignal.timeout(8000)});if(r.ok){gazetteEditions=await r.json();renderGazette();}}catch(e){if($('gazette-info'))$('gazette-info').textContent='Ausgaben konnten nicht geladen werden.';}}
+// P77 (operator directive): "im Dashboard unter Agents die Kalender der
+// Agents [...] und lasse die Kalender der Agents uebereinander legen um
+// gemeinsame Termine besser zu visualisieren." One day, one column per
+// agent, a shared time axis - a shared standup/jourfixe lands at the same
+// height in every attending agent's column, making the overlap visible.
+const CALENDAR_WINDOW_START=6*60, CALENDAR_WINDOW_END=22*60;
+const CALENDAR_KIND_LABELS={standup:'StandUp',jourfixe:'JourFixe',meeting:'Meeting',focus:'Fokusarbeit',personal:'Persönlich',weekend_project:'Wochenende · Projekt',weekend_social:'Wochenende · Gemeinsam',weekend_idle:'Wochenende · Pause',weekend_dream:'Wochenende · Träumen',other:'Sonstiges'};
+const CALENDAR_KIND_COLORS={standup:'#55dccb',jourfixe:'#b6a0ff',meeting:'#f3bb69',focus:'#7fb3ff',personal:'#9bacc0',weekend_project:'#8fd694',weekend_social:'#f2a6c9',weekend_idle:'#6b7d8f',weekend_dream:'#c9a4ff',other:'#9bacc0'};
+const CALENDAR_RESPONSE_LABELS={pending:'Ausstehend',accepted:'Zugesagt',declined:'Abgesagt',proposed_alternative:'Alternative vorgeschlagen'};
+const CALENDAR_STATUS_LABELS={planned:'Geplant',confirmed:'Bestätigt',rescheduled:'Verschoben',cancelled:'Abgesagt'};
+function calendarMinutes(t){const p=String(t||'0:0').split(':');return (Number(p[0])||0)*60+(Number(p[1])||0);}
+function calendarAgents(){return data?.current?.agents||[];}
+function calendarAgentName(id){return calendarAgents().find(a=>a.id===id)?.name||id;}
+function calendarShiftDate(d,delta){const dt=new Date(d+'T00:00:00');dt.setDate(dt.getDate()+delta);return dt.toISOString().slice(0,10);}
+async function loadCalendar(){try{const r=await fetch(`/api/calendar?date=${encodeURIComponent(calendarDate)}`,{cache:'no-store',signal:AbortSignal.timeout(8000)});if(r.ok){calendarEvents=await r.json();renderCalendar();}}catch(e){if($('calendar-info'))$('calendar-info').textContent='Kalenderdaten konnten nicht geladen werden.';}}
+function renderCalendar(){
+ if(!$('calendar-panel')||$('calendar-panel').hidden)return;
+ const agents=calendarAgents(),dateObj=new Date(calendarDate+'T00:00:00');
+ $('calendar-date-label').textContent=dateObj.toLocaleDateString('de-DE',{weekday:'long',day:'2-digit',month:'2-digit',year:'numeric'});
+ $('calendar-legend').innerHTML=Object.entries(CALENDAR_KIND_LABELS).map(([k,label])=>`<span style="color:${CALENDAR_KIND_COLORS[k]}">● ${esc(label)}</span>`).join('');
+ if(!agents.length){$('calendar-grid').innerHTML='<div class="calendar-empty">Agentenliste wird geladen …</div>';return;}
+ const span=CALENDAR_WINDOW_END-CALENDAR_WINDOW_START,hours=[];for(let m=CALENDAR_WINDOW_START;m<=CALENDAR_WINDOW_END;m+=60)hours.push(m);
+ const hourCol=`<div class="calendar-head"></div><div class="calendar-hours">${hours.map(m=>`<span class="calendar-hour-label" style="top:${((m-CALENDAR_WINDOW_START)/span*100).toFixed(2)}%">${String(Math.floor(m/60)).padStart(2,'0')}:00</span>`).join('')}</div>`;
+ const cols=agents.map(a=>{
+   const events=calendarEvents.filter(e=>e.organizer===a.id||(e.attendees||[]).some(x=>x.agent_id===a.id));
+   const blocks=events.map(e=>{
+     const start=calendarMinutes(e.start_time),dur=Math.max(15,Number(e.duration_minutes)||30);
+     const from=Math.max(CALENDAR_WINDOW_START,start),to=Math.min(CALENDAR_WINDOW_END,start+dur);
+     if(to<=from)return '';
+     const top=((from-CALENDAR_WINDOW_START)/span*100).toFixed(2),height=Math.max(2.4,(to-from)/span*100).toFixed(2);
+     const color=CALENDAR_KIND_COLORS[e.kind]||CALENDAR_KIND_COLORS.other,shared=(e.attendees||[]).length>0;
+     return `<div class="calendar-event status-${esc(e.status)}${shared?' shared':''}" data-event="${esc(e.id)}" style="top:${top}%;height:${height}%;background:${color}" title="${esc(e.title)} · ${esc(e.start_time)} · ${esc(CALENDAR_KIND_LABELS[e.kind]||e.kind)}"><span class="ce-time">${esc(e.start_time)}</span> ${esc(e.title)}</div>`;
+   }).join('');
+   return `<div class="calendar-head"><strong>${esc(a.name)}</strong><small>${esc(a.role||'')}</small></div><div class="calendar-track" data-agent="${esc(a.id)}">${blocks}</div>`;
+ }).join('');
+ $('calendar-grid').innerHTML=hourCol+cols;
+ $('calendar-info').textContent=`${calendarEvents.length} Termin${calendarEvents.length===1?'':'e'} am ${esc(dateObj.toLocaleDateString('de-DE'))} · Zeitfenster 06–22 Uhr · Spalten sind übereinandergelegt, damit gemeinsame Termine auf gleicher Höhe erkennbar sind. Klick auf einen Termin zeigt Details.`;
+}
+function showCalendarEvent(id){
+ const e=calendarEvents.find(x=>x.id===id);if(!e)return;
+ const attendeeRows=(e.attendees||[]).map(a=>{
+   const name=calendarAgentName(a.agent_id),resp=CALENDAR_RESPONSE_LABELS[a.response]||a.response;
+   const proposed=(a.proposed_date||a.proposed_time)?` · Vorschlag: ${esc(a.proposed_date||e.scheduled_date)} ${esc(a.proposed_time||e.start_time)}`:'';
+   return `<div class="calendar-attendee resp-${esc(a.response)}"><span>${esc(name)}${a.agent_id===e.organizer?' · Organisator':''}</span><b>${esc(resp)}${proposed}</b></div>`;
+ }).join('');
+ $('detail-title').textContent=e.title;
+ $('detail-body').innerHTML=`<dl><dt>Kategorie</dt><dd>${esc(CALENDAR_KIND_LABELS[e.kind]||e.kind)}</dd><dt>Datum</dt><dd>${esc(new Date(e.scheduled_date+'T00:00:00').toLocaleDateString('de-DE'))}</dd><dt>Uhrzeit</dt><dd>${esc(e.start_time)} Uhr · ${fmt(e.duration_minutes)} Minuten</dd><dt>Status</dt><dd>${esc(CALENDAR_STATUS_LABELS[e.status]||e.status)}</dd><dt>Organisator</dt><dd>${esc(calendarAgentName(e.organizer))}</dd>${e.recurrence?`<dt>Serie</dt><dd>${e.recurrence==='daily_weekday'?'Täglich, werktags':'Wöchentlich'}</dd>`:''}${e.notes?`<dt>Notizen</dt><dd>${esc(e.notes)}</dd>`:''}</dl><h3>Teilnehmer</h3><div class="calendar-attendees">${attendeeRows||'<p>Keine weiteren Teilnehmer.</p>'}</div>`;
+ $('detail').showModal();
+}
 function boardCategoryOf(text){const s=String(text||'').toLowerCase();if(/signal|organic|kontakt|außenwelt|public/.test(s))return 'contact';if(/commons|charter|community|gemeinschaft|board|resource|gpu|ressource/.test(s))return 'commons';if(/research|forschung|experiment|lineage|model|wissen|wikipedia/.test(s))return 'research';return 'plan';}
 function boardTitle(e){const raw=String(e.detail||'').replace(/^observation=.*?;\s*/,'').replace(/^message=/,'').trim();const first=raw.split(/\n|[.!?]\s/)[0].replace(/[`*_#{}\[\]]/g,'').trim();return (first||labels[e.event]||'Unbenanntes Thema').slice(0,78);}
 function markdownText(value){const lines=String(value||'').split(/\r?\n/),out=[];let code=false,buf=[];for(const line of lines){if(/^\s*```/.test(line)){if(code){out.push(`<pre class="markdown-code">${esc(buf.join('\n'))}</pre>`);buf=[];}code=!code;continue;}if(code){buf.push(line);continue;}if(!line.trim()){out.push('');continue;}const safe=esc(line).replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>').replace(/`([^`]+)`/g,'<code>$1</code>');out.push(/^###\s+/.test(line)?`<h5>${safe.replace(/^###\s+/,'')}</h5>`:(/^##\s+/.test(line)?`<h4>${safe.replace(/^##\s+/,'')}</h4>`:(/^#\s+/.test(line)?`<h3>${safe.replace(/^#\s+/,'')}</h3>`:`<p>${safe}</p>`)));}return `<div class="markdown-body">${out.join('')}</div>`;}
@@ -108,7 +158,7 @@ function render(){
  $('gpus').innerHTML=gpuRows(c).map(g=>`<div class="gpu-card"><p>GPU ${esc(g.id)} · ${esc(g.name)}</p><strong>${fmt(g.util)} %</strong><p>${fmt(g.used)} / ${fmt(g.total)} MiB VRAM</p><p>${fmt(g.power,1)} W</p></div>`).join('')||'<p>Lokale GPU-Telemetrie nicht verfügbar.</p>';
  $('lanes').innerHTML=`<table><thead><tr><th>Agent</th><th>Endpoint</th><th>Modellstatus</th><th>VRAM</th><th>Speicherzuordnung</th></tr></thead><tbody>${agents.map(a=>{let m=(a.ollama||[]).find(m=>m.name===a.model);return `<tr><td>${esc(a.name)}</td><td>${esc(a.endpoint)}</td><td>${a.ollama_error?'Nicht erreichbar':m?'Geladen':'Nicht geladen'}</td><td>${bytes(m?.size_vram)}</td><td>${m&&m.size>0&&num(m.size_vram)!==null?(m.size_vram>=m.size?'GPU-resident laut API':'CPU-Anteil laut API'):'Unbekannt'}</td></tr>`;}).join('')}</tbody></table>`;
  const prior=$('agent-filter').value;$('agent-filter').innerHTML='<option value="">Alle Agenten</option>'+agents.map(a=>`<option value="${esc(a.id)}">${esc(a.name)}</option>`).join('');$('agent-filter').value=prior; if($('board-agent')){const bp=$('board-agent').value;$('board-agent').innerHTML='<option value="">Alle Autoren</option>'+agents.map(a=>`<option value="${esc(a.id)}">${esc(a.name)}</option>`).join('');$('board-agent').value=bp;}
- renderEvents();renderSignals();renderMap();renderOutcomes();renderServices();renderMemory();renderAuditor();renderSkill();$('updated').textContent=`Messung: ${c.timestamp?new Date(c.timestamp).toLocaleString('de-DE'):'unbekannt'}`;
+ renderEvents();renderSignals();renderMap();renderOutcomes();renderServices();renderMemory();renderAuditor();renderSkill();renderCalendar();$('updated').textContent=`Messung: ${c.timestamp?new Date(c.timestamp).toLocaleString('de-DE'):'unbekannt'}`;
 }
 function renderOutcomes(){
  const stats=data.outcomes||{};
@@ -168,6 +218,10 @@ $('range').onchange=()=>{if(paused){paused=false;$('pause').textContent='Live pa
 for(const id of ['agent-filter','kind-filter','search','event-group'])$(id).addEventListener('input',()=>{eventPage=0;if(data)renderEvents();});$('event-prev').onclick=()=>{eventPage--;renderEvents();};$('event-next').onclick=()=>{eventPage++;renderEvents();};for(const id of ['signal-search','signal-sort','signal-size'])$(id).addEventListener('input',()=>{signalPage=0;renderSignals();});$('signal-prev').onclick=()=>{signalPage--;renderSignals();};$('signal-next').onclick=()=>{signalPage++;renderSignals();};
 for(const b of document.querySelectorAll('[data-board-category]'))b.onclick=()=>{boardCategory=b.dataset.boardCategory;document.querySelectorAll('.board-tab').forEach(x=>x.classList.toggle('active',x===b));renderBoard();};$('board-agent')?.addEventListener('input',renderBoard);$('board-search')?.addEventListener('input',renderBoard);$('board-threads')?.addEventListener('click',e=>{const row=e.target.closest('[data-thread]');if(!row)return;boardThread={key:row.dataset.thread};renderBoard();});
 $('gazette-editions')?.addEventListener('click',e=>{const row=e.target.closest('[data-edition]');if(!row)return;gazetteSelected=row.dataset.edition;renderGazette();});
+$('calendar-grid')?.addEventListener('click',e=>{const b=e.target.closest('[data-event]');if(b)showCalendarEvent(b.dataset.event);});
+$('calendar-prev')?.addEventListener('click',()=>{calendarDate=calendarShiftDate(calendarDate,-1);loadCalendar();});
+$('calendar-next')?.addEventListener('click',()=>{calendarDate=calendarShiftDate(calendarDate,1);loadCalendar();});
+$('calendar-today')?.addEventListener('click',()=>{calendarDate=new Date().toISOString().slice(0,10);loadCalendar();});
 const contactForm=$('contact'),contactMessage=$('contact-message'),contactCount=$('contact-count');if(contactMessage&&contactCount){const updateContactCount=()=>{contactCount.textContent=`${contactMessage.value.length.toLocaleString('de-DE')} / 4.000`;};contactMessage.addEventListener('input',updateContactCount);updateContactCount();const csrfField=document.createElement('input');csrfField.type='hidden';csrfField.name='csrf_token';contactForm.append(csrfField);const authNote=document.createElement('p');authNote.className='contact-auth';contactMessage.closest('form')?.querySelector('.contact-intro')?.after(authNote);const applyContactAuth=(authenticated,csrf='')=>{csrfField.value=csrf;for(const field of contactForm.querySelectorAll('input,textarea,button'))field.disabled=!authenticated;const fields=contactForm.querySelector('.contact-fields'),footer=contactForm.querySelector('.contact-footer');if(fields)fields.hidden=!authenticated;if(footer)footer.hidden=!authenticated;authNote.innerHTML=authenticated?'<span class="auth-ok">✓ Angemeldet · Nachricht kann gesendet werden</span> <a href="/contact/logout">Abmelden</a>':'<a href="/contact">① Erst anmelden, dann Nachricht verfassen</a><span> · geschützter Sendezugang</span>';};fetch('/contact/status',{cache:'no-store'}).then(r=>r.ok?r.json():{authenticated:false}).then(x=>applyContactAuth(Boolean(x.authenticated),x.csrf_token||'')).catch(()=>applyContactAuth(false));}
 document.addEventListener('visibilitychange',()=>{if(!document.hidden&&!paused)refresh();});
 $('habitat-map').addEventListener('click',e=>{const n=e.target.closest('[data-node]');if(n)inspectNode(n.dataset.node);});
@@ -175,4 +229,4 @@ $('habitat-map').addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' ')
 $('habitat-connections').addEventListener('click',e=>{const n=e.target.closest('[data-node]');if(n)inspectNode(n.dataset.node);});
 document.addEventListener('click',e=>{const n=e.target.closest('#habitat-connections [data-node]');if(!n)return;e.preventDefault();try{inspectNode(n.dataset.node);$('map-inspector').scrollIntoView({behavior:'smooth',block:'nearest'});}catch(err){console.error('infrastructure detail failed',err);}},true);
 function renderProjectionSummary(){const stats=data?.current?.memory?.stats||{},projection=stats.projection||{},backends=projection.backends||{},lag=Object.values(backends).reduce((n,x)=>n+Number(x.lag||0),0),hint=document.querySelector('#memory-panel .hint');if(hint)hint.textContent=`Primärspeicher: ${fmt(stats.total||0)} Einträge · Projektionsrückstand: ${fmt(lag)} · Backends: ${Object.keys(backends).length}`;let panel=$('memory-projection');if(!panel){panel=document.createElement('div');panel.id='memory-projection';panel.className='memory-services';$('memory-services').after(panel);}panel.innerHTML=Object.entries(backends).map(([name,s])=>`<article class="memory-service ${s.status==='active'?'online':'offline'}"><strong>${esc(name)}</strong><span>${esc(s.status||'unbekannt')}</span><small>Rückstand ${fmt(s.lag||0)} · Fehler ${fmt(s.error_count||0)}</small></article>`).join('')||'<p class="chart-empty">Noch keine Projektions-Backends registriert.</p>';}
-async function loadSignals(){try{const r=await fetch('/api/signals',{cache:'no-store',signal:AbortSignal.timeout(8000)});if(r.ok){signals=await r.json();renderSignals();}}catch(e){if($('signal-info'))$('signal-info').textContent='Signale konnten nicht geladen werden.';}}loadSignals();loadGazette();const memoryProjectionObserver=new MutationObserver(renderProjectionSummary);memoryProjectionObserver.observe($('memory-agents'),{childList:true});refresh();
+async function loadSignals(){try{const r=await fetch('/api/signals',{cache:'no-store',signal:AbortSignal.timeout(8000)});if(r.ok){signals=await r.json();renderSignals();}}catch(e){if($('signal-info'))$('signal-info').textContent='Signale konnten nicht geladen werden.';}}loadSignals();loadGazette();if(view==='agents')loadCalendar();const memoryProjectionObserver=new MutationObserver(renderProjectionSummary);memoryProjectionObserver.observe($('memory-agents'),{childList:true});refresh();

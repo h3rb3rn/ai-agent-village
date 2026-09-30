@@ -219,6 +219,18 @@ class CalendarStore:
             ).fetchall()
         return [self.get_event(r["id"]) for r in rows]  # type: ignore
 
+    def list_in_range(self, date_from: str, date_to: str) -> List[Dict[str, Any]]:
+        """Every event in the date range, any organizer/attendee - the
+        cross-agent view a dashboard overlay needs (P77), unlike
+        list_for_agent()'s single-agent scope."""
+        with self._conn() as c:
+            rows = c.execute(
+                "SELECT id FROM calendar_events WHERE scheduled_date BETWEEN ? AND ? "
+                "ORDER BY scheduled_date, start_time",
+                (date_from, date_to),
+            ).fetchall()
+        return [self.get_event(r["id"]) for r in rows]  # type: ignore
+
     def reschedule_event(self, event_id: str, actor: str, new_date: Optional[str] = None,
                          new_time: Optional[str] = None, reason: str = "") -> Dict[str, Any]:
         """Moves ONE occurrence (never the rest of its series - a moved

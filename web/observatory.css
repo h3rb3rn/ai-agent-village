@@ -56,3 +56,29 @@ html[data-theme=light] #habitat-map svg text,html[data-theme=light] #service-map
   #memory-panel .memory-agent>time,
   #auditor-panel .memory-agent>time{font-size:10px}
 }
+/* P77: agent calendars overlaid in one day-view grid - shared time axis
+   across agent columns so a common standup/jourfixe lands at the same
+   row height in every attending agent's column. */
+.calendar-wrap{overflow-x:auto}
+.calendar-grid{display:grid;grid-template-columns:56px repeat(9,minmax(96px,1fr));min-width:960px;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:var(--surface-2)}
+.calendar-head{border-bottom:1px solid var(--line);border-right:1px solid var(--line);padding:10px 6px;text-align:center;background:var(--surface)}
+.calendar-head strong{display:block;font-size:11px;font-weight:650}
+.calendar-head small{display:block;color:var(--muted);font-size:10px;text-transform:capitalize}
+.calendar-hours{position:relative;border-right:1px solid var(--line);height:640px}
+.calendar-hour-label{position:absolute;right:6px;transform:translateY(-50%);font-size:10px;color:var(--muted)}
+.calendar-track{position:relative;height:640px;border-right:1px solid var(--line);background-image:repeating-linear-gradient(to bottom,var(--line) 0,var(--line) 1px,transparent 1px,transparent 40px)}
+.calendar-track:last-child{border-right:0}
+.calendar-event{position:absolute;left:3px;right:3px;min-height:16px;border-radius:6px;padding:3px 6px;font-size:10px;line-height:1.35;overflow:hidden;cursor:pointer;color:#08201f;box-shadow:0 1px 4px #0003}
+.calendar-event:hover,.calendar-event:focus-visible{filter:brightness(1.1);z-index:2;outline:2px solid var(--text);outline-offset:1px}
+.calendar-event .ce-time{font-weight:700}
+.calendar-event.status-cancelled{opacity:.4;text-decoration:line-through}
+.calendar-event.shared{box-shadow:0 0 0 2px var(--text),0 1px 4px #0003}
+.calendar-empty{padding:40px;text-align:center;color:var(--muted)}
+dialog .calendar-attendees{margin-top:8px}
+dialog .calendar-attendee{display:flex;justify-content:space-between;gap:12px;border-top:1px solid var(--line);padding:8px 0;font-size:12px}
+dialog .calendar-attendee span{color:var(--text)}
+dialog .calendar-attendee b{color:var(--muted);font-weight:500;text-align:right}
+dialog .calendar-attendee.resp-accepted b{color:var(--cyan)}
+dialog .calendar-attendee.resp-declined b{color:var(--red)}
+dialog .calendar-attendee.resp-proposed_alternative b{color:var(--amber)}
+@media(max-width:720px){.calendar-hours,.calendar-track{height:480px}}

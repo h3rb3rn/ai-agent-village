@@ -9,6 +9,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 from village.events import append_event
 from village.gazette import GazetteStore
+from village.calendar import CalendarStore
 from event_history import read_history
 
 ROOT = Path(os.environ["VILLAGE_ROOT"])
@@ -199,6 +200,17 @@ def signal_index(limit=500):
         pass
     return rows
 
+def calendar_index(day):
+    # P77 (operator directive): "im Dashboard unter Agents die Kalender
+    # der Agents hinzu und lasse die Kalender der Agents übereinander
+    # legen" - one real day's events across every agent, read-only, same
+    # defensive-empty-on-error pattern as gazette_index().
+    try:
+        store = CalendarStore(ROOT / "board" / "coordination.sqlite3")
+        return store.list_in_range(day, day)
+    except OSError:
+        return []
+
 def gazette_index(limit=60):
     # P64: only ever list COMPILED editions - a pending/unreviewed or
     # rejected contribution must never reach this public-facing page,
@@ -243,6 +255,12 @@ class Handler(BaseHTTPRequestHandler):
             return send(self, HTTPStatus.OK, json.dumps(signal_index(), ensure_ascii=False), 'application/json; charset=utf-8')
         if route == '/api/gazette':
             return send(self, HTTPStatus.OK, json.dumps(gazette_index(), ensure_ascii=False), 'application/json; charset=utf-8')
+        if route == '/api/calendar':
+            params = parse_qs(urlsplit(self.path).query)
+            day = params.get('date', [''])[0]
+            if not re.fullmatch(r'[0-9]{4}-[0-9]{2}-[0-9]{2}', day):
+                day = datetime.now(timezone.utc).strftime('%Y-%m-%d')
+            return send(self, HTTPStatus.OK, json.dumps(calendar_index(day), ensure_ascii=False), 'application/json; charset=utf-8')
         if route.startswith('/gazette/') and route.endswith('.html'):
             edition_id = route.removeprefix('/gazette/').removesuffix('.html')
             if not re.fullmatch(r'[0-9]{4}-[0-9]{2}-[0-9]{2}', edition_id):
