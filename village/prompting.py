@@ -123,6 +123,8 @@ def compact_context(ctx: Dict[str, Any]) -> Dict[str, Any]:
         # gets the proactive reminder instead of only ever learning about
         # it after the gate already rejected an action.
         out["calendar_daily_note"] = _clip(ctx["calendar_daily_note"], 400)
+    if ctx.get("finetune_daily_note"):
+        out["finetune_daily_note"] = _clip(ctx["finetune_daily_note"], 400)
     if ctx.get("memory_status"):
         out["memory_status"] = _clip(ctx["memory_status"], 200)
     return out

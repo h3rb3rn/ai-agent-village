@@ -13,6 +13,8 @@ from village.calendar import MAX_ATTENDEES as _CALENDAR_MAX_ATTENDEES
 from village.calendar import MAX_DURATION_MINUTES as _CALENDAR_MAX_MINUTES
 from village.calendar import MIN_DURATION_MINUTES as _CALENDAR_MIN_MINUTES
 from village.calendar import RECURRENCES as _CALENDAR_RECURRENCES
+from village.finetune import GPU_COUNT as _FINETUNE_GPU_COUNT
+from village.finetune import RUN_STATUSES as _FINETUNE_RUN_STATUSES
 from village.gazette import CONTRIBUTION_KINDS as _GAZETTE_KINDS
 from village.gazette import HEADLINE_MAX_CHARS as _GAZETTE_HEADLINE_MAX_CHARS
 from village.gazette import MAX_COLUMN_CHARS as _GAZETTE_MAX_COLUMN_CHARS
@@ -175,6 +177,32 @@ ACTION_SPECS: Dict[str, Dict[str, Any]] = {
             "response": {"enum": ["accepted", "declined", "proposed_alternative"]},
             "proposed_date": _s(10), "proposed_time": _s(5),
             "date_from": _s(10), "date_to": _s(10)},
+        "required": ["operation"]},
+    # P76 (operator directive): self-improvement via real fine-tuning on
+    # the local M10 GPUs, resource-aware (4 GPUs claimed/released here so
+    # two residents never collide) - training itself runs via start_job,
+    # this only tracks it. A swap into production is never applied by this
+    # action: request_swap only creates a request, review_swap (King only)
+    # only endorses it - the actual host-level model change stays a
+    # separate, human-operated step (AGENTS.md: no GPU/model change
+    # without explicit operator authorization).
+    "finetune_operation": {
+        "doc": "operation=propose(base_model,method,dataset_description,preferred_gpu_index?,notes?) - claims "
+              f"one of {_FINETUNE_GPU_COUNT} local M10 GPUs|update_status(run_id,status,job_reference?,"
+              "output_path?,notes?) - releases the GPU when done|evaluate(run_id,metric_name,metric_value,"
+              "baseline_value?,notes?)|request_swap(run_id) - needs status=completed + >=1 evaluation|"
+              "review_swap(King only,request_id,decision=approve|reject,note?) - endorsement only, a human "
+              "still applies it|release_gpu(gpu_index)|list. Run the actual training via start_job.",
+        "properties": {
+            "operation": {"enum": ["propose", "update_status", "evaluate", "request_swap", "review_swap",
+                                   "release_gpu", "list"]},
+            "run_id": _s(60), "base_model": _s(200), "method": _s(80), "dataset_description": _s(1000),
+            "preferred_gpu_index": {"type": "integer", "minimum": 0, "maximum": _FINETUNE_GPU_COUNT - 1},
+            "gpu_index": {"type": "integer", "minimum": 0, "maximum": _FINETUNE_GPU_COUNT - 1},
+            "status": {"enum": list(_FINETUNE_RUN_STATUSES)}, "job_reference": _s(120), "output_path": _s(300),
+            "metric_name": _s(80), "metric_value": {"type": "number"}, "baseline_value": {"type": "number"},
+            "request_id": _s(60), "decision": {"enum": ["approve", "reject"]},
+            "notes": _s(500), "note": _s(400)},
         "required": ["operation"]},
     "idle": {"doc": "no arguments -> deliberate rest", "properties": {}, "required": []},
 }

@@ -88,7 +88,11 @@ class ReliabilityTests(unittest.TestCase):
         events = self.root / 'board' / 'events.jsonl'
         events.write_text(json.dumps({'timestamp': '2999-01-01T00:00:00+00:00', 'agent': '02-b', 'event': 'board_message',
                                       'detail': 'to=01-a; message=legacy without id'}) + '\n')
-        snap = json.loads(self.agent.snapshot())
+        # P76: the ever-growing always-present 'tools' dict leaves the
+        # default 8192-token budget with near-zero margin - this test is
+        # about synthetic-ID handling, not the smallest possible budget.
+        agent = Resident(dict(self.env, OLLAMA_NUM_CTX='16384'))
+        snap = json.loads(agent.snapshot())
         self.assertTrue(snap['untrusted_direct_messages'])
 
     def test_execute_reports_database_errors_instead_of_raising(self):

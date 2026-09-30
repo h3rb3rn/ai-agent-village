@@ -11,7 +11,8 @@ SUPPORTED_ACTIONS = frozenset({
     'execute_bash', 'start_job', 'job_status', 'cancel_job',
     'board_message', 'task_operation', 'team_operation', 'artifact_operation',
     'memory_remember', 'memory_search', 'research_request', 'meeting_operation',
-    'calc_operation', 'research_proposal', 'gazette_operation', 'calendar_operation', 'idle',
+    'calc_operation', 'research_proposal', 'gazette_operation', 'calendar_operation',
+    'finetune_operation', 'idle',
 })
 
 
@@ -26,7 +27,7 @@ NAME_ALIASES = {'board_operation': 'board_message', 'message_operation': 'board_
 def _normalize_action(name, args):
     """Normalize documented legacy aliases without interpreting free prose."""
     normalized = dict(args)
-    if name in ('meeting_operation', 'artifact_operation', 'team_operation', 'research_proposal', 'gazette_operation', 'calendar_operation') and not normalized.get('operation'):
+    if name in ('meeting_operation', 'artifact_operation', 'team_operation', 'research_proposal', 'gazette_operation', 'calendar_operation', 'finetune_operation') and not normalized.get('operation'):
         if normalized.get('action'):
             normalized['operation'] = normalized['action']
         elif name == 'team_operation' and all(normalized.get(k) for k in ('project', 'goal', 'role')):
@@ -46,7 +47,7 @@ def _validate_action(name, args):
         'meeting_operation': ('operation',), 'team_operation': ('operation',),
         'artifact_operation': ('operation', 'artifact_id'), 'calc_operation': ('tool',),
         'research_proposal': ('operation',), 'gazette_operation': ('operation',),
-        'calendar_operation': ('operation',),
+        'calendar_operation': ('operation',), 'finetune_operation': ('operation',),
     }.get(name, ())
     if any(not isinstance(args.get(field), str) or not args[field].strip() for field in required):
         return 'missing action argument'

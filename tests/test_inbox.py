@@ -178,6 +178,11 @@ class TestInboxAndAck(unittest.TestCase):
             "OLLAMA_URL": "http://127.0.0.1:9999",
             "AGENT_IDENTITY_PROMPT": str(self.tmp / "identity.txt"),
             "VILLAGE_PAUSE_MARKER": str(self.tmp / "paused"),
+            # P76: the ever-growing always-present 'tools' dict leaves the
+            # default 8192-token budget with near-zero margin for a
+            # delivered organic message - this test is about acknowledgment
+            # semantics, not about the smallest possible context budget.
+            "OLLAMA_NUM_CTX": "16384",
         }
         Path(env["AGENT_IDENTITY_PROMPT"]).write_text("Test Identity")
 
@@ -219,6 +224,11 @@ class TestInboxAndAck(unittest.TestCase):
             "OLLAMA_URL": "http://127.0.0.1:9999",
             "AGENT_IDENTITY_PROMPT": str(self.tmp / "identity.txt"),
             "VILLAGE_PAUSE_MARKER": str(self.tmp / "paused"),
+            # P76: the ever-growing always-present 'tools' dict leaves the
+            # default 8192-token budget with near-zero margin for a
+            # delivered organic message - this test is about acknowledgment
+            # semantics, not about the smallest possible context budget.
+            "OLLAMA_NUM_CTX": "16384",
         }
         Path(env["AGENT_IDENTITY_PROMPT"]).write_text("Test Identity")
 

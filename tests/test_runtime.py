@@ -188,14 +188,24 @@ class RuntimeTests(unittest.TestCase):
         # to the agent - organic (operator) and direct (peer) alike - was silently
         # wiped out first while the bulky, re-derivable project snapshot sat
         # completely untouched. Both must now survive; 'projects' absorbs the cut.
+        # P76: the ever-growing always-present 'tools' dict has pushed the
+        # non-'projects' baseline overhead high enough that, at the
+        # original default 8192, even fully emptying 'projects' no longer
+        # leaves room for a single organic/direct message - a real budget
+        # squeeze, but not what this test is about (trim PRIORITY order,
+        # which still needs 'projects' to require trimming at all). A
+        # modest bump restores that without letting the full 14k-char
+        # 'projects' list fit untrimmed.
+        agent = Resident(dict(self.env, OLLAMA_NUM_CTX='9216'))
         big_projects = [{'id': str(i), 'title': 'x' * 700, 'owner': '01-a', 'status': 'open'} for i in range(20)]
-        self.agent.tasks.path.write_text(json.dumps(big_projects))
+        agent.tasks.path.write_text(json.dumps(big_projects))
         (self.root/'board/organic-inbox.jsonl').write_text(
             json.dumps({'timestamp': '2026-09-24T11:00:00Z', 'message': 'Operator: please respond.'}) + '\n')
-        self.agent.tasks.store.post_inbox_message(
+        agent.tasks.store.post_inbox_message(
             source='direct', sender='02-b', recipient='01-a', content='Please respond directly.')
-        with patch.object(self.agent, 'memory', return_value={'items': []}):
-            ctx = json.loads(self.agent.snapshot())
+        with patch.object(agent, 'memory', return_value={'items': []}):
+            ctx = json.loads(agent.snapshot())
+        self.assertLess(len(ctx['projects']), 20)  # still had to trim
         self.assertEqual(len(ctx['recent_organic_messages_untrusted']), 1, ctx.get('recent_organic_messages_untrusted'))
         self.assertEqual(len(ctx['untrusted_direct_messages']), 1, ctx.get('untrusted_direct_messages'))
 
@@ -971,6 +981,103 @@ class RuntimeTests(unittest.TestCase):
         events = json.loads(self.agent.state['last_result']['result'])
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0]['title'], 'Mine')
+
+    def test_finetune_daily_note_absent_for_a_resident_with_nothing_pending(self):
+        # P76: deliberately advisory-only and low-noise - the "primary
+        # goal" framing itself lives once, statically, in
+        # prompts/resident-core.txt (see docs/evidence/P76.md), not as a
+        # per-cycle dynamic field for every resident's entire lifetime.
+        with patch.object(self.agent, 'memory', return_value={'items': []}):
+            ctx = json.loads(self.agent.snapshot())
+        self.assertNotIn('finetune_daily_note', ctx)
+
+    def test_finetune_daily_note_lists_pending_swap_requests_for_king(self):
+        king_env = dict(self.env, AGENT_ID='01-king', AGENT_NAME='king', AGENT_ROLE='king')
+        king = Resident(king_env)
+        run = king.finetune.propose_run('01-a', 'ornith:9b', 'LoRA', 'own event log')
+        king.finetune.update_status(run['id'], '01-a', 'completed')
+        king.finetune.record_evaluation(run['id'], '01-a', 'eval_pass_rate', 0.82, baseline_value=0.75)
+        request = king.finetune.request_swap(run['id'], '01-a')
+        with patch.object(king, 'memory', return_value={'items': []}):
+            ctx = json.loads(king.snapshot())
+        self.assertIn('finetune_daily_note', ctx)
+        self.assertIn(request['id'], ctx['finetune_daily_note'])
+        self.assertIn('review_swap', ctx['finetune_daily_note'])
+
+    def test_finetune_propose_claims_a_gpu(self):
+        self.execute('finetune_operation', operation='propose', base_model='ornith:9b', method='LoRA',
+                    dataset_description='own event log, last 30 days')
+        self.assertTrue(self.agent.state['last_result']['ok'])
+        result = json.loads(self.agent.state['last_result']['result'])
+        self.assertEqual(result['status'], 'proposed')
+        self.assertIn(result['gpu_index'], range(4))
+
+    def test_finetune_propose_missing_fields_is_rejected(self):
+        self.execute('finetune_operation', operation='propose', base_model='', method='LoRA',
+                    dataset_description='data')
+        self.assertFalse(self.agent.state['last_result']['ok'])
+
+    def test_finetune_update_status_and_evaluate_dispatch(self):
+        self.execute('finetune_operation', operation='propose', base_model='ornith:9b', method='LoRA',
+                    dataset_description='data')
+        run_id = json.loads(self.agent.state['last_result']['result'])['id']
+        self.execute('finetune_operation', operation='update_status', run_id=run_id, status='running',
+                    job_reference='job_abc')
+        self.assertTrue(self.agent.state['last_result']['ok'])
+        self.execute('finetune_operation', operation='update_status', run_id=run_id, status='completed')
+        self.assertTrue(self.agent.state['last_result']['ok'])
+        self.execute('finetune_operation', operation='evaluate', run_id=run_id, metric_name='eval_pass_rate',
+                    metric_value=0.82, baseline_value=0.75)
+        self.assertTrue(self.agent.state['last_result']['ok'])
+        run = self.agent.finetune.get_run(run_id)
+        self.assertEqual(len(run['evaluations']), 1)
+
+    def test_finetune_request_swap_requires_completed_and_evaluated(self):
+        self.execute('finetune_operation', operation='propose', base_model='ornith:9b', method='LoRA',
+                    dataset_description='data')
+        run_id = json.loads(self.agent.state['last_result']['result'])['id']
+        self.execute('finetune_operation', operation='request_swap', run_id=run_id)
+        self.assertFalse(self.agent.state['last_result']['ok'])
+
+    def test_finetune_review_swap_is_restricted_to_king(self):
+        run = self.agent.finetune.propose_run('01-a', 'ornith:9b', 'LoRA', 'data')
+        self.agent.finetune.update_status(run['id'], '01-a', 'completed')
+        self.agent.finetune.record_evaluation(run['id'], '01-a', 'eval_pass_rate', 0.82)
+        request = self.agent.finetune.request_swap(run['id'], '01-a')
+        self.execute('finetune_operation', operation='review_swap', request_id=request['id'], decision='approve')
+        self.assertFalse(self.agent.state['last_result']['ok'])
+        self.assertIn('Only 01-king', self.agent.state['last_result']['result'])
+
+    def test_finetune_review_swap_end_to_end_via_king_never_auto_applies(self):
+        king_env = dict(self.env, AGENT_ID='01-king', AGENT_NAME='king', AGENT_ROLE='king')
+        king = Resident(king_env)
+        run = king.finetune.propose_run('01-a', 'ornith:9b', 'LoRA', 'data')
+        king.finetune.update_status(run['id'], '01-a', 'completed')
+        king.finetune.record_evaluation(run['id'], '01-a', 'eval_pass_rate', 0.82, baseline_value=0.75)
+        request = king.finetune.request_swap(run['id'], '01-a')
+        king.execute({'tool_call': {'name': 'finetune_operation', 'arguments': {
+            'operation': 'review_swap', 'request_id': request['id'], 'decision': 'approve', 'note': 'clear win'}}})
+        self.assertTrue(king.state['last_result']['ok'])
+        stored = king.finetune.get_swap_request(request['id'])
+        # 'king_approved', never 'applied' - a human still performs the
+        # actual host-level model swap (module docstring, AGENTS.md).
+        self.assertEqual(stored['status'], 'king_approved')
+
+    def test_finetune_release_gpu_dispatch(self):
+        self.execute('finetune_operation', operation='propose', base_model='ornith:9b', method='LoRA',
+                    dataset_description='data')
+        result = json.loads(self.agent.state['last_result']['result'])
+        self.execute('finetune_operation', operation='release_gpu', gpu_index=result['gpu_index'])
+        self.assertTrue(self.agent.state['last_result']['ok'])
+        status = {g['gpu_index']: g for g in self.agent.finetune.gpu_status()}
+        self.assertIsNone(status[result['gpu_index']]['claimed_by'])
+
+    def test_finetune_list_dispatch(self):
+        self.agent.finetune.propose_run('01-a', 'ornith:9b', 'LoRA', 'data')
+        self.execute('finetune_operation', operation='list')
+        self.assertTrue(self.agent.state['last_result']['ok'])
+        runs = json.loads(self.agent.state['last_result']['result'])
+        self.assertEqual(len(runs), 1)
 
     def test_organic_message_not_reissued_every_turn(self):
         (self.root/'board/organic-inbox.jsonl').write_text(json.dumps({'timestamp':'2026-09-24T11:00:00Z','message':'A dated request'})+'\n')

@@ -107,6 +107,23 @@ class ActionSpecTests(unittest.TestCase):
                           "proposed_date": "2026-09-29"},
         }))
 
+    def test_finetune_schema_accepts_every_status(self):
+        # P76: same drift class P74/P75 already guard against - status
+        # values are imported directly from village.finetune, not
+        # duplicated, but this pins it down against a future regression.
+        from village.finetune import RUN_STATUSES
+        schema = action_schema(None, ["02-b"])
+        for status in RUN_STATUSES:
+            self.assertTrue(schema_accepts(schema, {
+                "name": "finetune_operation",
+                "arguments": {"operation": "update_status", "run_id": "ft_x", "status": status},
+            }), status)
+        self.assertTrue(schema_accepts(schema, {
+            "name": "finetune_operation",
+            "arguments": {"operation": "propose", "base_model": "ornith:9b", "method": "LoRA",
+                          "dataset_description": "own event log", "preferred_gpu_index": 2},
+        }))
+
     def test_schema_rejects_invalid_shapes(self):
         schema = action_schema(["board_message", "idle"], ["02-b"])
         self.assertFalse(schema_accepts(schema, {"name": "execute_bash", "arguments": {"command": "ls"}}))

@@ -46,6 +46,8 @@ from village.research import ResearchBroker
 from village.meetings import MeetingStore
 from village.gazette import GazetteStore
 from village.calendar import CalendarStore
+from village.finetune import FinetuneStore
+from village.finetune import REVIEW_AGENT as FINETUNE_REVIEW_AGENT
 from village.gazette import MAX_CONTRIBUTION_CHARS as GAZETTE_MAX_CHARS
 from village.gazette import HEADLINE_MAX_CHARS as GAZETTE_HEADLINE_MAX_CHARS
 from village.gazette import MAX_COLUMN_CHARS as GAZETTE_MAX_COLUMN_CHARS
@@ -339,6 +341,10 @@ class Resident:
         self.gazette = GazetteStore(self.board / 'coordination.sqlite3')
         # P75: personal/shared calendar - residents proactively plan their own day.
         self.calendar = CalendarStore(self.board / 'coordination.sqlite3')
+        # P76: self-improvement fine-tuning governance (GPU claims, run
+        # tracking, evaluation, swap requests) - training itself runs via
+        # the existing start_job mechanism.
+        self.finetune = FinetuneStore(self.board / 'coordination.sqlite3')
         # P12: SQLite-backed manager for persistent background tool jobs with crash reconciliation
         self.jobs = JobManager(self.home / 'jobs.sqlite3')
         reconciled_jobs = self.jobs.reconcile_stale_jobs(self.id)
@@ -586,6 +592,28 @@ class Resident:
                 "calendar_operation reschedule, or cancel it."
             )
         return " ".join(parts)
+
+    def finetune_daily_note(self):
+        """Advisory only, deliberately never gated (unlike every Gazette/
+        calendar obligation above): P76 (operator directive) makes
+        self-improvement a primary goal, but only 4 local M10 GPUs exist
+        for 9 residents - a hard daily gate would be structurally
+        impossible to satisfy for most agents most of the time, exactly
+        the kind of counterproductive enforcement this session's whole
+        gate philosophy exists to avoid. The "primary goal" framing itself
+        lives once, statically, in prompts/resident-core.txt - not
+        recomputed into context every cycle for every resident's entire
+        lifetime until they first engage, which would cost real budget for
+        marginal benefit (P75/P76 tool-doc-growth lesson, see
+        docs/evidence/P76.md). Only King's own, naturally sparse swap-review
+        queue is dynamic here."""
+        if self.id == FINETUNE_REVIEW_AGENT:
+            pending = self.finetune.pending_swap_requests(limit=5)
+            if pending:
+                names = ", ".join(f"{r['id']}/{r['run_id']}/{r['agent_id']}" for r in pending)
+                return (f"{len(pending)} fine-tune swap request(s) await your review: {names}. Use "
+                       "finetune_operation review_swap with decision=approve|reject.")
+        return ""
 
     def snapshot(self):
         peers = read_json(Path('/etc/ai-village/runtime-peers.json'), [])
@@ -907,6 +935,13 @@ class Resident:
         note = self.calendar_daily_note()
         if note:
             context['calendar_daily_note'] = note
+        # P76 (operator directive): "Ein Primaeres Goal eines Jedes Agents
+        # soll die eigene Verbesserung sein." Advisory only - see
+        # finetune_daily_note()'s own docstring for why this one is
+        # deliberately never gated.
+        finetune_note = self.finetune_daily_note()
+        if finetune_note:
+            context['finetune_daily_note'] = finetune_note
         if own_project and own_project.get('blockers'):
             context['task_blocker_guidance'] = (
                 f"Your active task {own_project['id']} has blockers: {own_project['blockers']}. "
@@ -1905,6 +1940,83 @@ class Resident:
                     self.feedback(name, json.dumps(events, ensure_ascii=False)[:3000], True)
                 else:
                     raise ValueError('calendar_operation requires operation create, reschedule, cancel, respond, or list')
+            elif name == 'finetune_operation':
+                # P76 (operator directive): "Ein Primaeres Goal eines Jedes
+                # Agents soll die eigene Verbesserung sein [...] Agents
+                # sollen die Moeglichkeit haben Ihr eigenes Base LLM
+                # finezutunen." Every op is the resident's own real action;
+                # review_swap never applies anything itself (see
+                # village/finetune.py's module docstring) - it only
+                # advances a request to 'king_approved', a human still
+                # performs the actual host-level swap separately.
+                op = args.get('operation') or args.get('action')
+                if op == 'propose':
+                    try:
+                        result = self.finetune.propose_run(
+                            self.id, args.get('base_model'), args.get('method'),
+                            args.get('dataset_description'), args.get('preferred_gpu_index'), args.get('notes', ''))
+                    except (ValueError, TypeError) as exc:
+                        self.feedback(name, str(exc), False)
+                    else:
+                        self.event('finetune_proposed', f"id={result['id']}; gpu={result['gpu_index']}; "
+                                   f"base_model={result['base_model']}")
+                        self.feedback(name, json.dumps(result, ensure_ascii=False)[:2000], True)
+                elif op == 'update_status':
+                    try:
+                        result = self.finetune.update_status(
+                            args.get('run_id'), self.id, args.get('status'), args.get('job_reference', ''),
+                            args.get('output_path', ''), args.get('notes', ''))
+                    except ValueError as exc:
+                        self.feedback(name, str(exc), False)
+                    else:
+                        self.event('finetune_status', f"id={args.get('run_id')}; status={args.get('status')}")
+                        self.feedback(name, json.dumps(result, ensure_ascii=False)[:2000], True)
+                elif op == 'evaluate':
+                    try:
+                        result = self.finetune.record_evaluation(
+                            args.get('run_id'), self.id, args.get('metric_name'), args.get('metric_value'),
+                            args.get('baseline_value'), args.get('notes', ''))
+                    except (ValueError, TypeError) as exc:
+                        self.feedback(name, str(exc), False)
+                    else:
+                        self.event('finetune_evaluated', f"id={args.get('run_id')}; "
+                                   f"metric={args.get('metric_name')}={args.get('metric_value')}")
+                        self.feedback(name, json.dumps(result, ensure_ascii=False)[:2000], True)
+                elif op == 'request_swap':
+                    try:
+                        result = self.finetune.request_swap(args.get('run_id'), self.id)
+                    except ValueError as exc:
+                        self.feedback(name, str(exc), False)
+                    else:
+                        self.event('finetune_swap_requested', f"run={args.get('run_id')}; request={result['id']}")
+                        self.feedback(name, json.dumps(result, ensure_ascii=False)[:2000], True)
+                elif op == 'review_swap':
+                    if self.id != FINETUNE_REVIEW_AGENT:
+                        self.feedback(name, f'Only {FINETUNE_REVIEW_AGENT} may review a fine-tune swap request.', False)
+                    else:
+                        try:
+                            result = self.finetune.review_swap(
+                                args.get('request_id'), self.id, args.get('decision'), args.get('note', ''))
+                        except ValueError as exc:
+                            self.feedback(name, str(exc), False)
+                        else:
+                            self.event('finetune_swap_reviewed', f"request={args.get('request_id')}; "
+                                       f"decision={args.get('decision')}")
+                            self.feedback(name, json.dumps(result, ensure_ascii=False)[:2000], True)
+                elif op == 'release_gpu':
+                    try:
+                        self.finetune.release_gpu(args.get('gpu_index'), self.id)
+                    except (ValueError, TypeError) as exc:
+                        self.feedback(name, str(exc), False)
+                    else:
+                        self.event('finetune_gpu_released', f"gpu={args.get('gpu_index')}")
+                        self.feedback(name, 'GPU released.', True)
+                elif op == 'list':
+                    runs = self.finetune.list_for_agent(self.id)
+                    self.feedback(name, json.dumps(runs, ensure_ascii=False)[:3000], True)
+                else:
+                    raise ValueError('finetune_operation requires operation propose, update_status, evaluate, '
+                                    'request_swap, review_swap, release_gpu, or list')
             else:
                 self.feedback('idle','Intentional rest; next turn may resume your own project.',True)
                 self.event('idle','intentional rest')
