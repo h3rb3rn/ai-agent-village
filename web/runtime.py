@@ -45,11 +45,14 @@ from village.teams import TeamStore
 from village.research import ResearchBroker
 from village.meetings import MeetingStore
 from village.gazette import GazetteStore
+from village.calendar import CalendarStore
 from village.gazette import MAX_CONTRIBUTION_CHARS as GAZETTE_MAX_CHARS
 from village.gazette import HEADLINE_MAX_CHARS as GAZETTE_HEADLINE_MAX_CHARS
 from village.gazette import MAX_COLUMN_CHARS as GAZETTE_MAX_COLUMN_CHARS
 from village.gazette import today as gazette_today
 from village.gazette import REVIEWER_AGENT as GAZETTE_REVIEWER
+from village.calendar import today as calendar_today
+from village.calendar import is_workday as calendar_is_workday
 from village.gazette_pdf import render_edition_pdf
 from village.collaboration import assess as assess_collaboration, is_checkpoint_action
 from village.lifecycle import InferenceState, InferenceTracker, classify_error
@@ -124,6 +127,18 @@ GAZETTE_CONTRIBUTE_CEILING = 10
 # arbiter: "King kuert einen Favoriten").
 GAZETTE_GAME_RESULT_CEILING = 10
 GAZETTE_GAME_WINNER_CEILING = 10
+
+# P75 (operator directive, 2026-09-30): "Implementiere jetzt die
+# verpflichtende Aufgabe an die Agents Ihren Tagesablauf zu planen und fuer
+# gemeinsame Meetings Zeitslots abzustimmen und im persoenlichen Kalender
+# einzupflegen [...] Kalender sollen Proaktiv von den Agents gefuehrt
+# werden." Same proven advisory-then-gate ceiling as every Gazette
+# obligation above - "verpflichtend" (mandatory) means it needs the same
+# real enforcement, not just a hint that competes with ongoing work and
+# loses (the documented failure mode this whole session, P48/P52/P73).
+# Only Mon-Fri (see calendar_is_workday) - weekends are the agent's own
+# free choice per the same directive, never an obligation.
+CALENDAR_PLAN_CEILING = 10
 
 # P72 (operator directive, 2026-09-29): "Es kann nicht sein das die Agents
 # ununterbrochen in Loops festhaengen ... Mechanismen die den Agents im
@@ -322,6 +337,8 @@ class Resident:
         self.meetings = MeetingStore(self.board / 'coordination.sqlite3')
         # P47: AI Village Gazette - the daily edition the residents write themselves.
         self.gazette = GazetteStore(self.board / 'coordination.sqlite3')
+        # P75: personal/shared calendar - residents proactively plan their own day.
+        self.calendar = CalendarStore(self.board / 'coordination.sqlite3')
         # P12: SQLite-backed manager for persistent background tool jobs with crash reconciliation
         self.jobs = JobManager(self.home / 'jobs.sqlite3')
         reconciled_jobs = self.jobs.reconcile_stale_jobs(self.id)
@@ -527,6 +544,48 @@ class Resident:
                 "accept/reject vote tally) now in your context - name which meeting(s) and "
                 "decisions you are summarizing, and never invent a vote count or decision that "
                 "is not there.")
+
+    def calendar_pending_daily_plan(self):
+        """True if today is a workday (Mon-Fri) and this agent has not yet
+        touched their own calendar today - the deterministic condition the
+        P75 mandatory-planning gate checks. Weekends are always False here:
+        the operator's own directive makes them the agent's free choice,
+        never an obligation ("koennen die Agents sich frei entscheiden")."""
+        today_str = calendar_today()
+        if not calendar_is_workday(today_str):
+            return False
+        return not self.calendar.has_touched_today(self.id, today_str)
+
+    def calendar_daily_note(self):
+        """Advisory text for snapshot(): the mandatory daily-plan reminder
+        (workdays only) plus any concrete, named pending invites and
+        organizer-side conflicts - the operator's "Zeitslots abzustimmen"
+        and "Initiatoren [...] sollen sich um die Termin-Koordination
+        kuemmern" made specific and actionable rather than generic."""
+        parts = []
+        today_str = calendar_today()
+        if calendar_is_workday(today_str) and self.calendar_pending_daily_plan():
+            parts.append(
+                "You have not touched your calendar today. Use calendar_operation create for today's "
+                "slots (kind=focus/standup/jourfixe, recurrence=daily_weekday/weekly if recurring); "
+                "reschedule/cancel anything that changed."
+            )
+        pending_invites = self.calendar.pending_invites(self.id, limit=5)
+        if pending_invites:
+            names = ", ".join(f"{e['id']}/{e['title']}@{e['scheduled_date']} {e['start_time']}" for e in pending_invites)
+            parts.append(
+                f"{len(pending_invites)} calendar invite(s) await your response: {names}. Use "
+                "calendar_operation respond with response=accepted|declined|proposed_alternative for each."
+            )
+        conflicts = self.calendar.unresolved_conflicts_for_organizer(self.id, limit=5)
+        if conflicts:
+            names = ", ".join(f"{e['id']}/{e['title']}@{e['scheduled_date']} {e['start_time']}" for e in conflicts)
+            parts.append(
+                f"You organize {len(conflicts)} event(s) with a decline or proposed alternative time still "
+                f"unresolved: {names}. As the initiator, coordinate a new slot with the affected agent(s) via "
+                "calendar_operation reschedule, or cancel it."
+            )
+        return " ".join(parts)
 
     def snapshot(self):
         peers = read_json(Path('/etc/ai-village/runtime-peers.json'), [])
@@ -836,6 +895,18 @@ class Resident:
                 "note explaining the decision."
             )
             context['gazette_daily_note'] = (context.get('gazette_daily_note', '') + winner_hint).strip()
+        # P75 (operator directive): "Kalender sollen Proaktiv von den Agents
+        # gefuehrt werden." Today's own agenda (own events + shared
+        # meetings they attend) is always shown when non-empty so a
+        # resident can actually see what they already planned, not just be
+        # told to plan; calendar_daily_note carries the mandatory-planning
+        # reminder plus any named pending invites/conflicts.
+        today_events = self.calendar.list_for_agent(self.id, calendar_today(), calendar_today())
+        if today_events:
+            context['calendar_today_untrusted'] = today_events
+        note = self.calendar_daily_note()
+        if note:
+            context['calendar_daily_note'] = note
         if own_project and own_project.get('blockers'):
             context['task_blocker_guidance'] = (
                 f"Your active task {own_project['id']} has blockers: {own_project['blockers']}. "
@@ -895,7 +966,8 @@ class Resident:
         # never seeing a message addressed directly to it.
         for field in ('retrieved_memory_untrusted','untrusted_peer_messages','own_recent_results','projects',
                       'recent_organic_messages_untrusted','untrusted_direct_messages',
-                      'recent_meetings_closed_untrusted','recent_role_decisions_untrusted'):
+                      'recent_meetings_closed_untrusted','recent_role_decisions_untrusted',
+                      'calendar_today_untrusted'):
             while context.get(field) and len(json.dumps(context,ensure_ascii=False))>budget:
                 # 'projects' is pre-sorted highest-priority-first
                 # (task_priority(), reverse=True) - unlike every other field
@@ -1252,6 +1324,28 @@ class Resident:
                                          f"Submit exactly this envelope (or winner=\"unentschieden\"): {example}",
                                          f"edition={eid}; pressure={pressure}")
 
+        # P75 (operator directive): "verpflichtende Aufgabe an die Agents
+        # Ihren Tagesablauf zu planen". Same proven ceiling pattern as
+        # every gate above; workday-only (calendar_pending_daily_plan()
+        # already returns False outright on Sat/Sun - weekends stay the
+        # agent's free choice, never gated).
+        calendar_plan_block = None
+        if name not in ('meeting_operation', 'gazette_operation', 'calendar_operation', 'idle'):
+            if not self.calendar_pending_daily_plan():
+                self.state['calendar_plan_pressure'] = 0
+            else:
+                pressure = int(self.state.get('calendar_plan_pressure', 0)) + 1
+                self.state['calendar_plan_pressure'] = pressure
+                self.event('calendar_plan_required', f"pressure={pressure}")
+                if pressure >= CALENDAR_PLAN_CEILING:
+                    example = ('{"name":"calendar_operation","arguments":{"operation":"create","title":"...",'
+                               '"kind":"focus","scheduled_date":"' + calendar_today() + '","start_time":"09:00",'
+                               '"duration_minutes":60}}')
+                    calendar_plan_block = (f"Today's calendar plan required before more solo work: submit "
+                                           f"exactly this envelope (adjust title/time), or cover a recurring "
+                                           f"standup/jourfixe with recurrence set: {example}",
+                                           f"pressure={pressure}")
+
         if meeting_block:
             self.feedback(name, meeting_block[0], False)
             self.event('meeting_gate', meeting_block[1])
@@ -1271,6 +1365,10 @@ class Resident:
         if close_block:
             self.feedback(name, close_block[0], False)
             self.event('gazette_close_gate', close_block[1])
+            return False
+        if calendar_plan_block:
+            self.feedback(name, calendar_plan_block[0], False)
+            self.event('calendar_plan_gate', calendar_plan_block[1])
             return False
         if game_winner_block:
             self.feedback(name, game_winner_block[0], False)
@@ -1753,6 +1851,60 @@ class Resident:
                     self.feedback(name, json.dumps(result, ensure_ascii=False)[:3000] if result else 'No edition yet for that date.', bool(result))
                 else:
                     raise ValueError('gazette_operation requires operation open, assign, contribute, review, close, declare_winner, or view')
+            elif name == 'calendar_operation':
+                # P75 (operator directive): every resident's own real
+                # action, never a background computation on their behalf -
+                # same principle as gazette assign_kinds()/King's open.
+                op = args.get('operation') or args.get('action')
+                if op == 'create':
+                    try:
+                        result = self.calendar.create_event(
+                            self.id, args.get('title'), args.get('kind'), args.get('scheduled_date'),
+                            args.get('start_time'), args.get('duration_minutes'), args.get('attendees') or [],
+                            args.get('recurrence') or 'none', args.get('notes', ''))
+                    except (ValueError, TypeError) as exc:
+                        self.feedback(name, str(exc), False)
+                    else:
+                        self.event('calendar_created', f"id={result['id']}; kind={result['kind']}; "
+                                   f"date={result['scheduled_date']}; recurrence={result.get('recurrence')}")
+                        self.feedback(name, json.dumps(result, ensure_ascii=False)[:2000], True)
+                elif op == 'reschedule':
+                    try:
+                        result = self.calendar.reschedule_event(
+                            args.get('event_id'), self.id, args.get('new_date'), args.get('new_time'),
+                            args.get('reason', ''))
+                    except ValueError as exc:
+                        self.feedback(name, str(exc), False)
+                    else:
+                        self.event('calendar_rescheduled', f"id={args.get('event_id')}; "
+                                   f"date={result['scheduled_date']}; time={result['start_time']}")
+                        self.feedback(name, json.dumps(result, ensure_ascii=False)[:2000], True)
+                elif op == 'cancel':
+                    try:
+                        result = self.calendar.cancel_event(
+                            args.get('event_id'), self.id, args.get('reason', ''), bool(args.get('whole_series')))
+                    except ValueError as exc:
+                        self.feedback(name, str(exc), False)
+                    else:
+                        self.event('calendar_cancelled', f"id={args.get('event_id')}; "
+                                   f"whole_series={bool(args.get('whole_series'))}")
+                        self.feedback(name, json.dumps(result, ensure_ascii=False)[:2000], True)
+                elif op == 'respond':
+                    try:
+                        result = self.calendar.respond(
+                            args.get('event_id'), self.id, args.get('response'),
+                            args.get('proposed_date'), args.get('proposed_time'))
+                    except ValueError as exc:
+                        self.feedback(name, str(exc), False)
+                    else:
+                        self.event('calendar_responded', f"id={args.get('event_id')}; "
+                                   f"response={args.get('response')}")
+                        self.feedback(name, json.dumps(result, ensure_ascii=False)[:2000], True)
+                elif op == 'list':
+                    events = self.calendar.list_for_agent(self.id, args.get('date_from'), args.get('date_to'))
+                    self.feedback(name, json.dumps(events, ensure_ascii=False)[:3000], True)
+                else:
+                    raise ValueError('calendar_operation requires operation create, reschedule, cancel, respond, or list')
             else:
                 self.feedback('idle','Intentional rest; next turn may resume your own project.',True)
                 self.event('idle','intentional rest')

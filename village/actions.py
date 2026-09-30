@@ -8,6 +8,11 @@ from __future__ import annotations
 
 from typing import Any, Dict, Iterable, List, Optional
 
+from village.calendar import EVENT_KINDS as _CALENDAR_KINDS
+from village.calendar import MAX_ATTENDEES as _CALENDAR_MAX_ATTENDEES
+from village.calendar import MAX_DURATION_MINUTES as _CALENDAR_MAX_MINUTES
+from village.calendar import MIN_DURATION_MINUTES as _CALENDAR_MIN_MINUTES
+from village.calendar import RECURRENCES as _CALENDAR_RECURRENCES
 from village.gazette import CONTRIBUTION_KINDS as _GAZETTE_KINDS
 from village.gazette import HEADLINE_MAX_CHARS as _GAZETTE_HEADLINE_MAX_CHARS
 from village.gazette import MAX_COLUMN_CHARS as _GAZETTE_MAX_COLUMN_CHARS
@@ -144,6 +149,32 @@ ACTION_SPECS: Dict[str, Dict[str, Any]] = {
             "decision": {"enum": ["approve", "reject"]},
             "winner": _s(40),
             "note": _s(400)},
+        "required": ["operation"]},
+    # P75 (operator directive): every resident proactively plans their own
+    # day and coordinates shared slots (standups, jour fixes) instead of a
+    # scheduler silently doing it for them; Mon-Fri is the structured work
+    # week, Sat/Sun is the agent's own free choice (see kind enum's
+    # weekend_* values). A moved/cancelled slot is renegotiated with
+    # whoever is affected via reschedule/cancel + respond, not overwritten
+    # silently.
+    "calendar_operation": {
+        "doc": "operation=create(title,kind,scheduled_date,start_time,duration_minutes,attendees?,recurrence?,"
+              "notes?)|reschedule(event_id,new_date?,new_time?,reason?)|cancel(event_id,reason?,whole_series?)|"
+              f"respond(event_id,response,proposed_date?,proposed_time?)|list(date_from?,date_to?); kind: "
+              f"{'/'.join(_CALENDAR_KINDS)}; date=YYYY-MM-DD, time=HH:MM; recurrence=none/daily_weekday/weekly; "
+              "reschedule/cancel hit one occurrence unless whole_series=true; response=accepted/declined/"
+              "proposed_alternative.",
+        "properties": {
+            "operation": {"enum": ["create", "reschedule", "cancel", "respond", "list"]},
+            "event_id": _s(60), "title": _s(200), "kind": {"enum": list(_CALENDAR_KINDS)},
+            "scheduled_date": _s(10), "start_time": _s(5),
+            "duration_minutes": {"type": "integer", "minimum": _CALENDAR_MIN_MINUTES, "maximum": _CALENDAR_MAX_MINUTES},
+            "attendees": {"type": "array", "items": _s(40), "maxItems": _CALENDAR_MAX_ATTENDEES},
+            "recurrence": {"enum": list(_CALENDAR_RECURRENCES)}, "notes": _s(1000),
+            "new_date": _s(10), "new_time": _s(5), "reason": _s(300), "whole_series": {"type": "boolean"},
+            "response": {"enum": ["accepted", "declined", "proposed_alternative"]},
+            "proposed_date": _s(10), "proposed_time": _s(5),
+            "date_from": _s(10), "date_to": _s(10)},
         "required": ["operation"]},
     "idle": {"doc": "no arguments -> deliberate rest", "properties": {}, "required": []},
 }

@@ -25,6 +25,12 @@ class ReliabilityTests(unittest.TestCase):
         (self.root / 'identity.txt').write_text('identity')
         self.env = dict(AGENT_ID='01-a', AGENT_NAME='a', AGENT_ROLE='resident', VILLAGE_ROOT=str(self.root),
                         AGENT_IDENTITY_PROMPT=str(self.root / 'identity.txt'), OLLAMA_MODEL='m')
+        # P75: pin the calendar plan gate/hint to "weekend" so it never
+        # competes for budget or pressure in tests unrelated to it - same
+        # rationale as test_runtime.py's class-level patch.
+        self._calendar_workday_patch = patch.object(rt, 'calendar_is_workday', return_value=False)
+        self._calendar_workday_patch.start()
+        self.addCleanup(self._calendar_workday_patch.stop)
         self.agent = Resident(self.env)
         self.store = self.agent.tasks.store
 

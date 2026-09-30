@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'web'))
-from runtime import Resident,Tasks,resource_snapshot,tail,event_time,COLLABORATION_PRESSURE_CEILING,MEETING_REPORT_CEILING,GAZETTE_REVIEW_CEILING,GAZETTE_CLOSE_CEILING,GAZETTE_CLOSE_MIN_HOURS,GAZETTE_CONTRIBUTE_CEILING,GAZETTE_GAME_RESULT_CEILING,GAZETTE_GAME_WINNER_CEILING
+from runtime import Resident,Tasks,resource_snapshot,tail,event_time,COLLABORATION_PRESSURE_CEILING,MEETING_REPORT_CEILING,GAZETTE_REVIEW_CEILING,GAZETTE_CLOSE_CEILING,GAZETTE_CLOSE_MIN_HOURS,GAZETTE_CONTRIBUTE_CEILING,GAZETTE_GAME_RESULT_CEILING,GAZETTE_GAME_WINNER_CEILING,CALENDAR_PLAN_CEILING
 from village.gazette import REVIEWER_AGENT
 from decision import decision
 from village.collaboration import CooperationCheckpoint
@@ -20,6 +20,15 @@ class RuntimeTests(unittest.TestCase):
         (self.root/'board').mkdir(); (self.root/'telemetry').mkdir()
         self.env=dict(os.environ,AGENT_ID='01-a',AGENT_NAME='a',AGENT_ROLE='resident',VILLAGE_ROOT=str(self.root),
                       VILLAGE_MAX_OUTPUT_BYTES='4096',VILLAGE_COMMAND_TIMEOUT_SECONDS='2')
+        # P75: the calendar plan gate keys off the real wall-clock weekday
+        # (calendar_is_workday(calendar_today())) - defaulting it to
+        # "weekend" here keeps every pre-existing test in this class (most
+        # of which loop 10+ guarded actions for unrelated gates) immune to
+        # it regardless of which real day the suite happens to run on;
+        # calendar-specific tests below explicitly patch it back to True.
+        self._calendar_workday_patch = patch('runtime.calendar_is_workday', return_value=False)
+        self._calendar_workday_patch.start()
+        self.addCleanup(self._calendar_workday_patch.stop)
         self.agent=Resident(self.env)
     def tearDown(self): self.tmp.cleanup()
     def execute(self,name,**args): self.agent.execute({'tool_call':{'name':name,'arguments':args}})
@@ -880,6 +889,88 @@ class RuntimeTests(unittest.TestCase):
         result = king.state['last_result']['result']
         self.assertIn("game winner declaration required", result)
         self.assertIn('"operation":"declare_winner"', result)
+
+    def test_calendar_plan_gate_eventually_blocks_other_actions_on_a_workday(self):
+        # P75 (operator directive): "verpflichtende Aufgabe an die Agents
+        # Ihren Tagesablauf zu planen". Same proven ceiling pattern as
+        # every gate above.
+        with patch('runtime.calendar_is_workday', return_value=True):
+            for i in range(CALENDAR_PLAN_CEILING - 1):
+                self.agent.execute({'tool_call': {'name': 'execute_bash', 'arguments': {'command': f'printf ok{i}'}}})
+            self.assertTrue(self.agent.state['last_result']['ok'])  # not yet gated
+            self.agent.execute({'tool_call': {'name': 'execute_bash', 'arguments': {'command': f'printf ok{CALENDAR_PLAN_CEILING}'}}})
+        self.assertFalse(self.agent.state['last_result']['ok'])
+        result = self.agent.state['last_result']['result']
+        self.assertIn("Today's calendar plan required", result)
+        self.assertIn('"name":"calendar_operation"', result)
+        self.assertIn('"operation":"create"', result)
+
+    def test_calendar_plan_gate_never_fires_on_a_weekend(self):
+        with patch('runtime.calendar_is_workday', return_value=False):
+            for i in range(CALENDAR_PLAN_CEILING + 5):
+                self.agent.execute({'tool_call': {'name': 'execute_bash', 'arguments': {'command': f'printf ok{i}'}}})
+        self.assertTrue(self.agent.state['last_result']['ok'])
+
+    def test_calendar_operation_itself_is_never_gated_by_plan_pressure(self):
+        from village.calendar import today as cal_today
+        with patch('runtime.calendar_is_workday', return_value=True):
+            for i in range(CALENDAR_PLAN_CEILING + 5):
+                self.agent.execute({'tool_call': {'name': 'execute_bash', 'arguments': {'command': f'printf ok{i}'}}})
+            self.agent.execute({'tool_call': {'name': 'calendar_operation', 'arguments': {
+                'operation': 'create', 'title': 'Focus block', 'kind': 'focus',
+                'scheduled_date': cal_today(), 'start_time': '09:00', 'duration_minutes': 60}}})
+        self.assertTrue(self.agent.state['last_result']['ok'])
+
+    def test_calendar_plan_gate_resets_once_touched(self):
+        from village.calendar import today as cal_today
+        with patch('runtime.calendar_is_workday', return_value=True):
+            self.agent.execute({'tool_call': {'name': 'calendar_operation', 'arguments': {
+                'operation': 'create', 'title': 'Focus block', 'kind': 'focus',
+                'scheduled_date': cal_today(), 'start_time': '09:00', 'duration_minutes': 60}}})
+            for i in range(CALENDAR_PLAN_CEILING + 5):
+                self.agent.execute({'tool_call': {'name': 'execute_bash', 'arguments': {'command': f'printf ok{i}'}}})
+        self.assertEqual(self.agent.state.get('calendar_plan_pressure', 0), 0)
+
+    def test_calendar_daily_note_lists_pending_invites_and_conflicts(self):
+        from village.calendar import today as cal_today
+        event = self.agent.calendar.create_event('02-b', 'Sync', 'meeting', cal_today(), '09:00', 30,
+                                                  attendees=['01-a'])
+        with patch('runtime.calendar_is_workday', return_value=True), \
+             patch.object(self.agent, 'memory', return_value={'items': []}):
+            ctx = json.loads(self.agent.snapshot())
+        self.assertIn('calendar_daily_note', ctx)
+        self.assertIn(event['id'], ctx['calendar_daily_note'])
+        self.assertIn('calendar_operation respond', ctx['calendar_daily_note'])
+
+    def test_calendar_create_reschedule_cancel_respond_end_to_end(self):
+        from village.calendar import today as cal_today
+        self.execute('calendar_operation', operation='create', title='Standup', kind='standup',
+                    scheduled_date=cal_today(), start_time='09:00', duration_minutes=15,
+                    attendees=['02-b'], recurrence='daily_weekday')
+        self.assertTrue(self.agent.state['last_result']['ok'])
+        event_id = json.loads(self.agent.state['last_result']['result'])['id']
+
+        self.execute('calendar_operation', operation='reschedule', event_id=event_id, new_time='10:00', reason='conflict')
+        self.assertTrue(self.agent.state['last_result']['ok'])
+        self.assertEqual(self.agent.calendar.get_event(event_id)['start_time'], '10:00')
+
+        peer = Resident(dict(self.env, AGENT_ID='02-b', AGENT_NAME='b', AGENT_ROLE='resident'))
+        peer.execute({'tool_call': {'name': 'calendar_operation', 'arguments': {
+            'operation': 'respond', 'event_id': event_id, 'response': 'accepted'}}})
+        self.assertTrue(peer.state['last_result']['ok'])
+
+        self.execute('calendar_operation', operation='cancel', event_id=event_id, reason='no longer needed')
+        self.assertTrue(self.agent.state['last_result']['ok'])
+        self.assertEqual(self.agent.calendar.get_event(event_id)['status'], 'cancelled')
+
+    def test_calendar_list_returns_own_events(self):
+        from village.calendar import today as cal_today
+        self.agent.calendar.create_event('01-a', 'Mine', 'focus', cal_today(), '09:00', 30)
+        self.execute('calendar_operation', operation='list', date_from=cal_today(), date_to=cal_today())
+        self.assertTrue(self.agent.state['last_result']['ok'])
+        events = json.loads(self.agent.state['last_result']['result'])
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]['title'], 'Mine')
 
     def test_organic_message_not_reissued_every_turn(self):
         (self.root/'board/organic-inbox.jsonl').write_text(json.dumps({'timestamp':'2026-09-24T11:00:00Z','message':'A dated request'})+'\n')

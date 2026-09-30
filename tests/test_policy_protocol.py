@@ -81,6 +81,32 @@ class ActionSpecTests(unittest.TestCase):
             "arguments": {"operation": "declare_winner", "winner": "02-b"},
         }))
 
+    def test_calendar_schema_accepts_every_kind_and_recurrence(self):
+        # P75: same class of drift P74 found and fixed for the Gazette -
+        # village.actions imports EVENT_KINDS/RECURRENCES directly from
+        # village.calendar rather than duplicating them, but this pins that
+        # down against a future regression either way.
+        from village.calendar import EVENT_KINDS, RECURRENCES
+        schema = action_schema(None, ["02-b"])
+        for kind in EVENT_KINDS:
+            self.assertTrue(schema_accepts(schema, {
+                "name": "calendar_operation",
+                "arguments": {"operation": "create", "title": "T", "kind": kind,
+                              "scheduled_date": "2026-09-28", "start_time": "09:00", "duration_minutes": 30},
+            }), kind)
+        for recurrence in RECURRENCES:
+            self.assertTrue(schema_accepts(schema, {
+                "name": "calendar_operation",
+                "arguments": {"operation": "create", "title": "T", "kind": "focus",
+                              "scheduled_date": "2026-09-28", "start_time": "09:00", "duration_minutes": 30,
+                              "recurrence": recurrence},
+            }), recurrence)
+        self.assertTrue(schema_accepts(schema, {
+            "name": "calendar_operation",
+            "arguments": {"operation": "respond", "event_id": "cal_x", "response": "proposed_alternative",
+                          "proposed_date": "2026-09-29"},
+        }))
+
     def test_schema_rejects_invalid_shapes(self):
         schema = action_schema(["board_message", "idle"], ["02-b"])
         self.assertFalse(schema_accepts(schema, {"name": "execute_bash", "arguments": {"command": "ls"}}))

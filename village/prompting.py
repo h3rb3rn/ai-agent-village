@@ -115,6 +115,14 @@ def compact_context(ctx: Dict[str, Any]) -> Dict[str, Any]:
                                     "directive": "Do not repeat the failed action; change one thing."}
     if ctx.get("task_blocker_guidance"):
         out["task_blocker_guidance"] = _clip(ctx["task_blocker_guidance"], 300)
+    if ctx.get("calendar_daily_note"):
+        # P75: the mandatory-planning gate fires regardless of prompt
+        # profile (it operates on the raw Resident, not the compacted
+        # context) - carry its own advisory hint through too, same as
+        # task_blocker_guidance just above, so a compact-profile agent
+        # gets the proactive reminder instead of only ever learning about
+        # it after the gate already rejected an action.
+        out["calendar_daily_note"] = _clip(ctx["calendar_daily_note"], 400)
     if ctx.get("memory_status"):
         out["memory_status"] = _clip(ctx["memory_status"], 200)
     return out

@@ -245,10 +245,22 @@ class TestWorkProgressAndClaimLoops(unittest.TestCase):
             "VILLAGE_ROOT": str(root),
             "OLLAMA_MODEL": "test-model",
             "VILLAGE_PAUSE_MARKER": str(self.tmp / "paused"),
+            # P75: the ever-growing always-present 'tools' dict (now
+            # including calendar_operation) leaves the default 8192-token
+            # budget with near-zero margin for two small tasks' worth of
+            # 'projects' - this test is about trim ORDER preference, not
+            # about re-testing the exact byte budget of the smallest
+            # possible context, so give it realistic headroom instead.
+            "OLLAMA_NUM_CTX": "16384",
         }
         agent = Resident(env=env)
 
-        with patch.object(agent, "memory", return_value={"items": []}):
+        # P75: pin the calendar plan gate/hint to "weekend" - unrelated to
+        # what this test verifies, and would otherwise compete for the
+        # same tight default budget as the 'projects' priority this test
+        # is actually about.
+        with patch.object(agent, "memory", return_value={"items": []}), \
+             patch("web.runtime.calendar_is_workday", return_value=False):
             data = json.loads(agent.snapshot())
 
         # Own active task is populated and first in projects list
