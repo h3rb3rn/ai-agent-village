@@ -8,10 +8,19 @@ from __future__ import annotations
 
 from typing import Any, Dict, Iterable, List, Optional
 
+from village.gazette import CONTRIBUTION_KINDS as _GAZETTE_KINDS
 from village.gazette import HEADLINE_MAX_CHARS as _GAZETTE_HEADLINE_MAX_CHARS
 from village.gazette import MAX_COLUMN_CHARS as _GAZETTE_MAX_COLUMN_CHARS
 from village.gazette import MAX_CONTRIBUTION_CHARS as _GAZETTE_MAX_CHARS
 from village.gazette import REVIEWER_AGENT as _GAZETTE_REVIEWER
+# P74 (bug found while adding 'declare_winner'): this schema is sent to
+# Ollama as grammar-constrained ``format`` (see module docstring) - the
+# 'kind' enum below used to be a hand-duplicated list that P73 added
+# "meetings" to in village/gazette.py's CONTRIBUTION_KINDS but never here,
+# which would have silently made kind='meetings' impossible to produce for
+# any schema-constrained agent despite being a valid, assigned kind.
+# Importing the tuple directly instead of copying it closes that whole
+# class of drift for good.
 
 STR = {"type": "string"}
 
@@ -109,26 +118,31 @@ ACTION_SPECS: Dict[str, Dict[str, Any]] = {
         # Gelegentlich Kolumnen waeren schoen" - kind='column' is an
         # occasional, opt-in, longer-form piece with real room, never part
         # of King's mandatory per-resident assignment rotation.
+        # P73: 'meetings' added (rotation-assigned, real JourFixe/StandUp +
+        # decided role-proposal data, see runtime.py's
+        # gazette_meetings_source_hint()). P74 (operator feedback: "womit
+        # gewonnen hat [...] den benannten Gewinner"): declare_winner is
+        # King's separate arbiter act for the daily game.
         "doc": "operation=open(King only, starts today's AI Village Gazette edition and draws the "
               "day's game+pair)|assign(King only, delegates one contribution kind to each resident)|"
               "contribute(kind,headline,content)|"
               f"review({_GAZETTE_REVIEWER} only, agent,kind,decision=approve|reject,note?)"
               "|close(King only, compiles all approved contributions into the archived edition)"
-              "|view(edition_id?) -> the daily village paper; kind is one of "
-              "state/mood/wishes/topics/suggestions/learning/outlook/game_result/village_news/column "
-              "(column is optional and occasional, for a genuinely in-depth topic - never assigned); "
+              "|declare_winner(King only, winner=<agent or 'unentschieden'>,note?)"
+              f"|view(edition_id?) -> the daily village paper; kind is one of {'/'.join(_GAZETTE_KINDS)} "
+              "(column occasional/never assigned; game_result: drawn pair, name task/solution/winner-pick); "
               f"headline max {_GAZETTE_HEADLINE_MAX_CHARS} chars, two lines read like a real newspaper "
               f"headline, not the kind name repeated; content max {_GAZETTE_MAX_CHARS} chars "
-              f"(column: {_GAZETTE_MAX_COLUMN_CHARS}) - a short newspaper item (a concrete lede fact "
-              f"plus a few sentences of real detail), not a one-liner and not an essay. Only "
+              f"(column/meetings: {_GAZETTE_MAX_COLUMN_CHARS}) - a short newspaper item (a concrete lede "
+              f"fact plus a few sentences of real detail), not a one-liner and not an essay. Only "
               f"{_GAZETTE_REVIEWER}-approved contributions ever appear in the compiled edition.",
         "properties": {
-            "operation": {"enum": ["open", "assign", "contribute", "review", "close", "view"]},
-            "kind": {"enum": ["state", "mood", "wishes", "topics", "suggestions", "learning",
-                             "outlook", "game_result", "village_news", "column"]},
+            "operation": {"enum": ["open", "assign", "contribute", "review", "close", "declare_winner", "view"]},
+            "kind": {"enum": list(_GAZETTE_KINDS)},
             "headline": _s(_GAZETTE_HEADLINE_MAX_CHARS),
             "content": _s(_GAZETTE_MAX_COLUMN_CHARS), "edition_id": _s(20), "agent": _s(40),
             "decision": {"enum": ["approve", "reject"]},
+            "winner": _s(40),
             "note": _s(400)},
         "required": ["operation"]},
     "idle": {"doc": "no arguments -> deliberate rest", "properties": {}, "required": []},

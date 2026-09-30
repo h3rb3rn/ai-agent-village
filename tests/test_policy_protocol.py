@@ -61,6 +61,26 @@ class ActionSpecTests(unittest.TestCase):
             self.assertIsNone(decision_module._validate_action(ex["name"], ex["arguments"]), ex)
             self.assertTrue(schema_accepts(schema, ex), ex)
 
+    def test_gazette_schema_accepts_meetings_kind_and_declare_winner(self):
+        # P74 (bug found while adding declare_winner): the gazette_operation
+        # schema's 'kind' enum used to be a hand-duplicated list that never
+        # got P73's "meetings" addition to village.gazette.CONTRIBUTION_KINDS -
+        # silently making it impossible to produce under grammar-constrained
+        # decoding despite being a valid, assigned kind. Now imported
+        # directly from CONTRIBUTION_KINDS; this guards against that whole
+        # class of drift recurring for any kind added in the future.
+        from village.gazette import CONTRIBUTION_KINDS
+        schema = action_schema(None, ["02-b"])
+        for kind in CONTRIBUTION_KINDS:
+            self.assertTrue(schema_accepts(schema, {
+                "name": "gazette_operation",
+                "arguments": {"operation": "contribute", "kind": kind, "headline": "H", "content": "C"},
+            }), kind)
+        self.assertTrue(schema_accepts(schema, {
+            "name": "gazette_operation",
+            "arguments": {"operation": "declare_winner", "winner": "02-b"},
+        }))
+
     def test_schema_rejects_invalid_shapes(self):
         schema = action_schema(["board_message", "idle"], ["02-b"])
         self.assertFalse(schema_accepts(schema, {"name": "execute_bash", "arguments": {"command": "ls"}}))

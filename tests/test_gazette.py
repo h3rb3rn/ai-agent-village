@@ -388,6 +388,65 @@ class CompileEditionTests(unittest.TestCase):
         rendered = self.store.compile_edition("2026-09-28")
         self.assertNotIn("Vorherige Ausgabe", rendered)
 
+    def test_declared_game_winner_is_rendered(self):
+        # P74 (operator feedback): "womit gewonnen hat [...] den benannten
+        # Gewinner" - the one piece that was genuinely missing.
+        edition = self.store.get_edition("2026-09-28")
+        winner = edition["game_pair"][0]
+        self.store.declare_game_winner("2026-09-28", "01-king", winner, "klare Antwort zuerst")
+        rendered = self.store.compile_edition("2026-09-28")
+        self.assertIn('<p class="game-winner">', rendered)
+        self.assertIn(f"<strong>Gewinner:</strong> {winner}", rendered)
+        self.assertIn("klare Antwort zuerst", rendered)
+
+    def test_undeclared_winner_renders_no_winner_line(self):
+        rendered = self.store.compile_edition("2026-09-28")
+        self.assertNotIn("game-winner", rendered)
+
+    def test_drawn_tie_renders_as_unentschieden(self):
+        self.store.declare_game_winner("2026-09-28", "01-king", "unentschieden")
+        rendered = self.store.compile_edition("2026-09-28")
+        self.assertIn("<strong>Gewinner:</strong> Unentschieden", rendered)
+
+
+class DeclareGameWinnerTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="village-gazette-"))
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.store = GazetteStore(self.tmp / "coordination.sqlite3")
+        self.edition = self.store.open_edition("01-king", PEERS, edition_id="2026-09-28", rng=random.Random(1))
+
+    def test_unknown_edition_is_rejected(self):
+        with self.assertRaises(ValueError):
+            self.store.declare_game_winner("1999-01-01", "01-king", "02-explorer")
+
+    def test_winner_must_be_a_drawn_participant_or_unentschieden(self):
+        with self.assertRaises(ValueError):
+            self.store.declare_game_winner("2026-09-28", "01-king", "09-chronicler")  # not drawn
+
+    def test_valid_winner_is_recorded(self):
+        winner = self.edition["game_pair"][0]
+        result = self.store.declare_game_winner("2026-09-28", "01-king", winner, "gute Begruendung")
+        self.assertEqual(result["game_winner"], winner)
+        self.assertEqual(result["game_winner_note"], "gute Begruendung")
+        self.assertEqual(result["game_winner_declared_by"], "01-king")
+        self.assertIsNotNone(result["game_winner_declared_at"])
+
+    def test_unentschieden_is_a_valid_winner_value(self):
+        result = self.store.declare_game_winner("2026-09-28", "01-king", "unentschieden")
+        self.assertEqual(result["game_winner"], "unentschieden")
+
+    def test_cannot_declare_winner_on_a_compiled_edition(self):
+        self.store.close_edition("2026-09-28", "01-king")
+        with self.assertRaises(ValueError):
+            self.store.declare_game_winner("2026-09-28", "01-king", self.edition["game_pair"][0])
+
+    def test_edition_without_a_drawn_pair_is_rejected(self):
+        edition = self.store.open_edition("01-king", [], edition_id="2026-09-29")
+        self.assertEqual(edition["game_pair"], [])
+        with self.assertRaises(ValueError):
+            self.store.declare_game_winner("2026-09-29", "01-king", "unentschieden")
+
 
 class CloseEditionTests(unittest.TestCase):
     def setUp(self):

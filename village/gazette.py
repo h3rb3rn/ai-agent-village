@@ -183,6 +183,25 @@ class GazetteStore:
                 edition_id TEXT NOT NULL, agent TEXT NOT NULL, kind TEXT NOT NULL,
                 PRIMARY KEY(edition_id, agent),
                 FOREIGN KEY(edition_id) REFERENCES gazette_editions(id) ON DELETE CASCADE)""")
+            # P74 (operator feedback): "Es ist nicht ersichtlich welcher
+            # Agent was gemacht und womit gewonnen hat [...] mit gestellter
+            # Aufgabe und erfolgter Loesung der Agents sowie dem benannten
+            # Gewinner." game_result contributions already carry the
+            # per-agent task/solution narrative (see the dedicated style
+            # hint in runtime.py); what was missing is a single declared
+            # winner - GAME_POOL's own text already names King as arbiter
+            # ("King kuert einen Favoriten"), so this is his explicit act,
+            # not an inferred/computed one (same principle as assign_kinds()
+            # being King's real action rather than a silent computation).
+            existing_edition_cols = {row[1] for row in c.execute("PRAGMA table_info(gazette_editions)").fetchall()}
+            if "game_winner" not in existing_edition_cols:
+                c.execute("ALTER TABLE gazette_editions ADD COLUMN game_winner TEXT")
+            if "game_winner_note" not in existing_edition_cols:
+                c.execute("ALTER TABLE gazette_editions ADD COLUMN game_winner_note TEXT")
+            if "game_winner_declared_by" not in existing_edition_cols:
+                c.execute("ALTER TABLE gazette_editions ADD COLUMN game_winner_declared_by TEXT")
+            if "game_winner_declared_at" not in existing_edition_cols:
+                c.execute("ALTER TABLE gazette_editions ADD COLUMN game_winner_declared_at TEXT")
             c.commit()
 
     def _conn(self):
@@ -379,6 +398,33 @@ class GazetteStore:
             ).fetchone()
             return int(row[0])
 
+    def declare_game_winner(self, edition_id: str, declared_by: str, winner: str, note: str = "") -> Dict[str, Any]:
+        """King's explicit arbiter act for the daily game (P74, operator
+        feedback: "womit gewonnen hat [...] den benannten Gewinner").
+        Deliberately a real, separate action - not inferred from the two
+        game_result contributions - same principle as assign_kinds() being
+        King's own act rather than a silently attributed computation.
+        winner must be one of today's drawn pair, or the literal
+        'unentschieden' for a genuine tie/no clear winner."""
+        edition = self.get_edition(edition_id)
+        if not edition:
+            raise ValueError(f"unknown gazette edition: {edition_id}")
+        if edition["status"] == "compiled":
+            raise ValueError(f"gazette edition {edition_id} is already compiled/closed")
+        if not edition["game_pair"]:
+            raise ValueError(f"gazette edition {edition_id} has no drawn game pair")
+        winner = str(winner or "").strip()
+        if winner not in (*edition["game_pair"], "unentschieden"):
+            raise ValueError(f"winner must be one of {edition['game_pair']} or 'unentschieden'")
+        with self._conn() as c:
+            c.execute(
+                "UPDATE gazette_editions SET game_winner=?, game_winner_note=?, "
+                "game_winner_declared_by=?, game_winner_declared_at=? WHERE id=?",
+                (winner, str(note).strip()[:400], declared_by, now(), edition_id),
+            )
+            c.commit()
+        return self.get_edition(edition_id)  # type: ignore
+
     def compile_edition(self, edition_id: str) -> str:
         """Deterministically render one edition to HTML (P55/Stufe 3 of
         docs/analysis/GAZETTE-PLAN-2026-09-28.md) - no LLM-generated
@@ -433,12 +479,23 @@ class GazetteStore:
                 parts.append(article(c_))
             parts.append("</section>")
 
+        # P74 (operator feedback): "Es ist nicht ersichtlich welcher Agent
+        # was gemacht und womit gewonnen hat [...] gestellte Aufgabe und
+        # erfolgte Loesung der Agents sowie den benannten Gewinner." Each
+        # participant's own game_result article (task posed + own
+        # solution, per the dedicated style hint in runtime.py) is already
+        # attributed by name via article()'s byline; the one piece that was
+        # genuinely missing is a single, explicit winner line.
         parts.append("<section><h2>Spiel des Tages</h2>")
         parts.append(f'<p>{esc(edition["game_name"])}</p>')
         if edition["game_pair"]:
             parts.append(f'<p class="byline">Ausgelost: {esc(", ".join(edition["game_pair"]))}</p>')
         for c_ in by_kind.get("game_result", []):
             parts.append(article(c_))
+        if edition.get("game_winner"):
+            winner_label = "Unentschieden" if edition["game_winner"] == "unentschieden" else esc(edition["game_winner"])
+            note = f' – {esc(edition["game_winner_note"])}' if edition.get("game_winner_note") else ""
+            parts.append(f'<p class="game-winner"><strong>Gewinner:</strong> {winner_label}{note}</p>')
         parts.append("</section>")
 
         if by_kind.get("meetings"):

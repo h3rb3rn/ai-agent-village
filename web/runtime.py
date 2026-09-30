@@ -112,6 +112,19 @@ GAZETTE_CLOSE_MIN_HOURS = 6
 # of 9 assigned residents (docs/evidence/P73.md). Same proven ceiling.
 GAZETTE_CONTRIBUTE_CEILING = 10
 
+# P74 (operator feedback, 2026-09-30): "Bei dem Spiel Teil steht nur eine
+# Reihenfolge. Es ist nicht ersichtlich welcher Agent was gemacht und
+# womit gewonnen hat." The 'game_result' kind (unlike the regular
+# per-resident rotation P73 just gated) has never had ANY pressure behind
+# it at all - it is deliberately excluded from assign_kinds()'s mandatory
+# rotation (see village/gazette.py), so the P73 gate never covers it
+# either. Same proven ceiling, two more gates: one for each drawn
+# participant's own game_result, one for King's separate winner
+# declaration once both are in (GAME_POOL's own text already names him
+# arbiter: "King kuert einen Favoriten").
+GAZETTE_GAME_RESULT_CEILING = 10
+GAZETTE_GAME_WINNER_CEILING = 10
+
 # P72 (operator directive, 2026-09-29): "Es kann nicht sein das die Agents
 # ununterbrochen in Loops festhaengen ... Mechanismen die den Agents im
 # Zweifel Hilfe zur Selbsthilfe geben und Loops identifizieren sowie
@@ -456,6 +469,41 @@ class Resident:
             return None
         return edition['id'], assigned_kind
 
+    def gazette_pending_game_result(self):
+        """(edition_id,) if THIS agent is part of the active edition's
+        drawn game pair and has not yet submitted a game_result - None
+        otherwise. P74: 'game_result' is deliberately excluded from
+        assign_kinds()'s rotation, so gazette_pending_own_contribution()
+        never covers it - this is its own, separate obligation."""
+        edition = self.gazette.get_edition(self.gazette_active_edition_id())
+        if not edition or edition['status'] == 'compiled':
+            return None
+        if self.id not in edition.get('game_pair', []):
+            return None
+        if any(c['agent'] == self.id and c['kind'] == 'game_result' for c in edition['contributions']):
+            return None
+        return (edition['id'],)
+
+    def gazette_pending_game_winner(self):
+        """(edition_id, [pair]) if THIS agent is King, the active edition
+        has a drawn pair, BOTH have submitted their game_result, and no
+        winner has been declared yet - None otherwise. Requiring both
+        accounts first means King judges with the full picture, same
+        rationale as gazette_pending_reviews() only ever surfacing
+        actually-submitted content."""
+        if self.id != '01-king':
+            return None
+        edition = self.gazette.get_edition(self.gazette_active_edition_id())
+        if not edition or edition['status'] == 'compiled':
+            return None
+        pair = edition.get('game_pair', [])
+        if len(pair) < 2 or edition.get('game_winner'):
+            return None
+        submitted = {c['agent'] for c in edition['contributions'] if c['kind'] == 'game_result'}
+        if not all(p in submitted for p in pair):
+            return None
+        return edition['id'], pair
+
     def gazette_meetings_source_hint(self, context):
         """When assigned the 'meetings' kind (P73, operator directive: "eine
         Zusammenfassung der JourFixe und StandUp Meetings [...] mit
@@ -761,6 +809,33 @@ class Resident:
                         "(game_result is reserved for today's drawn pair; column is optional, for a "
                         f"genuinely in-depth topic). {gazette_style_hint}"
                     )
+        # P74 (operator feedback): "Es ist nicht ersichtlich welcher Agent
+        # was gemacht und womit gewonnen hat [...] gestellte Aufgabe und
+        # erfolgte Loesung der Agents sowie den benannten Gewinner." Appended
+        # to whatever gazette_daily_note the block above already produced
+        # (or starts one, if none did) - game participation is orthogonal
+        # to the regular per-resident rotation P73 already covers.
+        pending_game = self.gazette_pending_game_result()
+        if pending_game:
+            game_hint = (
+                f" You are part of today's drawn game pair (edition {pending_game[0]}): submit a "
+                "gazette_operation contribute with kind='game_result' once you have actually played "
+                "your part. Write it as a real account, not a note: state the concrete task or "
+                "question that was actually posed, describe your own move/answer/solution in "
+                "specific detail, and give your own assessment of who won and why - King declares "
+                "the official winner afterwards. Do not just restate the game's generic rules."
+            )
+            context['gazette_daily_note'] = (context.get('gazette_daily_note', '') + game_hint).strip()
+        pending_winner = self.gazette_pending_game_winner()
+        if pending_winner:
+            eid, pair = pending_winner
+            winner_hint = (
+                f" Both {pair[0]} and {pair[1]} have submitted their game_result for edition {eid}: "
+                "declare the official winner with gazette_operation operation='declare_winner', "
+                "winner=<one of them, or 'unentschieden' if genuinely tied>, and an optional short "
+                "note explaining the decision."
+            )
+            context['gazette_daily_note'] = (context.get('gazette_daily_note', '') + winner_hint).strip()
         if own_project and own_project.get('blockers'):
             context['task_blocker_guidance'] = (
                 f"Your active task {own_project['id']} has blockers: {own_project['blockers']}. "
@@ -1085,6 +1160,29 @@ class Resident:
                                         f"(fill in headline and content): {example}",
                                         f"edition={eid}; kind={kind}; pressure={pressure}")
 
+        # P74 (operator feedback, "es ist nicht ersichtlich [...] womit
+        # gewonnen hat"): 'game_result' is excluded from assign_kinds()'s
+        # rotation on purpose (see village/gazette.py), so contribute_block
+        # above never covers it - a completely separate, previously
+        # unenforced obligation for whichever two agents were drawn.
+        game_result_block = None
+        if name not in ('meeting_operation', 'gazette_operation', 'idle'):
+            pending_game = self.gazette_pending_game_result()
+            if not pending_game:
+                self.state['gazette_game_result_pressure'] = 0
+            else:
+                (eid,) = pending_game
+                pressure = int(self.state.get('gazette_game_result_pressure', 0)) + 1
+                self.state['gazette_game_result_pressure'] = pressure
+                self.event('gazette_game_result_required', f"edition={eid}; pressure={pressure}")
+                if pressure >= GAZETTE_GAME_RESULT_CEILING:
+                    example = ('{"name":"gazette_operation","arguments":{"operation":"contribute",'
+                               f'"edition_id":"{eid}","kind":"game_result","headline":"...","content":"..."}}')
+                    game_result_block = (f"Today's game result required before more solo work: submit "
+                                         f"exactly this envelope, naming the posed task, your own "
+                                         f"solution, and who you think won: {example}",
+                                         f"edition={eid}; pressure={pressure}")
+
         # P60 (operator: "Nicht nur beobachten wenn du GAPs identifizierst,
         # sondern proaktiv loesen"): live observation showed the Chronicler's
         # correctly-delivered, cross-day-persistent review hint (P57/P59)
@@ -1133,6 +1231,27 @@ class Resident:
                                    f"fully reviewed and still open. Submit exactly this envelope: {example}",
                                    f"closable={len(closable)}; pressure={pressure}")
 
+        # P74: King's own separate arbiter act (GAME_POOL's own text: "King
+        # kuert einen Favoriten") - only fires once BOTH drawn participants
+        # have actually submitted their game_result.
+        game_winner_block = None
+        if self.id == '01-king' and name not in ('meeting_operation', 'gazette_operation', 'idle'):
+            pending_winner = self.gazette_pending_game_winner()
+            if not pending_winner:
+                self.state['gazette_game_winner_pressure'] = 0
+            else:
+                eid, pair = pending_winner
+                pressure = int(self.state.get('gazette_game_winner_pressure', 0)) + 1
+                self.state['gazette_game_winner_pressure'] = pressure
+                self.event('gazette_game_winner_required', f"edition={eid}; pressure={pressure}")
+                if pressure >= GAZETTE_GAME_WINNER_CEILING:
+                    example = ('{"name":"gazette_operation","arguments":{"operation":"declare_winner",'
+                               f'"edition_id":"{eid}","winner":"{pair[0]}"}}')
+                    game_winner_block = (f"Today's game winner declaration required before more solo "
+                                         f"work: both {pair[0]} and {pair[1]} have submitted results. "
+                                         f"Submit exactly this envelope (or winner=\"unentschieden\"): {example}",
+                                         f"edition={eid}; pressure={pressure}")
+
         if meeting_block:
             self.feedback(name, meeting_block[0], False)
             self.event('meeting_gate', meeting_block[1])
@@ -1141,6 +1260,10 @@ class Resident:
             self.feedback(name, contribute_block[0], False)
             self.event('gazette_contribute_gate', contribute_block[1])
             return False
+        if game_result_block:
+            self.feedback(name, game_result_block[0], False)
+            self.event('gazette_game_result_gate', game_result_block[1])
+            return False
         if gazette_block:
             self.feedback(name, gazette_block[0], False)
             self.event('gazette_review_gate', gazette_block[1])
@@ -1148,6 +1271,10 @@ class Resident:
         if close_block:
             self.feedback(name, close_block[0], False)
             self.event('gazette_close_gate', close_block[1])
+            return False
+        if game_winner_block:
+            self.feedback(name, game_winner_block[0], False)
+            self.event('gazette_game_winner_gate', game_winner_block[1])
             return False
 
         norm_name = name
@@ -1602,12 +1729,30 @@ class Resident:
                                         self.event('gazette_pdf_failed', f'edition={edition_id}; error={exc}')
                             self.event('gazette_compiled', f'edition={edition_id}')
                             self.feedback(name, json.dumps(result, ensure_ascii=False)[:2000], True)
+                elif op == 'declare_winner':
+                    # P74 (operator feedback): "womit gewonnen hat [...]
+                    # den benannten Gewinner" - GAME_POOL's own text already
+                    # names King as arbiter ("King kuert einen Favoriten"),
+                    # same restriction pattern as open/assign/close.
+                    if self.id != '01-king':
+                        self.feedback(name, "Only 01-king may declare today's game winner.", False)
+                    else:
+                        edition_id = args.get('edition_id') or self.gazette_active_edition_id()
+                        try:
+                            result = self.gazette.declare_game_winner(
+                                edition_id, self.id, args.get('winner'), args.get('note', ''))
+                        except ValueError as exc:
+                            self.feedback(name, str(exc), False)
+                        else:
+                            self.event('gazette_game_winner_declared',
+                                       f'edition={edition_id}; winner={args.get("winner")}')
+                            self.feedback(name, json.dumps(result, ensure_ascii=False)[:2000], True)
                 elif op == 'view':
                     edition_id = args.get('edition_id') or gazette_today()
                     result = self.gazette.get_edition(edition_id)
                     self.feedback(name, json.dumps(result, ensure_ascii=False)[:3000] if result else 'No edition yet for that date.', bool(result))
                 else:
-                    raise ValueError('gazette_operation requires operation open, assign, contribute, review, close, or view')
+                    raise ValueError('gazette_operation requires operation open, assign, contribute, review, close, declare_winner, or view')
             else:
                 self.feedback('idle','Intentional rest; next turn may resume your own project.',True)
                 self.event('idle','intentional rest')
