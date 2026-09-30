@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'web'))
-from runtime import Resident,Tasks,resource_snapshot,tail,event_time,COLLABORATION_PRESSURE_CEILING,MEETING_REPORT_CEILING,GAZETTE_REVIEW_CEILING,GAZETTE_CLOSE_CEILING,GAZETTE_CLOSE_MIN_HOURS,GAZETTE_CONTRIBUTE_CEILING,GAZETTE_GAME_RESULT_CEILING,GAZETTE_GAME_WINNER_CEILING,CALENDAR_PLAN_CEILING,CALENDAR_WEEK_PLAN_CEILING,GAZETTE_CONTRIBUTE_DEADLINE_HOUR_UTC,GAZETTE_PUBLISH_DEADLINE_HOUR_UTC,gazette_deadline_passed
+from runtime import Resident,Tasks,resource_snapshot,tail,event_time,COLLABORATION_PRESSURE_CEILING,MEETING_REPORT_CEILING,GAZETTE_REVIEW_CEILING,GAZETTE_CLOSE_CEILING,GAZETTE_CLOSE_MIN_HOURS,GAZETTE_CONTRIBUTE_CEILING,GAZETTE_GAME_RESULT_CEILING,GAZETTE_GAME_WINNER_CEILING,CALENDAR_PLAN_CEILING,CALENDAR_WEEK_PLAN_CEILING,GAZETTE_CONTRIBUTE_DEADLINE_HOUR_UTC,GAZETTE_PUBLISH_DEADLINE_HOUR_UTC,gazette_deadline_passed,LOOP_BREAKER_STREAK
 from village.gazette import REVIEWER_AGENT
 from village.calendar import today as calendar_today
 from village.calendar import is_workday as real_calendar_is_workday
@@ -110,6 +110,25 @@ class RuntimeTests(unittest.TestCase):
         self.execute('idle')
         self.assertFalse(self.agent.state['last_result']['ok'])
         self.assertIn('Collaboration checkpoint required', self.agent.state['last_result']['result'])
+
+    def test_idle_escapes_the_collaboration_loop_breaker_deadlock(self):
+        # P83 (live incident, 05-interpreter stuck at collaboration_pressure=158):
+        # P51 above deliberately wants 'idle' gated once a checkpoint is at
+        # ceiling - but if the P72 loop-breaker has ALSO restricted this agent
+        # to ['idle'] only (invalid_streak >= LOOP_BREAKER_STREAK), gating idle
+        # too leaves zero valid actions: memory_search is rejected by the
+        # loop-breaker, idle is rejected by the checkpoint. Live evidence:
+        # last_result was {'action': 'idle', 'ok': False} with no escape.
+        # 'idle' must succeed in this exact cornercase, without reopening the
+        # P51 gap above (which stays proven by the test just above).
+        self.agent.current_collaboration_checkpoint = CooperationCheckpoint(
+            'orient', 'memory_search', 'search before acting', hard=True
+        )
+        self.agent.state['collaboration_pressure'] = COLLABORATION_PRESSURE_CEILING
+        self.agent.state['invalid_streak'] = LOOP_BREAKER_STREAK
+        self.assertEqual(self.agent.effective_allowed_actions(), ['idle'])
+        self.execute('idle')
+        self.assertTrue(self.agent.state['last_result']['ok'], self.agent.state['last_result'])
 
     def test_meeting_report_nudge_eventually_gates_other_actions(self):
         # P56: the exact same unbounded-nudge gap COLLABORATION_PRESSURE_CEILING

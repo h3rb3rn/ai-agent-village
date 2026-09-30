@@ -1347,7 +1347,28 @@ class Resident:
                 self.feedback(name, f'Named peer consultation required: address exactly {checkpoint.peer_id}, not {recipient}. Ask one concrete, reproducible question.', False)
                 self.event('collaboration_gate', f'stage=consult; required=board_message; expected_peer={checkpoint.peer_id}; received={recipient}')
                 return False
-        if checkpoint and not is_checkpoint_action(checkpoint, name) and checkpoint.required_action:
+        # P83 (live incident, operator-directed investigation into 05-interpreter
+        # stuck at collaboration_pressure=158): P51's own test/comment below
+        # deliberately wants 'idle' to eventually be gated too, past
+        # COLLABORATION_PRESSURE_CEILING - otherwise an agent could dodge a
+        # checkpoint forever by always choosing idle. That must stay intact.
+        # But a second, independent mechanism (P72's loop-breaker) can restrict
+        # effective_allowed_actions() to ['idle'] ONLY - and when BOTH are active
+        # at once, gating idle here too creates a real, observed deadlock with
+        # zero valid actions left ("last_result: {action: idle, ok: False}",
+        # live on 05-interpreter with collaboration_pressure=158). The narrow
+        # fix: 'idle' is only ever exempted from THIS gate in that exact
+        # cornercase - when it is the only action the agent is allowed to
+        # attempt at all - never as a general, permanent exemption.
+        # execute() already resets invalid_streak (and with it, what
+        # effective_allowed_actions() computed just above would return) to 0
+        # for any well-formed decision before guard() ever runs - recomputing
+        # "was idle the only option" here would therefore always see the
+        # post-reset, unrestricted list. Read the flag execute() captured
+        # beforehand instead.
+        idle_was_only_option = self.state.pop('_idle_was_only_option', False)
+        if checkpoint and not (name == 'idle' and idle_was_only_option) \
+                and not is_checkpoint_action(checkpoint, name) and checkpoint.required_action:
             pressure = int(self.state.get('collaboration_pressure', 0)) + 1
             self.state['collaboration_pressure'] = pressure
             self.event('collaboration_nudge', f'stage={checkpoint.stage}; required={checkpoint.required_action}; pressure={pressure}')
@@ -1729,6 +1750,15 @@ class Resident:
             # private last-response.json (bounded, redacted) and is only counted.
             self.state['last_rejected_fingerprint'] = fp
             return
+        # P83: captured *before* the reset below, since guard() runs after
+        # this point and would otherwise always see a fresh invalid_streak==0
+        # - by definition, reaching here with a real tool_call already means
+        # decision.py let this action name through effective_allowed_actions(),
+        # so the only way 'idle' gets this far while the loop-breaker was
+        # active is if idle was *itself* that one permitted name. guard()
+        # uses this to tell "idle, and it was the only option" apart from an
+        # ordinary idle choice with the full action list available.
+        self.state['_idle_was_only_option'] = self.effective_allowed_actions() == ['idle']
         self.state['invalid_streak'] = 0
         if parsed.get('extra_blocks_ignored'):
             # P51: the model sent several action blocks in one turn (a narrated
