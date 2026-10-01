@@ -57,6 +57,7 @@ class ResidentCatalogTests(unittest.TestCase):
                 self.assertTrue(r.name)
                 self.assertTrue(r.role)
                 self.assertTrue(r.art_symbol)
+                self.assertTrue(r.avatar_icon)
                 self.assertTrue(r.accent_color.startswith("#"))
 
                 # Localized fields
@@ -89,11 +90,13 @@ class ResidentCatalogTests(unittest.TestCase):
     def test_to_dict_localization(self):
         king = get_resident("01-king", lang="en", include_art=False)
         self.assertIsNotNone(king)
+        self.assertEqual(king["avatar_icon"], "👑")
         self.assertIn("Village Coordinator", king["profession"])
         self.assertIn("cognitive diversity", king["calling"])
 
         king_de = get_resident("01-king", lang="de", include_art=False)
         self.assertIsNotNone(king_de)
+        self.assertEqual(king_de["avatar_icon"], "👑")
         self.assertIn("Ratsvorsitzender", king_de["profession"])
         self.assertIn("kognitiven Vielfalt", king_de["calling"])
 
@@ -162,6 +165,7 @@ class ResidentWebUITests(unittest.TestCase):
         self.assertIsInstance(data, list)
         self.assertEqual(len(data), 9)
         self.assertEqual(data[0]["id"], "01-king")
+        self.assertEqual(data[0]["avatar_icon"], "👑")
         self.assertIn("dna", data[0])
         self.assertIn("model", data[0]["dna"])
 

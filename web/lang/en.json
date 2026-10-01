@@ -617,6 +617,8 @@
     "copied": "Copied!",
     "view_raw": "Terminal View",
     "loading": "Loading resident profiles …",
-    "load_failed": "Failed to load resident profile data."
+    "load_failed": "Failed to load resident profile data.",
+    "agent_badge": "Agent {id}",
+    "symbol_tag": "Symbol: {symbol}"
   }
 }

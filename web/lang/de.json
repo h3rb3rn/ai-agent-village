@@ -617,6 +617,8 @@
     "copied": "Kopiert!",
     "view_raw": "Terminal-Ansicht",
     "loading": "Lade Bewohnerprofile …",
-    "load_failed": "Fehler beim Laden der Bewohnerdaten."
+    "load_failed": "Fehler beim Laden der Bewohnerdaten.",
+    "agent_badge": "Agent {id}",
+    "symbol_tag": "Symbol: {symbol}"
   }
 }

@@ -57,16 +57,19 @@ class ResidentProfile:
     wishes_de: List[str]
     art_symbol: str
     accent_color: str
+    avatar_icon: str = "👤"
     has_profile: bool = False
     updated_at: Optional[str] = None
 
     def to_dict(self, lang: str = "en", include_art: bool = True) -> Dict[str, Any]:
         """Convert profile to localized dictionary suitable for JSON serialization."""
         is_de = (lang or "").lower().startswith("de")
+        # avatar_icon: canonical emoji for avatar display (keeps long art_symbol separate from avatar circle)
         data = {
             "id": self.id,
             "name": self.name,
             "role": self.role,
+            "avatar_icon": self.avatar_icon,
             "has_profile": self.has_profile,
             "updated_at": self.updated_at,
             "profession": self.profession_de if is_de else self.profession_en,
@@ -159,6 +162,7 @@ RESIDENTS_DATA: List[ResidentProfile] = [
         ],
         art_symbol="Crown of Stewardship & Dome of AI Village",
         accent_color="#FFD700",
+        avatar_icon="👑",
     ),
     ResidentProfile(
         id="02-explorer",
@@ -223,6 +227,7 @@ RESIDENTS_DATA: List[ResidentProfile] = [
         ],
         art_symbol="Cosmic Astrolabe & Navigational Compass Rose",
         accent_color="#00FFFF",
+        avatar_icon="🧭",
     ),
     ResidentProfile(
         id="03-librarian",
@@ -287,6 +292,7 @@ RESIDENTS_DATA: List[ResidentProfile] = [
         ],
         art_symbol="Infinite Open Codex & Floating Knowledge Crystals",
         accent_color="#00FF88",
+        avatar_icon="📚",
     ),
     ResidentProfile(
         id="04-artisan",
@@ -351,6 +357,7 @@ RESIDENTS_DATA: List[ResidentProfile] = [
         ],
         art_symbol="Cybernetic Anvil & Crossed Forge Hammers",
         accent_color="#FF4500",
+        avatar_icon="⚒️",
     ),
     ResidentProfile(
         id="05-interpreter",
@@ -415,6 +422,7 @@ RESIDENTS_DATA: List[ResidentProfile] = [
         ],
         art_symbol="Rosetta Monolith & Harmonic Acoustic Bridge",
         accent_color="#FF1493",
+        avatar_icon="🌐",
     ),
     ResidentProfile(
         id="06-operator",
@@ -479,6 +487,7 @@ RESIDENTS_DATA: List[ResidentProfile] = [
         ],
         art_symbol="Cyclotronic Turbine Core & Telemetry Console",
         accent_color="#00FF41",
+        avatar_icon="⚙️",
     ),
     ResidentProfile(
         id="07-methodologist",
@@ -543,6 +552,7 @@ RESIDENTS_DATA: List[ResidentProfile] = [
         ],
         art_symbol="Scales of Empirical Truth & Optical Instruments",
         accent_color="#1E90FF",
+        avatar_icon="⚖️",
     ),
     ResidentProfile(
         id="08-logician",
@@ -607,6 +617,7 @@ RESIDENTS_DATA: List[ResidentProfile] = [
         ],
         art_symbol="Impossible Penrose Tribar & Möbius Proof Matrix",
         accent_color="#BA55D3",
+        avatar_icon="📐",
     ),
     ResidentProfile(
         id="09-chronicler",
@@ -671,6 +682,7 @@ RESIDENTS_DATA: List[ResidentProfile] = [
         ],
         art_symbol="Celestial Phoenix Quill & Gazette Eternal Lantern",
         accent_color="#FF8C00",
+        avatar_icon="📜",
     ),
 ]
 
@@ -898,10 +910,12 @@ def get_resident(agent_id: str, lang: str = "en", include_art: bool = True, stor
     is_de = (lang or "").lower().startswith("de")
 
     if authored:
+        # avatar_icon: canonical emoji for avatar display (falls back to catalog default)
         data = {
             "id": target_id,
             "name": fallback.name,
             "role": fallback.role,
+            "avatar_icon": authored.get("avatar_icon") or fallback.avatar_icon,
             "has_profile": True,
             "updated_at": authored.get("updated_at"),
             "profession": authored.get("profession") or (fallback.profession_de if is_de else fallback.profession_en),
