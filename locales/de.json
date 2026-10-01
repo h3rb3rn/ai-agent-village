@@ -95,6 +95,8 @@
   },
   "residents": {
     "profile_loaded": "Bewohnerprofil erfolgreich geladen.",
-    "resident_not_found": "Bewohner nicht im Dorfkatalog gefunden."
+    "resident_not_found": "Bewohner nicht im Dorfkatalog gefunden.",
+    "profile_updated": "Bewohnerprofil erfolgreich aktualisiert.",
+    "profile_invalid_art": "Ungültiges ASCII-Art: Dimensionen oder UTF-8-Format ungültig."
   }
 }

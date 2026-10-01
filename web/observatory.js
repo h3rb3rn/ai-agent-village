@@ -488,10 +488,15 @@ $('resident-selector')?.addEventListener('click',e=>{
  document.querySelectorAll('#resident-selector .resident-btn').forEach(x=>x.classList.toggle('active',x===b));
  renderResidentProfile(currentResidentId);
 });
-$('ascii-zoom-in')?.addEventListener('click',()=>{residentZoom=Math.min(3.0,residentZoom+0.25);applyAsciiZoom();});
-$('ascii-zoom-out')?.addEventListener('click',()=>{residentZoom=Math.max(0.5,residentZoom-0.25);applyAsciiZoom();});
-$('ascii-zoom-fit')?.addEventListener('click',()=>{residentZoom=1.0;applyAsciiZoom();});
-$('ascii-toggle-color')?.addEventListener('click',()=>{residentArtColor=!residentArtColor;$('ascii-toggle-color').classList.toggle('active',residentArtColor);renderResidentArt();});
+$('residents-panel')?.addEventListener('click',e=>{
+ const tabBtn=e.target.closest('.fb-tab');
+ if(tabBtn){
+  const tabName=tabBtn.dataset.tab;
+  document.querySelectorAll('#residents-panel .fb-tab').forEach(b=>b.classList.toggle('active',b===tabBtn));
+  document.querySelectorAll('#residents-panel .fb-tab-pane').forEach(p=>p.classList.toggle('active',p.id===`pane-${tabName}`));
+ }
+});
+$('ascii-toggle-color')?.addEventListener('click',()=>{residentArtColor=!residentArtColor;$('ascii-toggle-color')?.classList.toggle('active',residentArtColor);renderResidentArt();});
 $('ascii-copy-btn')?.addEventListener('click',()=>{
  const p=residentProfiles.find(x=>x.id===currentResidentId);
  if(!p)return;
@@ -512,57 +517,119 @@ $('habitat-connections').addEventListener('click',e=>{const n=e.target.closest('
 document.addEventListener('click',e=>{const n=e.target.closest('#habitat-connections [data-node]');if(!n)return;e.preventDefault();try{inspectNode(n.dataset.node);$('map-inspector').scrollIntoView({behavior:'smooth',block:'nearest'});}catch(err){console.error('infrastructure detail failed',err);}},true);
 function renderProjectionSummary(){const stats=data?.current?.memory?.stats||{},projection=stats.projection||{},backends=projection.backends||{},lag=Object.values(backends).reduce((n,x)=>n+Number(x.lag||0),0),hint=document.querySelector('#memory-panel .hint');if(hint)hint.textContent=t('memory_panel.projection_summary',{total:fmt(stats.total||0),lag:fmt(lag),n:Object.keys(backends).length});let panel=$('memory-projection');if(!panel){panel=document.createElement('div');panel.id='memory-projection';panel.className='memory-services';$('memory-services').after(panel);}panel.innerHTML=Object.entries(backends).map(([name,s])=>`<article class="memory-service ${s.status==='active'?'online':'offline'}"><strong>${esc(name)}</strong><span>${esc(s.status||t('memory_panel.unknown_status'))}</span><small>${esc(t('memory_panel.lag'))} ${fmt(s.lag||0)} · ${esc(t('memory_panel.errors'))} ${fmt(s.error_count||0)}</small></article>`).join('')||`<p class="chart-empty">${esc(t('memory_panel.no_backends'))}</p>`;}
 
-function ansiToHtml(str){
- let out='',fg=null;
- const re=/\x1b\[([0-9;]+)m/g;
- let lastIndex=0,m;
- while((m=re.exec(str))!==null){
-  out+=esc(str.substring(lastIndex,m.index));
-  lastIndex=re.lastIndex;
-  const codes=m[1].split(';').map(Number);
-  if(codes[0]===0){if(fg){out+='</span>';fg=null;}}
-  else if(codes[0]===38&&codes[1]===2&&codes.length>=5){
-   if(fg)out+='</span>';
-   out+=`<span style="color:rgb(${codes[2]},${codes[3]},${codes[4]})">`;
-   fg=true;
-  }else if(codes[0]>=30&&codes[0]<=37){
-   const basic=['#000000','#cc0000','#4e9a06','#c4a000','#3465a4','#75507b','#06989a','#d3d7cf'];
-   if(fg)out+='</span>';
-   out+=`<span style="color:${basic[codes[0]-30]}">`;
-   fg=true;
-  }else if(codes[0]>=90&&codes[0]<=97){
-   const bright=['#555753','#ef2929','#8ae234','#fce94f','#729fcf','#ad7fa8','#34e2e2','#eeeeec'];
-   if(fg)out+='</span>';
-   out+=`<span style="color:${bright[codes[0]-90]}">`;
-   fg=true;
+function renderAsciiToCanvas(canvas, rawArt, isColor) {
+ if (!canvas) return;
+ const ctx = canvas.getContext('2d');
+ if (!ctx) return;
+ const imgData = ctx.createImageData(250, 250);
+ const data = imgData.data;
+
+ // Default canvas background (#050b10)
+ for (let i = 0; i < 250 * 250 * 4; i += 4) {
+  data[i] = 5;
+  data[i + 1] = 11;
+  data[i + 2] = 16;
+  data[i + 3] = 255;
+ }
+ if (!rawArt) {
+  ctx.putImageData(imgData, 0, 0);
+  return;
+ }
+
+ const basicColors = [
+  [0, 0, 0], [204, 0, 0], [78, 154, 6], [196, 160, 0],
+  [52, 101, 164], [117, 80, 123], [6, 152, 154], [211, 215, 207]
+ ];
+ const brightColors = [
+  [85, 87, 83], [239, 41, 41], [138, 226, 52], [252, 233, 79],
+  [114, 159, 207], [173, 127, 168], [52, 226, 226], [238, 238, 236]
+ ];
+
+ const lines = rawArt.split('\n');
+ let curFg = null;
+ let curBg = null;
+
+ for (let y = 0; y < Math.min(250, lines.length); y++) {
+  const line = lines[y];
+  let x = 0;
+  let i = 0;
+  while (i < line.length && x < 250) {
+   if (line[i] === '\x1b' && line[i + 1] === '[') {
+    const mEnd = line.indexOf('m', i + 2);
+    if (mEnd !== -1) {
+     const codeSeq = line.substring(i + 2, mEnd);
+     const codes = codeSeq.split(';').map(Number);
+     if (codes[0] === 0 || codeSeq === '') {
+      curFg = null;
+      curBg = null;
+     } else if (codes[0] === 38 && codes[1] === 2 && codes.length >= 5) {
+      curFg = [codes[2], codes[3], codes[4]];
+     } else if (codes[0] === 48 && codes[1] === 2 && codes.length >= 5) {
+      curBg = [codes[2], codes[3], codes[4]];
+     } else if (codes[0] >= 30 && codes[0] <= 37) {
+      curFg = basicColors[codes[0] - 30];
+     } else if (codes[0] >= 90 && codes[0] <= 97) {
+      curFg = brightColors[codes[0] - 90];
+     } else if (codes[0] >= 40 && codes[0] <= 47) {
+      curBg = basicColors[codes[0] - 40];
+     } else if (codes[0] >= 100 && codes[0] <= 107) {
+      curBg = brightColors[codes[0] - 100];
+     } else if (codes[0] === 39) {
+      curFg = null;
+     } else if (codes[0] === 49) {
+      curBg = null;
+     }
+     i = mEnd + 1;
+     continue;
+    }
+   }
+
+   const codePoint = line.codePointAt(i);
+   const ch = String.fromCodePoint(codePoint);
+   i += ch.length;
+
+   const pIdx = (y * 250 + x) * 4;
+
+   if (!isColor) {
+    if (ch !== ' ') {
+     let val = 210;
+     if ('.,-`\''.includes(ch)) val = 85;
+     else if (':;~+^"='.includes(ch)) val = 125;
+     else if ('*#%&|/()[]{}'.includes(ch)) val = 175;
+     else if ('@█▓▒░$'.includes(ch)) val = 240;
+     data[pIdx] = Math.round(val * 0.35);
+     data[pIdx + 1] = Math.round(val * 0.88);
+     data[pIdx + 2] = val;
+    }
+   } else {
+    if (ch === ' ') {
+     if (curBg) {
+      data[pIdx] = curBg[0];
+      data[pIdx + 1] = curBg[1];
+      data[pIdx + 2] = curBg[2];
+     }
+    } else {
+     const col = curFg || curBg || [92, 225, 230];
+     data[pIdx] = col[0];
+     data[pIdx + 1] = col[1];
+     data[pIdx + 2] = col[2];
+    }
+   }
+   x++;
   }
  }
- out+=esc(str.substring(lastIndex));
- if(fg)out+='</span>';
- return out;
+ ctx.putImageData(imgData, 0, 0);
 }
-function applyAsciiZoom(){
- const canvas=$('ascii-canvas');
- if(!canvas)return;
- const baseSize=3.5;
- const sz=Math.max(1,(baseSize*residentZoom).toFixed(2));
- canvas.style.fontSize=`${sz}px`;
- canvas.style.lineHeight='1.0';
-}
+
 function renderResidentArt(p){
- const profile=p||residentProfiles.find(x=>x.id===currentResidentId);
- if(!profile)return;
- const canvas=$('ascii-canvas');
- if(!canvas)return;
- if(residentArtColor&&profile.ascii_art){
-  canvas.classList.remove('mono');
-  canvas.innerHTML=ansiToHtml(profile.ascii_art);
- }else{
-  canvas.classList.add('mono');
-  canvas.textContent=profile.ascii_art_plain||(profile.ascii_art?profile.ascii_art.replace(/\x1b\[[0-9;]*m/g,''):'');
- }
- applyAsciiZoom();
+ const profile = p || residentProfiles.find(x => x.id === currentResidentId);
+ if (!profile) return;
+ const canvas = $('ascii-canvas');
+ if (!canvas) return;
+ const art = profile.ascii_art || profile.ascii_art_plain || '';
+ renderAsciiToCanvas(canvas, art, residentArtColor);
 }
+
 function renderResidentProfile(id){
  const p=residentProfiles.find(x=>x.id===id);
  if(!p)return;
@@ -575,6 +642,7 @@ function renderResidentProfile(id){
  if($('resident-quick-tags'))$('resident-quick-tags').innerHTML=`<span class="fb-tag">${esc(p.dna.model)}</span><span class="fb-tag">${esc(p.dna.model_size)}</span><span class="fb-tag">${fmt(p.dna.context_size)} ctx</span><span class="fb-tag">${esc(p.dna.model_quant)}</span>`;
  if($('resident-calling'))$('resident-calling').textContent=`"${p.calling}"`;
  if($('resident-bio'))$('resident-bio').textContent=p.personal_info;
+ if($('resident-symbol'))$('resident-symbol').textContent=p.art_symbol||'—';
  if($('resident-dna-model'))$('resident-dna-model').textContent=p.dna.model;
  if($('resident-dna-size'))$('resident-dna-size').textContent=p.dna.model_size;
  if($('resident-dna-ctx'))$('resident-dna-ctx').textContent=`${fmt(p.dna.context_size)} ${t('residents_panel.tokens_unit')}`;
@@ -584,6 +652,7 @@ function renderResidentProfile(id){
  if($('resident-hobbies'))$('resident-hobbies').innerHTML=(p.hobbies||[]).map(x=>`<li>${esc(x)}</li>`).join('');
  if($('resident-goals'))$('resident-goals').innerHTML=(p.goals||[]).map(x=>`<li>${esc(x)}</li>`).join('');
  if($('resident-wishes'))$('resident-wishes').innerHTML=(p.wishes||[]).map(x=>`<li>${esc(x)}</li>`).join('');
+ if($('resident-unauthored-banner'))$('resident-unauthored-banner').hidden=(p.has_profile!==false);
  renderResidentArt(p);
  if($('ascii-raw-link'))$('ascii-raw-link').href=`/assets/ascii_art/${p.id}.txt`;
 }

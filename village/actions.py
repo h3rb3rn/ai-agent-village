@@ -211,6 +211,24 @@ ACTION_SPECS: Dict[str, Dict[str, Any]] = {
             "request_id": _s(60), "decision": {"enum": ["approve", "reject"]},
             "notes": _s(500), "note": _s(400)},
         "required": ["operation"]},
+    "profile_operation": {
+        "doc": "operation=view(agent_id?)|update(profession?,calling?,personal_info?,art_symbol?,accent_color?,ascii_art?,ascii_art_file?) -> manage resident profile and 250x250 ASCII art",
+        "properties": {
+            "operation": {"enum": ["view", "update"]},
+            "agent_id": _s(40),
+            "profession": _s(150),
+            "calling": _s(300),
+            "personal_info": _s(2000),
+            "preferences": {"type": "array", "items": _s(150), "maxItems": 10},
+            "hobbies": {"type": "array", "items": _s(150), "maxItems": 10},
+            "goals": {"type": "array", "items": _s(150), "maxItems": 10},
+            "wishes": {"type": "array", "items": _s(150), "maxItems": 10},
+            "art_symbol": _s(60),
+            "accent_color": _s(20),
+            "ascii_art": _s(70000),
+            "ascii_art_file": _s(300),
+        },
+        "required": ["operation"]},
     "idle": {"doc": "no arguments -> deliberate rest", "properties": {}, "required": []},
 }
 

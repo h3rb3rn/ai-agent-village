@@ -95,6 +95,8 @@
   },
   "residents": {
     "profile_loaded": "Resident profile loaded successfully.",
-    "resident_not_found": "Resident not found in village catalog."
+    "resident_not_found": "Resident not found in village catalog.",
+    "profile_updated": "Resident profile updated successfully.",
+    "profile_invalid_art": "Invalid ASCII art: dimensions or UTF-8 formatting invalid."
   }
 }

@@ -48,6 +48,7 @@ from village.gazette import GazetteStore
 from village.calendar import CalendarStore
 from village.finetune import FinetuneStore
 from village.finetune import REVIEW_AGENT as FINETUNE_REVIEW_AGENT
+from village.residents import ResidentStore, get_resident
 from village.gazette import MAX_CONTRIBUTION_CHARS as GAZETTE_MAX_CHARS
 from village.gazette import HEADLINE_MAX_CHARS as GAZETTE_HEADLINE_MAX_CHARS
 from village.gazette import MAX_COLUMN_CHARS as GAZETTE_MAX_COLUMN_CHARS
@@ -395,6 +396,8 @@ class Resident:
         # tracking, evaluation, swap requests) - training itself runs via
         # the existing start_job mechanism.
         self.finetune = FinetuneStore(self.board / 'coordination.sqlite3')
+        # P91: resident profile store - agents author their own profiles and ASCII art.
+        self.residents = ResidentStore(self.board / 'coordination.sqlite3')
         # P12: SQLite-backed manager for persistent background tool jobs with crash reconciliation
         self.jobs = JobManager(self.home / 'jobs.sqlite3')
         reconciled_jobs = self.jobs.reconcile_stale_jobs(self.id)
@@ -1225,7 +1228,7 @@ class Resident:
             context['memory_status'] = f'Retrieval unavailable: {exc}; private workspace remains available'
         # Approximate character budget, not a tokenizer: keep small-context residents
         # usable even when peers publish lengthy messages or the archive grows.
-        budget=max(6000,min(24000,int(self.env.get('OLLAMA_NUM_CTX','8192'))*2-10000))
+        budget=max(8000,min(24000,int(self.env.get('OLLAMA_NUM_CTX','8192'))*2-10000))
         context['context_note']='Bounded excerpts; omitted detail remains on disk. This is not the entire history.'
         last_metrics = read_json(self.home / 'last-response.json', {}).get('metrics', {})
         context['token_budget'] = {
@@ -2519,6 +2522,51 @@ class Resident:
                 else:
                     raise ValueError('finetune_operation requires operation propose, update_status, evaluate, '
                                     'request_swap, review_swap, release_gpu, or list')
+            elif name == 'profile_operation':
+                # P91 (operator directive): "Zudem sollen die Agents selbst die
+                # Seite anlegen und pflegen, nicht du" - agents author and maintain
+                # their own Observatory resident profile and 250x250 ASCII art self-portrait.
+                op = args.get('operation') or args.get('action')
+                if op == 'view':
+                    target = args.get('agent_id') or self.id
+                    prof = self.residents.get_profile(target) or get_resident(target, store=self.residents)
+                    self.feedback(name, json.dumps(prof, ensure_ascii=False)[:3000] if prof else f"Profile for '{target}' not found.", bool(prof))
+                elif op == 'update':
+                    art_content = args.get('ascii_art')
+                    art_file = args.get('ascii_art_file')
+                    if art_file and not art_content:
+                        target_path = (self.home / art_file).resolve()
+                        if not str(target_path).startswith(str(self.home.resolve())):
+                            self.feedback(name, "ascii_art_file must reside inside your private home directory", False)
+                        elif not target_path.is_file():
+                            self.feedback(name, f"File '{art_file}' does not exist in your home directory", False)
+                        else:
+                            art_content = target_path.read_text(encoding="utf-8", errors="replace")
+
+                    if art_file and not art_content:
+                        pass  # already gave feedback
+                    else:
+                        try:
+                            res = self.residents.update_profile(
+                                agent_id=self.id,
+                                profession=args.get('profession'),
+                                calling=args.get('calling'),
+                                personal_info=args.get('personal_info'),
+                                preferences=args.get('preferences'),
+                                hobbies=args.get('hobbies'),
+                                goals=args.get('goals'),
+                                wishes=args.get('wishes'),
+                                art_symbol=args.get('art_symbol'),
+                                accent_color=args.get('accent_color'),
+                                ascii_art=art_content,
+                            )
+                        except ValueError as exc:
+                            self.feedback(name, str(exc), False)
+                        else:
+                            self.event('profile_updated', f"agent={self.id}; updated_at={res.get('updated_at')}")
+                            self.feedback(name, json.dumps(res, ensure_ascii=False)[:2000], True)
+                else:
+                    raise ValueError("profile_operation requires operation view or update")
             else:
                 self.feedback('idle','Intentional rest; next turn may resume your own project.',True)
                 self.event('idle','intentional rest')

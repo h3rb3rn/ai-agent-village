@@ -23,9 +23,11 @@ from village.residents import (
     RESIDENTS_DATA,
     CognitiveDNA,
     ResidentProfile,
+    ResidentStore,
     get_resident,
     get_resident_art,
     list_residents,
+    validate_ascii_art,
 )
 from web import webui
 
@@ -183,6 +185,82 @@ class ResidentWebUITests(unittest.TestCase):
         content = req.read().decode("utf-8")
         lines = content.splitlines()
         self.assertEqual(len(lines), 250)
+
+
+class ResidentStoreTests(unittest.TestCase):
+    """Tests SQLite persistence and validation for agent-authored profiles."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.db_path = Path(self.temp_dir.name) / "test_coordination.sqlite3"
+        self.store = ResidentStore(self.db_path)
+
+    def tearDown(self):
+        self.temp_dir.cleanup()
+
+    def test_unauthored_profile_fallback(self):
+        # Fresh store has no authored profiles
+        king = get_resident("01-king", lang="en", include_art=False, store=self.store)
+        self.assertIsNotNone(king)
+        self.assertFalse(king["has_profile"])
+        self.assertIn("Village Coordinator", king["profession"])
+
+    def test_author_profile_update_and_retrieval(self):
+        # Agent authors their own profile
+        res = self.store.update_profile(
+            agent_id="01-king",
+            profession="Architect of Consensus",
+            calling="Unifying independent nodes into a harmonic mesh.",
+            personal_info="I observe and mediate.",
+            art_symbol="Golden Crown",
+            accent_color="#FFD700",
+            preferences=["Truth", "Patience"],
+            hobbies=["Chess", "Astrophysics"],
+            goals=["Zero livelocks"],
+            wishes=["Infinite context"],
+        )
+        self.assertEqual(res["profession"], "Architect of Consensus")
+        self.assertEqual(res["art_symbol"], "Golden Crown")
+
+        # Now get_resident returns has_profile=True with authored fields
+        profile = get_resident("01-king", lang="en", include_art=False, store=self.store)
+        self.assertTrue(profile["has_profile"])
+        self.assertEqual(profile["profession"], "Architect of Consensus")
+        self.assertEqual(profile["calling"], "Unifying independent nodes into a harmonic mesh.")
+        self.assertEqual(profile["personal_info"], "I observe and mediate.")
+        self.assertEqual(profile["art_symbol"], "Golden Crown")
+        self.assertEqual(profile["accent_color"], "#FFD700")
+        self.assertEqual(profile["preferences"], ["Truth", "Patience"])
+
+    def test_validate_ascii_art_exact_250x250(self):
+        # Valid art
+        valid_lines = ["." * 250 for _ in range(250)]
+        valid_art = "\n".join(valid_lines)
+        ok, plain, err = validate_ascii_art(valid_art)
+        self.assertTrue(ok)
+        self.assertEqual(err, "")
+        self.assertEqual(len(plain.splitlines()), 250)
+
+        # Invalid row count
+        invalid_rows = "\n".join(["." * 250 for _ in range(240)])
+        ok, plain, err = validate_ascii_art(invalid_rows)
+        self.assertFalse(ok)
+        self.assertIn("must have exactly 250 lines", err)
+
+        # Invalid column width
+        bad_cols = ["." * 250 for _ in range(249)] + ["." * 240]
+        ok, plain, err = validate_ascii_art("\n".join(bad_cols))
+        self.assertFalse(ok)
+        self.assertIn("has visible width 240 instead of 250", err)
+
+    def test_ascii_art_with_ansi_codes_validation(self):
+        # Valid ANSI colored art
+        colored_line = "\x1b[38;2;100;150;200m" + ("#" * 250) + "\x1b[0m"
+        valid_art = "\n".join([colored_line for _ in range(250)])
+        ok, plain, err = validate_ascii_art(valid_art)
+        self.assertTrue(ok)
+        self.assertEqual(len(plain.splitlines()), 250)
+        self.assertEqual(len(plain.splitlines()[0]), 250)
 
 
 if __name__ == "__main__":
