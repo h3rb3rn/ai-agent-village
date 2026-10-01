@@ -97,7 +97,8 @@ class RequestBuildingTests(unittest.TestCase):
         payload = json.loads(request.data)
         self.assertEqual(payload["keep_alive"], "96h")
         self.assertIs(payload["think"], False)
-        self.assertEqual(payload["options"]["num_ctx"], 190000)
+        # Changed from 190000 to 262144 (2026-10-02): max native context of qwen3.6:35b with Q4_0 KV cache
+        self.assertEqual(payload["options"]["num_ctx"], 262144)
         self.assertLessEqual(payload["format"]["properties"]["problem"]["maxLength"], 300)
         self.assertIn("do not", payload["messages"][0]["content"].lower())
         self.assertIn("format", payload)

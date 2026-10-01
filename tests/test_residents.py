@@ -52,33 +52,32 @@ class ResidentCatalogTests(unittest.TestCase):
         self.assertEqual(actual_ids, expected_ids)
 
     def test_resident_profiles_and_dna_fields(self):
+        # Verify that all agents retain their cognitive DNA while biographies remain unauthored
         for r in RESIDENTS_DATA:
             with self.subTest(resident=r.id):
                 self.assertTrue(r.name)
                 self.assertTrue(r.role)
-                self.assertTrue(r.art_symbol)
-                self.assertTrue(r.avatar_icon)
-                self.assertTrue(r.accent_color.startswith("#"))
+                self.assertFalse(r.has_profile, "Profile should start unauthored")
 
-                # Localized fields
-                self.assertTrue(r.profession_en)
-                self.assertTrue(r.profession_de)
-                self.assertTrue(r.calling_en)
-                self.assertTrue(r.calling_de)
-                self.assertTrue(r.personal_info_en)
-                self.assertTrue(r.personal_info_de)
+                # Localized bio fields should be blank strings waiting for agent authoring
+                self.assertEqual(r.profession_en, "")
+                self.assertEqual(r.profession_de, "")
+                self.assertEqual(r.calling_en, "")
+                self.assertEqual(r.calling_de, "")
+                self.assertEqual(r.personal_info_en, "")
+                self.assertEqual(r.personal_info_de, "")
 
-                # Lists
-                self.assertGreaterEqual(len(r.preferences_en), 2)
-                self.assertGreaterEqual(len(r.preferences_de), 2)
-                self.assertGreaterEqual(len(r.hobbies_en), 2)
-                self.assertGreaterEqual(len(r.hobbies_de), 2)
-                self.assertGreaterEqual(len(r.goals_en), 2)
-                self.assertGreaterEqual(len(r.goals_de), 2)
-                self.assertGreaterEqual(len(r.wishes_en), 2)
-                self.assertGreaterEqual(len(r.wishes_de), 2)
+                # Lists should be empty waiting for agent authoring
+                self.assertEqual(r.preferences_en, [])
+                self.assertEqual(r.preferences_de, [])
+                self.assertEqual(r.hobbies_en, [])
+                self.assertEqual(r.hobbies_de, [])
+                self.assertEqual(r.goals_en, [])
+                self.assertEqual(r.goals_de, [])
+                self.assertEqual(r.wishes_en, [])
+                self.assertEqual(r.wishes_de, [])
 
-                # Cognitive DNA
+                # Cognitive DNA must remain intact and fully specified
                 dna = r.dna
                 self.assertIsInstance(dna, CognitiveDNA)
                 self.assertTrue(dna.model)
@@ -88,49 +87,50 @@ class ResidentCatalogTests(unittest.TestCase):
                 self.assertTrue(dna.model_size)
 
     def test_to_dict_localization(self):
+        # Verify that unauthored residents serialize with empty bios and intact DNA
         king = get_resident("01-king", lang="en", include_art=False)
         self.assertIsNotNone(king)
-        self.assertEqual(king["avatar_icon"], "👑")
-        self.assertIn("Village Coordinator", king["profession"])
-        self.assertIn("cognitive diversity", king["calling"])
-
-        king_de = get_resident("01-king", lang="de", include_art=False)
-        self.assertIsNotNone(king_de)
-        self.assertEqual(king_de["avatar_icon"], "👑")
-        self.assertIn("Ratsvorsitzender", king_de["profession"])
-        self.assertIn("kognitiven Vielfalt", king_de["calling"])
+        self.assertFalse(king["has_profile"])
+        self.assertEqual(king["profession"], "")
+        self.assertEqual(king["calling"], "")
+        self.assertEqual(king["dna"]["model"], "ornith:9b")
+        self.assertEqual(king["dna"]["context_size"], 131072)
 
 
 class AsciiArtDimensionTests(unittest.TestCase):
-    """Verifies that all 9 ASCII art files strictly adhere to 250x250 UTF-8 format."""
+    """Verifies that 250x250 ASCII art validation strictly enforces dimensions and UTF-8 characters."""
 
-    def test_ascii_art_exact_dimensions(self):
-        ansi_regex = re.compile(r"\x1b\[[0-9;]*m")
+    def test_validate_ascii_art_exact_250x250(self):
+        # A valid 250x250 plain matrix must pass validation
+        valid_matrix = "\n".join(["." * 250 for _ in range(250)])
+        ok, plain, err = validate_ascii_art(valid_matrix)
+        self.assertTrue(ok)
+        self.assertEqual(err, "")
+        self.assertEqual(len(plain.splitlines()), 250)
+        self.assertEqual(len(plain.splitlines()[0]), 250)
 
-        for r in RESIDENTS_DATA:
-            agent_id = r.id
-            color_file = ART_DIR / f"{agent_id}.txt"
-            plain_file = ART_DIR / f"{agent_id}.plain.txt"
+    def test_validate_ascii_art_colored_250x250(self):
+        # ANSI RGB color codes must be preserved in art and stripped for dimension checks
+        colored_line = "\x1b[38;2;255;128;0m" + ("@" * 250) + "\x1b[0m"
+        colored_art = "\n".join([colored_line for _ in range(250)])
+        ok, plain, err = validate_ascii_art(colored_art)
+        self.assertTrue(ok)
+        self.assertEqual(err, "")
+        self.assertEqual(len(plain.splitlines()), 250)
+        self.assertEqual(len(plain.splitlines()[0]), 250)
 
-            self.assertTrue(color_file.is_file(), f"Missing color art for {agent_id}")
-            self.assertTrue(plain_file.is_file(), f"Missing plain art for {agent_id}")
+    def test_validate_ascii_art_rejects_wrong_dimensions(self):
+        # Fewer than 250 rows must fail
+        short_rows = "\n".join(["#" * 250 for _ in range(249)])
+        ok, _, err = validate_ascii_art(short_rows)
+        self.assertFalse(ok)
+        self.assertIn("must have exactly 250 lines", err)
 
-            # Verify plain art: exactly 250 lines, each exactly 250 chars
-            plain_text = plain_file.read_text(encoding="utf-8")
-            plain_lines = plain_text.splitlines()
-            self.assertEqual(len(plain_lines), 250, f"{agent_id} plain lines != 250")
-            for line_idx, line in enumerate(plain_lines):
-                self.assertEqual(len(line), 250, f"{agent_id} line {line_idx} width != 250")
-
-            # Verify color art: exactly 250 lines, stripped width exactly 250 chars
-            color_text = color_file.read_text(encoding="utf-8")
-            color_lines = color_text.splitlines()
-            self.assertEqual(len(color_lines), 250, f"{agent_id} color lines != 250")
-            self.assertIn("\x1b[38;2;", color_text, f"{agent_id} lacks ANSI RGB codes")
-
-            for line_idx, line in enumerate(color_lines):
-                stripped = ansi_regex.sub("", line)
-                self.assertEqual(len(stripped), 250, f"{agent_id} color line {line_idx} stripped width != 250")
+        # Line shorter than 250 columns must fail
+        short_cols = "\n".join(["#" * 250 for _ in range(249)] + ["#" * 240])
+        ok, _, err = validate_ascii_art(short_cols)
+        self.assertFalse(ok)
+        self.assertIn("has visible width 240 instead of 250", err)
 
 
 class ResidentWebUITests(unittest.TestCase):
@@ -165,7 +165,6 @@ class ResidentWebUITests(unittest.TestCase):
         self.assertIsInstance(data, list)
         self.assertEqual(len(data), 9)
         self.assertEqual(data[0]["id"], "01-king")
-        self.assertEqual(data[0]["avatar_icon"], "👑")
         self.assertIn("dna", data[0])
         self.assertIn("model", data[0]["dna"])
 
@@ -176,19 +175,19 @@ class ResidentWebUITests(unittest.TestCase):
         self.assertEqual(data["id"], "02-explorer")
         self.assertEqual(data["name"], "Explorer")
         self.assertIn("ascii_art", data)
-        self.assertTrue(len(data["ascii_art"]) > 0)
+        # Unauthored resident returns empty string for ascii_art
+        self.assertEqual(data["ascii_art"], "")
 
     def test_api_resident_not_found(self):
         with self.assertRaises(urllib.error.HTTPError) as ctx:
             urllib.request.urlopen(f"http://127.0.0.1:{self.port}/api/residents?agent=unknown-agent")
         self.assertEqual(ctx.exception.code, 404)
 
-    def test_raw_ascii_art_endpoint(self):
-        req = urllib.request.urlopen(f"http://127.0.0.1:{self.port}/assets/ascii_art/01-king.txt")
-        self.assertEqual(req.status, 200)
-        content = req.read().decode("utf-8")
-        lines = content.splitlines()
-        self.assertEqual(len(lines), 250)
+    def test_raw_ascii_art_endpoint_unauthored_returns_404(self):
+        # Since pre-fabricated ASCII art was removed, requesting raw art for unauthored agent returns 404
+        with self.assertRaises(urllib.error.HTTPError) as ctx:
+            urllib.request.urlopen(f"http://127.0.0.1:{self.port}/assets/ascii_art/01-king.txt")
+        self.assertEqual(ctx.exception.code, 404)
 
 
 class ResidentStoreTests(unittest.TestCase):
@@ -207,7 +206,8 @@ class ResidentStoreTests(unittest.TestCase):
         king = get_resident("01-king", lang="en", include_art=False, store=self.store)
         self.assertIsNotNone(king)
         self.assertFalse(king["has_profile"])
-        self.assertIn("Village Coordinator", king["profession"])
+        self.assertEqual(king["profession"], "")
+        self.assertEqual(king["calling"], "")
 
     def test_author_profile_update_and_retrieval(self):
         # Agent authors their own profile

@@ -15,13 +15,14 @@ village/auditor.py already enforces for every finding regardless of origin:
      only become shared community knowledge if the same category recurs for a
      second, different agent - exactly like a deterministic finding.
 
-Confirmed operating parameters (2026-09-27, real calls against the live
-endpoint, not assumed): num_ctx=190000 (operator-fixed final value), think=false (thinking otherwise
-consumes the entire output budget before any answer, mirroring the
-Methodologist's own budget-exhaustion failure mode), keep_alive=96h (the
-operator's proven value - a fresh load on this M10 multi-GPU host takes
-60-150s depending on context size, so the model must stay resident between
-audit cycles, not reload each time). Once warm, one judged call took ~27-40s.
+Confirmed operating parameters: num_ctx=262144 (max native context of qwen3.6:35b,
+raised from 190000 on 2026-10-02 per operator directive — Q4_0 KV cache costs ~1440 MiB
+at 256K across the 4x Tesla M10, comfortably within the ~9.7 GiB free after model weights),
+think=false (thinking otherwise consumes the entire output budget before any answer,
+mirroring the Methodologist's own budget-exhaustion failure mode), keep_alive=96h (the
+operator's proven value — a fresh load on this M10 multi-GPU host takes 60-150s
+depending on context size, so the model must stay resident between audit cycles,
+not reload each time). Once warm, one judged call took ~27-40s.
 """
 from __future__ import annotations
 
@@ -37,7 +38,9 @@ from village.auditor import FORMAT_REASONS, AuditFinding, AuditStore, deliver, s
 
 DEFAULT_URL = "http://192.168.155.231:11434"
 DEFAULT_MODEL = "qwen3.6:35b"
-NUM_CTX = 190000  # operator-fixed final value, do not change again
+# Raised from 190000 to 262144 (2026-10-02): max native context of qwen3.6:35b with Q4_0 KV cache.
+# KV cost at 256K: ~1440 MiB — fits within the ~9.7 GiB VRAM headroom on 4x Tesla M10.
+NUM_CTX = 262144
 KEEP_ALIVE = "96h"
 DEFAULT_TIMEOUT_SECONDS = 300  # generation alone measured at ~20-40s; large margin for a cold/slow cycle
 CONFIDENCE_THRESHOLD = 0.7
