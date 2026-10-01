@@ -65,6 +65,16 @@ WORK_WINDOW_END_MINUTES = 17 * 60
 MAX_GAP_MINUTES = 60
 WEEK_HORIZON_DAYS = 7
 
+# P85 (operator directive, 2026-10-01): "alle Agents stellen sich einen
+# verbindlichen Termin von mind. 15 Minuten zwischen 5 Uhr und 9 Uhr ein um
+# [...] den taeglichen Artikel zu verfassen." A dedicated, narrower window
+# than the regular work day, enforced at the store level (not advisory
+# only) so a 'gazette_writing' entry is structurally guaranteed to satisfy
+# the operator's own slot, not just conveniently labelled.
+GAZETTE_WRITING_WINDOW_START_MINUTES = 5 * 60
+GAZETTE_WRITING_WINDOW_END_MINUTES = 9 * 60
+GAZETTE_WRITING_MIN_MINUTES = 15
+
 
 # Recognized event kinds - deliberately including the two named-by-the-
 # operator recurring structures (standup/jourfixe) as first-class values
@@ -76,16 +86,25 @@ WEEK_HORIZON_DAYS = 7
 # 'personal' - same reasoning as 'meetings' in P73: a named category
 # actually shows up as real, queryable data instead of only ever being a
 # free-text convention nobody follows.
+# P85 (operator directive, 2026-10-01): "alle Agents stellen sich einen
+# verbindlichen Termin [...] ein um [...] den taeglichen Artikel zu
+# verfassen" - 'gazette_writing' is its own first-class kind for the same
+# reason 'meetings'/'reflection' were before it: a named category is real,
+# queryable data, not a free-text convention nobody follows.
 EVENT_KINDS = (
     "standup", "jourfixe", "meeting", "focus", "personal", "reflection",
-    "weekend_project", "weekend_social", "weekend_idle", "weekend_dream", "other",
+    "gazette_writing", "weekend_project", "weekend_social", "weekend_idle",
+    "weekend_dream", "other",
 )
 STATUSES = ("planned", "confirmed", "rescheduled", "cancelled")
 RESPONSES = ("pending", "accepted", "declined", "proposed_alternative")
 # 'weekly' recurs on the same weekday as the first occurrence's own date -
 # no separate weekday field needed, one less way for series and their
-# first instance to silently disagree.
-RECURRENCES = ("none", "daily_weekday", "weekly")
+# first instance to silently disagree. 'daily' (P85) recurs every single
+# calendar day including weekends - unlike 'daily_weekday', for an
+# obligation the operator explicitly wants to apply "taeglich" (the
+# Gazette itself publishes every day, not just Mon-Fri).
+RECURRENCES = ("none", "daily_weekday", "weekly", "daily")
 # Occurrences are materialized eagerly at creation time (stdlib/SQLite
 # only, no lazy virtual-occurrence expansion at read time) - bounded so a
 # single create_event() call never produces an unbounded write.
@@ -202,6 +221,15 @@ class CalendarStore:
         duration_minutes = int(duration_minutes)
         if not (MIN_DURATION_MINUTES <= duration_minutes <= MAX_DURATION_MINUTES):
             raise ValueError(f"duration_minutes must be between {MIN_DURATION_MINUTES} and {MAX_DURATION_MINUTES}")
+        if kind == "gazette_writing":
+            start_minutes = time_to_minutes(start_time)
+            if duration_minutes < GAZETTE_WRITING_MIN_MINUTES:
+                raise ValueError(f"gazette_writing needs at least {GAZETTE_WRITING_MIN_MINUTES} minutes")
+            if not (GAZETTE_WRITING_WINDOW_START_MINUTES <= start_minutes
+                    and start_minutes + duration_minutes <= GAZETTE_WRITING_WINDOW_END_MINUTES):
+                raise ValueError(f"gazette_writing must fit within "
+                                 f"{GAZETTE_WRITING_WINDOW_START_MINUTES // 60:02d}:00-"
+                                 f"{GAZETTE_WRITING_WINDOW_END_MINUTES // 60:02d}:00")
         attendees = [str(a).strip() for a in (attendees or []) if str(a).strip() and str(a).strip() != organizer]
         attendees = list(dict.fromkeys(attendees))[:MAX_ATTENDEES]
         notes = str(notes or "").strip()[:1000]
@@ -212,7 +240,7 @@ class CalendarStore:
             series_id = event_id or f"series_{uuid.uuid4().hex[:12]}"
             start = datetime.strptime(scheduled_date, "%Y-%m-%d")
             horizon = start + timedelta(days=SERIES_HORIZON_DAYS)
-            step = timedelta(days=1) if recurrence == "daily_weekday" else timedelta(days=7)
+            step = timedelta(days=1) if recurrence in ("daily_weekday", "daily") else timedelta(days=7)
             occurrence_dates = []
             cursor = start
             while cursor <= horizon:

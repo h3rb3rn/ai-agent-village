@@ -97,27 +97,30 @@ GAZETTE_REVIEW_CEILING = 10
 # more step down the same pipeline.
 GAZETTE_CLOSE_CEILING = 10
 
-# P68 (operator feedback): the P63 close-gate had no floor at all - the
-# very next real edition closed after a single contribution from 1 of 9
-# assigned residents, 66 minutes after opening. This is the
-# "Redaktionsschluss" (editorial deadline) docs/analysis/GAZETTE-PLAN-2026-09-28.md's
-# Stufe 3 already named but never implemented: an edition is closable once
-# either half its assigned residents have contributed, or this many hours
-# have passed since opening - whichever comes first.
-GAZETTE_CLOSE_MIN_HOURS = 6
+# P68 (operator feedback, now superseded by P85 below): the P63 close-gate
+# had no floor at all - the very next real edition closed after a single
+# contribution from 1 of 9 assigned residents, 66 minutes after opening.
+# P68's own fix (closable once half the assigned residents contributed, or
+# GAZETTE_CLOSE_MIN_HOURS had passed) had its own blind spot - see P85 below.
 
 # P81 (operator directive, 2026-09-30): "Wir fuehren eine Deadline ein,
 # bis 13 Uhr muss jeder Agent seinen Beitrag erstellt und eingereicht
 # haben. Spaetestens 15 Uhr soll veroeffentlicht werden." Absolute daily
 # wall-clock deadlines (UTC, matching every other time convention in this
 # codebase - village/calendar.py's today(), the meeting scheduler's
-# hour==8 standup check) layered on top of the existing pressure-based
-# gates (P73/P74/P63): once a deadline hour has passed, the affected
-# gate's ceiling is bypassed entirely - the very next guarded call blocks,
-# instead of waiting out GAZETTE_CONTRIBUTE_CEILING/GAZETTE_CLOSE_CEILING
-# failed attempts first. GAZETTE_CLOSE_MIN_HOURS above stays as the
-# elapsed-time floor for a *fast*-moving edition; this is the separate,
-# absolute ceiling for a *slow* one.
+# hour==8 standup check).
+#
+# P85 (operator feedback, 2026-10-01): "Wieso ist die Gazette schon
+# veroeffentlicht obwohl die Deadline erst um 13 Uhr ist? [...] besteht Sie
+# nur aus einem Artikel." Root cause: P68's participation floor above
+# treated "nobody has been assigned anything yet" (assign_kinds() never
+# called) as "enough participation" unconditionally true, so the edition
+# closed 51 minutes after opening on one opportunistic contribution -
+# nowhere near either deadline. New operator rule: "taeglich um 15 Uhr
+# erscheint die Gazette" - a fixed daily publish point, not an
+# earliest-possible one. GAZETTE_CLOSE_MIN_HOURS/the participation floor
+# are removed entirely (see gazette_closable_editions()); the publish
+# deadline is now the ONLY closability condition for the daily cycle.
 GAZETTE_CONTRIBUTE_DEADLINE_HOUR_UTC = 13
 GAZETTE_PUBLISH_DEADLINE_HOUR_UTC = 15
 
@@ -133,6 +136,11 @@ GAZETTE_PUBLISH_DEADLINE_HOUR_UTC = 15
 # evidence: edition 2026-09-30 closed with fresh contributions from only 1
 # of 9 assigned residents (docs/evidence/P73.md). Same proven ceiling.
 GAZETTE_CONTRIBUTE_CEILING = 10
+
+# P85: 'assign' was the one King-only Gazette step with no hard gate behind
+# it at all (see gazette_pending_assignment()'s own comment for the live
+# incident this closes) - same proven ceiling as every other step.
+GAZETTE_ASSIGN_CEILING = 10
 
 # P74 (operator feedback, 2026-09-30): "Bei dem Spiel Teil steht nur eine
 # Reihenfolge. Es ist nicht ersichtlich welcher Agent was gemacht und
@@ -169,6 +177,12 @@ CALENDAR_PLAN_CEILING = 10
 # actual block is arbitrated). Workday-only, same distinction as P75 -
 # weekends stay the agent's free choice, never checked for gaps.
 CALENDAR_WEEK_PLAN_CEILING = 10
+
+# P85 (operator directive, 2026-10-01): "alle Agents stellen sich einen
+# verbindlichen Termin [...] ein" - its own gate/counter, same proven
+# ceiling, checked every day including weekends (unlike CALENDAR_PLAN_
+# CEILING/CALENDAR_WEEK_PLAN_CEILING above).
+GAZETTE_WRITING_SLOT_CEILING = 10
 
 # P72 (operator directive, 2026-09-29): "Es kann nicht sein das die Agents
 # ununterbrochen in Loops festhaengen ... Mechanismen die den Agents im
@@ -452,56 +466,29 @@ class Resident:
         ]
 
     def gazette_closable_editions(self):
-        """Non-compiled editions (P63) that have at least one approved
-        contribution, nothing left pending review, AND (P68) either enough
-        of the assigned residents have contributed or enough time has
-        passed since opening - ready for King's gazette_operation close.
+        """Non-compiled editions ready for King's gazette_operation close.
 
-        Live observation: once open/announce/assign were all done and every
-        submitted contribution had been reviewed, nothing ever told King to
-        take the final step - gazette_pending_reviews() was empty (so the
-        P60 gate never fired either) and the daily hint was scoped to
-        gazette_today(), which goes blind on a day rollover exactly like
-        P59-follow-up already fixed for reviews. Scanning every non-compiled
-        edition, not just today's, avoids the same blindness here. Shared by
-        snapshot() (the hint) and guard() (the gate) so both always agree.
-
-        P68 (operator feedback): the P63 fix overshot - the very next real
-        edition (2026-09-29) closed after a single contribution from 1 of 9
-        assigned residents, 66 minutes after opening, because "nothing
-        pending" became true the moment that one piece was reviewed. An
-        edition is now only closable once either at least half the assigned
-        residents have contributed, or GAZETTE_CLOSE_MIN_HOURS have passed
-        since opening (whichever comes first) - mirrors the "Redaktionsschluss"
-        (editorial deadline) already named in docs/analysis/GAZETTE-PLAN-2026-09-28.md's
-        Stufe 3, never actually implemented until now.
-
-        P81 (operator directive): "Spaetestens 15 Uhr soll veroeffentlicht
-        werden" - an absolute daily deadline that overrides every condition
-        above, including "at least one approved" and "nothing pending": once
-        GAZETTE_PUBLISH_DEADLINE_HOUR_UTC has passed, every open edition is
-        closable no matter how thin or how much is still unreviewed. A
-        publish that goes out on schedule with whatever is ready beats one
-        that never goes out at all."""
+        P85 (operator feedback, 2026-10-01): "Wieso ist die Gazette schon
+        veroeffentlicht obwohl die Deadline erst um 13 Uhr ist? [...] besteht
+        Sie nur aus einem Artikel." Live root cause: edition 2026-10-01 was
+        opened but assign_kinds() was never called (assigned_count==0) -
+        the old participation rule below read that as "enough_participation"
+        unconditionally true, so the edition became closable the instant
+        a SINGLE contribution was approved, 51 minutes after opening, via
+        06-operator's opportunistic village_news - nowhere near the 13:00/
+        15:00 UTC deadlines. New operator rule: "taeglich um 15 Uhr
+        erscheint die Gazette" - a fixed daily publish point, not an
+        earliest-possible one. The participation/min-hours early-close
+        path (P63/P68) is removed entirely; GAZETTE_PUBLISH_DEADLINE_HOUR_UTC
+        is now the ONLY closability condition for the regular daily cycle.
+        King may still call gazette_operation close manually at any time
+        (the store itself does not gate this) - this only governs the hint/
+        gate that is shared by snapshot() and guard() so both always agree.
+        """
         open_editions = [e for e in self.gazette.list_editions(limit=10) if e['status'] != 'compiled']
-        result = []
-        deadline_passed = gazette_deadline_passed(GAZETTE_PUBLISH_DEADLINE_HOUR_UTC)
-        for edition in open_editions:
-            if deadline_passed:
-                result.append(edition)
-                continue
-            pending = [c for c in edition['contributions'] if c.get('review_status') == 'pending']
-            approved = [c for c in edition['contributions'] if c.get('review_status') == 'approved']
-            if not approved or pending:
-                continue
-            assigned_count = len(edition.get('assignments') or {})
-            contributor_count = len({c['agent'] for c in approved})
-            enough_participation = assigned_count == 0 or contributor_count >= (assigned_count + 1) // 2
-            hours_open = (time.time() - event_time({'timestamp': edition['opened_at']})) / 3600
-            enough_time = hours_open >= GAZETTE_CLOSE_MIN_HOURS
-            if enough_participation or enough_time:
-                result.append(edition)
-        return result
+        if not gazette_deadline_passed(GAZETTE_PUBLISH_DEADLINE_HOUR_UTC):
+            return []
+        return open_editions
 
     def gazette_active_edition_id(self):
         """The edition an action should target when none is given
@@ -521,22 +508,58 @@ class Resident:
         open_editions = [e for e in self.gazette.list_editions(limit=5) if e['status'] != 'compiled']
         return open_editions[0]['id'] if open_editions else gazette_today()
 
+    def gazette_pending_assignment(self):
+        """edition_id if THIS agent is King and an open edition exists that
+        has never been assigned - None otherwise.
+
+        P85 (live root cause of a premature-close incident, operator:
+        "Definiere [...] von wem die Artikel [...] geprueft [...] werden"):
+        unlike open/contribute/review/close, 'assign' never had a hard gate
+        behind it - only an advisory hint (P52-P54). Live consequence:
+        King opened edition 2026-10-01 and never assigned it; every
+        resident's gazette_pending_own_contribution() then saw
+        assignments=={} and stayed permanently satisfied with nothing to
+        do, and the old gazette_closable_editions() (see its own P85
+        comment) misread assigned_count==0 as "enough participation" -
+        the entire P73 enforcement chain for that edition was dead on
+        arrival. Same proven ceiling pattern as every other King-only
+        Gazette step now closes that gap."""
+        if self.id != '01-king':
+            return None
+        edition = self.gazette.get_edition(self.gazette_active_edition_id())
+        if not edition or edition['status'] == 'compiled':
+            return None
+        if edition['assignments']:
+            return None
+        return edition['id']
+
     def gazette_pending_own_contribution(self):
         """(edition_id, assigned_kind) if THIS agent has an assigned kind on
-        the active edition and has not yet submitted it - None otherwise.
+        the active edition and has not yet submitted an approved-or-pending
+        version of it - None otherwise.
 
         P73: the real gate counterpart to the gazette_daily_note hint below.
         Unlike gazette_pending_reviews()/gazette_closable_editions() (both
         King/reviewer-only), this applies to every resident, King included -
         his own assigned piece was exactly as advisory-only as everyone
-        else's before this fix."""
+        else's before this fix.
+
+        P85 (operator directive: "Artikel die nicht der Mindestanforderung
+        entsprechen [sollen] nachgearbeitet und korrigiert werden"): a
+        REJECTED submission used to satisfy this check forever just by
+        existing - the contribute obligation was "done" the moment anything
+        at all was submitted, review outcome irrelevant, so nothing ever
+        required a rejected author to actually resubmit a better version.
+        Only 'approved' or still-'pending' (not yet reviewed) now count as
+        satisfied; 'rejected' is treated exactly like "never submitted"."""
         edition = self.gazette.get_edition(self.gazette_active_edition_id())
         if not edition or edition['status'] == 'compiled':
             return None
         assigned_kind = edition.get('assignments', {}).get(self.id)
         if not assigned_kind:
             return None
-        if any(c['agent'] == self.id and c['kind'] == assigned_kind for c in edition['contributions']):
+        if any(c['agent'] == self.id and c['kind'] == assigned_kind and c.get('review_status') != 'rejected'
+               for c in edition['contributions']):
             return None
         return edition['id'], assigned_kind
 
@@ -632,6 +655,19 @@ class Resident:
         if not calendar_is_workday(today_str):
             return False
         return not self.calendar.has_touched_today(self.id, today_str)
+
+    def calendar_pending_gazette_writing_slot(self):
+        """True if today has no 'gazette_writing' calendar entry for this
+        agent yet - P85 (operator: "alle Agents stellen sich einen
+        verbindlichen Termin [...] ein um [...] den taeglichen Artikel zu
+        verfassen"). Checked every day, including weekends - the Gazette
+        itself publishes daily, never just Mon-Fri (unlike
+        calendar_pending_daily_plan() above). Setting it up once as a
+        recurrence='daily' series (see village/calendar.py) satisfies this
+        every day from then on without a fresh touch."""
+        today_str = calendar_today()
+        return not any(e['kind'] == 'gazette_writing'
+                       for e in self.calendar.list_for_agent(self.id, today_str, today_str))
 
     def calendar_pending_week_gaps(self, today_str=None):
         """(date, gaps) for the FIRST upcoming workday (today..+6, see
@@ -1123,11 +1159,17 @@ class Resident:
         pending_winner = self.gazette_pending_game_winner()
         if pending_winner:
             eid, pair = pending_winner
+            # P85 (operator feedback: "was war der tatsaechliche Wert [...]
+            # wer hat gewonnen?" - fehlt komplett): note is now required -
+            # a bare winner name explains nothing, especially for a
+            # Schaetzfrage where "who won" is meaningless without the real
+            # value it was judged against.
             winner_hint = (
                 f" Both {pair[0]} and {pair[1]} have submitted their game_result for edition {eid}: "
                 "declare the official winner with gazette_operation operation='declare_winner', "
-                "winner=<one of them, or 'unentschieden' if genuinely tied>, and an optional short "
-                "note explaining the decision."
+                "winner=<one of them, or 'unentschieden' if genuinely tied>, and a required note "
+                "stating WHY - for a Schaetzfrage: the actual/true value both guesses were judged "
+                "against, not just a bare name."
             )
             context['gazette_daily_note'] = (context.get('gazette_daily_note', '') + winner_hint).strip()
         # P75 (operator directive): "Kalender sollen Proaktiv von den Agents
@@ -1468,6 +1510,27 @@ class Resident:
                 else:
                     self.feedback(name, f"Meeting report requested: {mid}. Submit one meeting_operation report when possible; continuing this reversible action.", True)
 
+        # P85: checked before contribute_block below - King delegating kinds
+        # is the precondition every resident's own contribute obligation
+        # depends on (see gazette_pending_assignment()'s own comment for the
+        # live incident this closes).
+        assign_block = None
+        if self.id == '01-king' and name not in ('meeting_operation', 'gazette_operation', 'idle'):
+            pending_assign = self.gazette_pending_assignment()
+            if not pending_assign:
+                self.state['gazette_assign_pressure'] = 0
+            else:
+                eid = pending_assign
+                pressure = int(self.state.get('gazette_assign_pressure', 0)) + 1
+                self.state['gazette_assign_pressure'] = pressure
+                self.event('gazette_assign_required', f"edition={eid}; pressure={pressure}")
+                if pressure >= GAZETTE_ASSIGN_CEILING:
+                    example = ('{"name":"gazette_operation","arguments":{"operation":"assign",'
+                               f'"edition_id":"{eid}"}}')
+                    assign_block = (f"Gazette assignment required before more solo work: delegate who "
+                                    f"writes what for edition {eid} first - submit exactly this envelope: "
+                                    f"{example}", f"edition={eid}; pressure={pressure}")
+
         # P73 (operator directive, 2026-09-30): unlike the reviewer/close
         # gates below, an ordinary resident's own assigned contribution -
         # including King's own - was only ever the advisory gazette_daily_note
@@ -1602,11 +1665,15 @@ class Resident:
                 self.state['gazette_game_winner_pressure'] = pressure
                 self.event('gazette_game_winner_required', f"edition={eid}; pressure={pressure}")
                 if pressure >= GAZETTE_GAME_WINNER_CEILING:
+                    # P85: note is now required at the store level - the
+                    # copy-adaptable example must include it or a model
+                    # copying it verbatim would still fail validation.
                     example = ('{"name":"gazette_operation","arguments":{"operation":"declare_winner",'
-                               f'"edition_id":"{eid}","winner":"{pair[0]}"}}')
+                               f'"edition_id":"{eid}","winner":"{pair[0]}","note":"..."}}')
                     game_winner_block = (f"Today's game winner declaration required before more solo "
                                          f"work: both {pair[0]} and {pair[1]} have submitted results. "
-                                         f"Submit exactly this envelope (or winner=\"unentschieden\"): {example}",
+                                         f"Submit exactly this envelope (or winner=\"unentschieden\"), note "
+                                         f"must state why/the actual value judged against: {example}",
                                          f"edition={eid}; pressure={pressure}")
 
         # P75 (operator directive): "verpflichtende Aufgabe an die Agents
@@ -1656,9 +1723,36 @@ class Resident:
                                                 f"(adjust title/kind/duration): {example}",
                                                 f"day={day}; gaps={len(gaps)}; pressure={pressure}")
 
+        # P85 (operator directive: "alle Agents stellen sich einen
+        # verbindlichen Termin [...] ein um [...] den taeglichen Artikel zu
+        # verfassen") - own counter, checked every day including weekends
+        # (see calendar_pending_gazette_writing_slot()'s own comment).
+        gazette_writing_block = None
+        if name not in ('meeting_operation', 'gazette_operation', 'calendar_operation', 'idle'):
+            if not self.calendar_pending_gazette_writing_slot():
+                self.state['gazette_writing_slot_pressure'] = 0
+            else:
+                pressure = int(self.state.get('gazette_writing_slot_pressure', 0)) + 1
+                self.state['gazette_writing_slot_pressure'] = pressure
+                self.event('gazette_writing_slot_required', f"pressure={pressure}")
+                if pressure >= GAZETTE_WRITING_SLOT_CEILING:
+                    today_str = calendar_today()
+                    example = ('{"name":"calendar_operation","arguments":{"operation":"create",'
+                               '"title":"Gazette-Schreibzeit","kind":"gazette_writing",'
+                               f'"scheduled_date":"{today_str}","start_time":"06:00",'
+                               '"duration_minutes":15,"recurrence":"daily"}}')
+                    gazette_writing_block = (f"A binding daily gazette_writing slot (15min, between "
+                                             f"05:00-09:00 UTC) is required before more solo work - set it "
+                                             f"up once as a recurring entry: {example}",
+                                             f"pressure={pressure}")
+
         if meeting_block:
             self.feedback(name, meeting_block[0], False)
             self.event('meeting_gate', meeting_block[1])
+            return False
+        if assign_block:
+            self.feedback(name, assign_block[0], False)
+            self.event('gazette_assign_gate', assign_block[1])
             return False
         if contribute_block:
             self.feedback(name, contribute_block[0], False)
@@ -1687,6 +1781,10 @@ class Resident:
         if game_winner_block:
             self.feedback(name, game_winner_block[0], False)
             self.event('gazette_game_winner_gate', game_winner_block[1])
+            return False
+        if gazette_writing_block:
+            self.feedback(name, gazette_writing_block[0], False)
+            self.event('gazette_writing_slot_gate', gazette_writing_block[1])
             return False
 
         norm_name = name

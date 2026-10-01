@@ -165,7 +165,7 @@ ACTION_SPECS: Dict[str, Dict[str, Any]] = {
     # silently.
     "calendar_operation": {
         "doc": "operation=create(title,kind,scheduled_date,start_time,duration_minutes,attendees?,recurrence?,"
-              "notes?,meeting_id?)|reschedule(event_id,new_date?,new_time?,reason?)|cancel(event_id,reason?,"
+              "notes?)|reschedule(event_id,new_date?,new_time?,reason?)|cancel(event_id,reason?,"
               f"whole_series?)|respond(event_id,response,proposed_date?,proposed_time?)|list(date_from?,date_to?); "
               f"kind: {'/'.join(_CALENDAR_KINDS)}; date=YYYY-MM-DD, time=HH:MM; recurrence=none/daily_weekday/"
               "weekly; reschedule/cancel hit one occurrence unless whole_series=true; response=accepted/declined/"

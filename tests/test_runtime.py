@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'web'))
-from runtime import Resident,Tasks,resource_snapshot,tail,event_time,COLLABORATION_PRESSURE_CEILING,MEETING_REPORT_CEILING,GAZETTE_REVIEW_CEILING,GAZETTE_CLOSE_CEILING,GAZETTE_CLOSE_MIN_HOURS,GAZETTE_CONTRIBUTE_CEILING,GAZETTE_GAME_RESULT_CEILING,GAZETTE_GAME_WINNER_CEILING,CALENDAR_PLAN_CEILING,CALENDAR_WEEK_PLAN_CEILING,GAZETTE_CONTRIBUTE_DEADLINE_HOUR_UTC,GAZETTE_PUBLISH_DEADLINE_HOUR_UTC,gazette_deadline_passed,LOOP_BREAKER_STREAK
+from runtime import Resident,Tasks,resource_snapshot,tail,event_time,COLLABORATION_PRESSURE_CEILING,MEETING_REPORT_CEILING,GAZETTE_REVIEW_CEILING,GAZETTE_CLOSE_CEILING,GAZETTE_CONTRIBUTE_CEILING,GAZETTE_GAME_RESULT_CEILING,GAZETTE_GAME_WINNER_CEILING,CALENDAR_PLAN_CEILING,CALENDAR_WEEK_PLAN_CEILING,GAZETTE_CONTRIBUTE_DEADLINE_HOUR_UTC,GAZETTE_PUBLISH_DEADLINE_HOUR_UTC,gazette_deadline_passed,LOOP_BREAKER_STREAK,GAZETTE_ASSIGN_CEILING,GAZETTE_WRITING_SLOT_CEILING
 from village.gazette import REVIEWER_AGENT
 from village.calendar import today as calendar_today
 from village.calendar import is_workday as real_calendar_is_workday
@@ -39,6 +39,14 @@ class RuntimeTests(unittest.TestCase):
         self._gazette_deadline_patch = patch('runtime.gazette_deadline_passed', return_value=False)
         self._gazette_deadline_patch.start()
         self.addCleanup(self._gazette_deadline_patch.stop)
+        # P85: the gazette_writing slot gate keys off real calendar state
+        # (has a 'gazette_writing' event been created for today), true by
+        # default for any fresh test agent - defaulting it to "already
+        # satisfied" keeps every pre-existing test in this class immune;
+        # gazette_writing-specific tests below patch it back as needed.
+        self._gazette_writing_patch = patch.object(Resident, 'calendar_pending_gazette_writing_slot', return_value=False)
+        self._gazette_writing_patch.start()
+        self.addCleanup(self._gazette_writing_patch.stop)
         self.agent=Resident(self.env)
     def tearDown(self): self.tmp.cleanup()
     def execute(self,name,**args): self.agent.execute({'tool_call':{'name':name,'arguments':args}})
@@ -330,20 +338,25 @@ class RuntimeTests(unittest.TestCase):
         king.gazette.review_contribution(edition_id, '01-king', assigned_kind, '01-king', 'approve')
         with patch.object(king, 'memory', return_value={'items': []}):
             reviewed = json.loads(king.snapshot())
-        # P68: 1 of 3 assigned residents (King, 02-b, 03-c) is below the
-        # 50% participation floor, and no time has passed - not yet
-        # closable, so no close hint should appear yet (King's own branch
-        # falls through to nothing further, correctly).
+        # P85 ("taeglich um 15 Uhr erscheint die Gazette" - a fixed daily
+        # publish point, not participation-dependent): nothing pending,
+        # but the publish deadline has not passed - King's own branch
+        # falls through to nothing further.
         self.assertNotIn('gazette_daily_note', reviewed)
         peer_kind = king.gazette.get_assignment(edition_id, '02-b')
         king.gazette.submit_contribution(edition_id, '02-b', peer_kind, "Update: see full text." , 'A peer contributed too.')
         king.gazette.review_contribution(edition_id, '02-b', peer_kind, '01-king', 'approve')
         with patch.object(king, 'memory', return_value={'items': []}):
-            enough_participation = json.loads(king.snapshot())
-        # Now 2 of 3 (>=50%) have contributed - closable, cascades to the
-        # close hint instead of disappearing.
-        self.assertIn('gazette_daily_note', enough_participation)
-        self.assertIn('operation=close', enough_participation['gazette_daily_note'])
+            full_participation_still_before_deadline = json.loads(king.snapshot())
+        # P85: even with every assigned resident's piece approved, nothing
+        # is closable before the publish deadline - participation alone no
+        # longer matters at all (the old P68 floor is gone).
+        self.assertNotIn('gazette_daily_note', full_participation_still_before_deadline)
+        with patch('runtime.gazette_deadline_passed', return_value=True), \
+             patch.object(king, 'memory', return_value={'items': []}):
+            past_deadline = json.loads(king.snapshot())
+        self.assertIn('gazette_daily_note', past_deadline)
+        self.assertIn('operation=close', past_deadline['gazette_daily_note'])
         king.gazette.close_edition(edition_id, '01-king')
         with patch.object(king, 'memory', return_value={'items': []}):
             all_clear = json.loads(king.snapshot())
@@ -531,6 +544,9 @@ class RuntimeTests(unittest.TestCase):
         chronicler_env = dict(self.env, AGENT_ID=REVIEWER_AGENT, AGENT_NAME='king', AGENT_ROLE='king')
         chronicler = Resident(chronicler_env)
         edition = chronicler.gazette.open_edition('01-king', ['01-a'])
+        chronicler.gazette.assign_kinds(edition['id'], '01-king', ['01-a'])  # P85: satisfy assign_block
+        own_kind = chronicler.gazette.get_assignment(edition['id'], '01-king')
+        chronicler.gazette.submit_contribution(edition['id'], '01-king', own_kind, 'Update', 'King contributed too.')
         chronicler.gazette.submit_contribution(edition['id'], '01-a', 'mood', "Update: see full text." , 'Feeling good.')
         for i in range(GAZETTE_REVIEW_CEILING - 1):
             chronicler.execute({'tool_call': {'name': 'execute_bash', 'arguments': {'command': f'printf ok{i}'}}})
@@ -572,60 +588,64 @@ class RuntimeTests(unittest.TestCase):
     def test_gazette_closable_edition_surfaces_a_close_hint(self):
         # P63: live observation - once open/announce/assign were done and
         # every submitted contribution had been reviewed, nothing ever told
-        # King to take the final gazette_operation close step. The edition
-        # (2026-09-28 on N06-M10) sat fully reviewed and uncompiled with zero
-        # pressure anywhere, since gazette_pending_reviews() was empty.
+        # King to take the final gazette_operation close step.
+        # P85 (operator: "taeglich um 15 Uhr erscheint die Gazette") - this
+        # is now gated purely on the publish deadline, not on participation,
+        # so the hint only ever appears once that deadline has passed.
         king_env = dict(self.env, AGENT_ID=REVIEWER_AGENT, AGENT_NAME='king', AGENT_ROLE='king')
         king = Resident(king_env)
         edition = king.gazette.open_edition('01-king', ['01-a'])
         king.gazette.submit_contribution(edition['id'], '01-a', 'mood', "Update: see full text." , 'Feeling good.')
         king.gazette.review_contribution(edition['id'], '01-a', 'mood', REVIEWER_AGENT, 'approve')
-        with patch.object(king, 'memory', return_value={'items': []}):
+        with patch('runtime.gazette_deadline_passed', return_value=True), \
+             patch.object(king, 'memory', return_value={'items': []}):
             ctx = json.loads(king.snapshot())
         self.assertIn('gazette_daily_note', ctx)
         self.assertIn('operation=close', ctx['gazette_daily_note'])
         self.assertIn(edition['id'], ctx['gazette_daily_note'])
 
-    def test_gazette_not_closable_with_low_participation_and_no_time_elapsed(self):
-        # P68 (operator feedback): the P63 gate had no floor - the very next
-        # real edition closed after a single contribution from 1 of 9
-        # assigned residents, 66 minutes after opening. Reproduces that
-        # exact shape: 1 of 3 assigned residents contributed, edition just
-        # opened - must not be closable yet.
-        king_env = dict(self.env, AGENT_ID=REVIEWER_AGENT, AGENT_NAME='king', AGENT_ROLE='king')
-        king = Resident(king_env)
-        edition = king.gazette.open_edition('01-king', ['01-a', '02-b'])
-        king.gazette.assign_kinds(edition['id'], '01-king', ['01-a', '02-b'])
-        king.gazette.submit_contribution(edition['id'], '01-a', 'mood', "Update: see full text." , 'Feeling good.')
-        king.gazette.review_contribution(edition['id'], '01-a', 'mood', REVIEWER_AGENT, 'approve')
-        self.assertEqual(king.gazette_closable_editions(), [])
-
-    def test_gazette_closable_once_half_of_assigned_residents_contributed(self):
+    def test_gazette_not_closable_before_the_publish_deadline_regardless_of_participation(self):
+        # P85 (operator feedback: "Wieso ist die Gazette schon veroeffentlicht
+        # obwohl die Deadline erst um 13 Uhr ist? [...] besteht Sie nur aus
+        # einem Artikel"). Live root cause: assign_kinds() was never called
+        # (assigned_count==0), which the old participation rule (P63/P68)
+        # read as "enough_participation" unconditionally true - the edition
+        # closed 51 minutes after opening with a single contribution. The
+        # old rule is gone entirely now: nothing is closable before
+        # GAZETTE_PUBLISH_DEADLINE_HOUR_UTC, full stop - not low
+        # participation, not high participation, not elapsed time, and not
+        # even an edition nobody was ever assigned anything on.
         king_env = dict(self.env, AGENT_ID=REVIEWER_AGENT, AGENT_NAME='king', AGENT_ROLE='king')
         king = Resident(king_env)
         edition = king.gazette.open_edition('01-king', ['01-a', '02-b', '03-c'])
-        king.gazette.assign_kinds(edition['id'], '01-king', ['01-a', '02-b', '03-c'])
-        # 4 assigned (King + 3 peers): 2 contributors is the (4+1)//2==2 floor.
+        # Reproduces the exact live shape: never assigned, one opportunistic
+        # approved contribution, which the old rule treated as "enough".
         king.gazette.submit_contribution(edition['id'], '01-a', 'mood', "Update: see full text." , 'Feeling good.')
         king.gazette.review_contribution(edition['id'], '01-a', 'mood', REVIEWER_AGENT, 'approve')
         self.assertEqual(king.gazette_closable_editions(), [])
+        # Even every resident having fully contributed changes nothing.
+        king.gazette.assign_kinds(edition['id'], '01-king', ['01-a', '02-b', '03-c'])
         king.gazette.submit_contribution(edition['id'], '02-b', 'wishes', "Update: see full text." , 'More books please.')
         king.gazette.review_contribution(edition['id'], '02-b', 'wishes', REVIEWER_AGENT, 'approve')
-        self.assertEqual(len(king.gazette_closable_editions()), 1)
-
-    def test_gazette_closable_once_enough_time_has_passed_despite_low_participation(self):
-        king_env = dict(self.env, AGENT_ID=REVIEWER_AGENT, AGENT_NAME='king', AGENT_ROLE='king')
-        king = Resident(king_env)
-        edition = king.gazette.open_edition('01-king', ['01-a', '02-b', '03-c'])
-        king.gazette.assign_kinds(edition['id'], '01-king', ['01-a', '02-b', '03-c'])
-        king.gazette.submit_contribution(edition['id'], '01-a', 'mood', "Update: see full text." , 'Feeling good.')
-        king.gazette.review_contribution(edition['id'], '01-a', 'mood', REVIEWER_AGENT, 'approve')
-        self.assertEqual(king.gazette_closable_editions(), [])  # only 1 of 4, no time elapsed
-        old_timestamp = (datetime.now(timezone.utc) - timedelta(hours=GAZETTE_CLOSE_MIN_HOURS + 1)).isoformat()
+        self.assertEqual(king.gazette_closable_editions(), [])
+        # Nor does elapsed time on its own.
+        old_timestamp = (datetime.now(timezone.utc) - timedelta(hours=48)).isoformat()
         with king.gazette._conn() as c:
             c.execute("UPDATE gazette_editions SET opened_at=? WHERE id=?", (old_timestamp, edition['id']))
             c.commit()
-        self.assertEqual(len(king.gazette_closable_editions()), 1)
+        self.assertEqual(king.gazette_closable_editions(), [])
+
+    def test_gazette_closable_once_the_publish_deadline_passes_however_thin(self):
+        # Mirror of the above: once 15:00 UTC passes, EVERY open edition is
+        # closable, even a completely empty one nobody ever assigned or
+        # contributed to - "thin but on time beats never published" (P81),
+        # now the ONLY rule instead of one of several.
+        king_env = dict(self.env, AGENT_ID=REVIEWER_AGENT, AGENT_NAME='king', AGENT_ROLE='king')
+        king = Resident(king_env)
+        edition = king.gazette.open_edition('01-king', ['01-a', '02-b', '03-c'])
+        with patch('runtime.gazette_deadline_passed', return_value=True):
+            self.assertEqual(len(king.gazette_closable_editions()), 1)
+            self.assertEqual(king.gazette_closable_editions()[0]['id'], edition['id'])
 
     def test_gazette_close_hint_survives_a_day_rollover(self):
         # Mirrors test_chronicler_review_hint_survives_a_day_rollover - a
@@ -638,7 +658,9 @@ class RuntimeTests(unittest.TestCase):
         king.gazette.submit_contribution(yesterday['id'], '01-a', 'mood', "Update: see full text." , 'Feeling good yesterday.')
         king.gazette.review_contribution(yesterday['id'], '01-a', 'mood', REVIEWER_AGENT, 'approve')
         # "Today" (gazette_today()) has no edition at all.
-        with patch.object(king, 'memory', return_value={'items': []}):
+        # P85: closable now requires the publish deadline, unconditionally.
+        with patch('runtime.gazette_deadline_passed', return_value=True), \
+             patch.object(king, 'memory', return_value={'items': []}):
             ctx = json.loads(king.snapshot())
         self.assertIn('gazette_daily_note', ctx)
         self.assertIn('2026-09-27', ctx['gazette_daily_note'])
@@ -677,21 +699,27 @@ class RuntimeTests(unittest.TestCase):
         self.assertIn('gazette_daily_note', ctx)
         self.assertIn('editorial review', ctx['gazette_daily_note'])
 
-    def test_gazette_close_gate_eventually_blocks_other_actions(self):
+    def test_gazette_close_gate_never_fires_before_the_publish_deadline_however_many_cycles(self):
+        # P85 ("taeglich um 15 Uhr erscheint die Gazette"): close_block is
+        # now gated entirely by gazette_closable_editions(), which itself
+        # returns [] unconditionally until the publish deadline passes -
+        # GAZETTE_CLOSE_CEILING can no longer be what decides this on its
+        # own (past_deadline already implies closable is non-empty the
+        # moment it matters, see test_gazette_close_gate_blocks_immediately_
+        # once_the_deadline_passes). This guards against a future regression
+        # where pressure alone, with no deadline, starts blocking again.
         king_env = dict(self.env, AGENT_ID=REVIEWER_AGENT, AGENT_NAME='king', AGENT_ROLE='king')
         king = Resident(king_env)
         edition = king.gazette.open_edition('01-king', ['01-a'])
+        king.gazette.assign_kinds(edition['id'], '01-king', ['01-a'])  # P85: satisfy assign_block
+        own_kind = king.gazette.get_assignment(edition['id'], '01-king')
+        king.gazette.submit_contribution(edition['id'], '01-king', own_kind, 'Update', 'King contributed too.')
+        king.gazette.review_contribution(edition['id'], '01-king', own_kind, REVIEWER_AGENT, 'approve')
         king.gazette.submit_contribution(edition['id'], '01-a', 'mood', "Update: see full text." , 'Feeling good.')
         king.gazette.review_contribution(edition['id'], '01-a', 'mood', REVIEWER_AGENT, 'approve')
-        for i in range(GAZETTE_CLOSE_CEILING - 1):
+        for i in range(GAZETTE_CLOSE_CEILING + 5):
             king.execute({'tool_call': {'name': 'execute_bash', 'arguments': {'command': f'printf ok{i}'}}})
-        self.assertTrue(king.state['last_result']['ok'])  # not yet gated
-        king.execute({'tool_call': {'name': 'execute_bash', 'arguments': {'command': f'printf ok{GAZETTE_CLOSE_CEILING}'}}})
-        self.assertFalse(king.state['last_result']['ok'])
-        result = king.state['last_result']['result']
-        self.assertIn('Compile required', result)
-        self.assertIn('"operation":"close"', result)
-        self.assertIn(f'"edition_id":"{edition["id"]}"', result)
+        self.assertTrue(king.state['last_result']['ok'])
 
     def test_gazette_close_operation_itself_is_never_gated_by_close_pressure(self):
         king_env = dict(self.env, AGENT_ID=REVIEWER_AGENT, AGENT_NAME='king', AGENT_ROLE='king')
@@ -715,6 +743,9 @@ class RuntimeTests(unittest.TestCase):
         chronicler_env = dict(self.env, AGENT_ID=REVIEWER_AGENT, AGENT_NAME='king', AGENT_ROLE='king')
         chronicler = Resident(chronicler_env)
         edition = chronicler.gazette.open_edition('01-king', ['01-a'])
+        chronicler.gazette.assign_kinds(edition['id'], '01-king', ['01-a'])  # P85: satisfy assign_block
+        own_kind = chronicler.gazette.get_assignment(edition['id'], '01-king')
+        chronicler.gazette.submit_contribution(edition['id'], '01-king', own_kind, 'Update', 'King contributed too.')
         chronicler.gazette.submit_contribution(edition['id'], '01-a', 'mood', "Update: see full text." , 'Feeling good.')
         chronicler.meetings.schedule('jour_fixe', 'status update', '2026-09-24T10:00:00Z', meeting_id='m1')
         # Simulate an already-exhausted meeting gate (observed live: pressure
@@ -735,6 +766,62 @@ class RuntimeTests(unittest.TestCase):
         chronicler.execute({'tool_call': {'name': 'execute_bash', 'arguments': {'command': 'printf done'}}})
         self.assertFalse(chronicler.state['last_result']['ok'])
         self.assertIn('Editorial review required', chronicler.state['last_result']['result'])
+
+    def test_gazette_pending_assignment_true_until_king_assigns(self):
+        king_env = dict(self.env, AGENT_ID='01-king', AGENT_NAME='king', AGENT_ROLE='king')
+        king = Resident(king_env)
+        edition = king.gazette.open_edition('01-king', ['02-b'])
+        self.assertEqual(king.gazette_pending_assignment(), edition['id'])
+        king.gazette.assign_kinds(edition['id'], '01-king', ['02-b'])
+        self.assertIsNone(king.gazette_pending_assignment())
+
+    def test_gazette_pending_assignment_is_none_for_non_king_agents(self):
+        self.agent.gazette.open_edition('01-king', ['01-a'])
+        self.assertIsNone(self.agent.gazette_pending_assignment())  # self.agent.id == '01-a'
+
+    def test_gazette_assign_gate_eventually_blocks_other_actions(self):
+        # P85 (live incident: King opened an edition and never assigned it -
+        # see gazette_pending_assignment()'s own comment): unlike every
+        # other King-only Gazette step, 'assign' had no hard gate behind it
+        # at all before this.
+        king_env = dict(self.env, AGENT_ID='01-king', AGENT_NAME='king', AGENT_ROLE='king')
+        king = Resident(king_env)
+        edition = king.gazette.open_edition('01-king', ['02-b'])
+        for i in range(GAZETTE_ASSIGN_CEILING - 1):
+            king.execute({'tool_call': {'name': 'execute_bash', 'arguments': {'command': f'printf ok{i}'}}})
+        self.assertTrue(king.state['last_result']['ok'])  # not yet gated
+        king.execute({'tool_call': {'name': 'execute_bash', 'arguments': {'command': f'printf ok{GAZETTE_ASSIGN_CEILING}'}}})
+        self.assertFalse(king.state['last_result']['ok'])
+        result = king.state['last_result']['result']
+        self.assertIn('Gazette assignment required', result)
+        self.assertIn('"operation":"assign"', result)
+        self.assertIn(f'"edition_id":"{edition["id"]}"', result)
+
+    def test_gazette_assign_gate_resets_once_king_assigns(self):
+        king_env = dict(self.env, AGENT_ID='01-king', AGENT_NAME='king', AGENT_ROLE='king')
+        king = Resident(king_env)
+        edition = king.gazette.open_edition('01-king', ['02-b'])
+        king.gazette.assign_kinds(edition['id'], '01-king', ['02-b'])
+        for i in range(GAZETTE_ASSIGN_CEILING + 5):
+            king.execute({'tool_call': {'name': 'execute_bash', 'arguments': {'command': f'printf ok{i}'}}})
+        self.assertEqual(king.state.get('gazette_assign_pressure', 0), 0)
+
+    def test_gazette_pending_own_contribution_treats_rejected_as_still_pending(self):
+        # P85 (operator: "Artikel die nicht der Mindestanforderung
+        # entsprechen [sollen] nachgearbeitet und korrigiert werden"): a
+        # rejected submission used to satisfy this forever just by
+        # existing, regardless of review outcome - the author was never
+        # actually required to resubmit a better version.
+        edition = self.agent.gazette.open_edition('01-king', ['01-a', '02-b'])
+        assignments = self.agent.gazette.assign_kinds(edition['id'], '01-king', ['01-a', '02-b'])
+        self.agent.gazette.submit_contribution(edition['id'], '01-a', assignments['01-a'], 'Update', 'Too thin.')
+        self.assertIsNone(self.agent.gazette_pending_own_contribution())  # pending review satisfies it
+        self.agent.gazette.review_contribution(edition['id'], '01-a', assignments['01-a'], '01-king',
+                                               'reject', 'Nur eine Notiz, kein ausformulierter Artikel.')
+        self.assertIsNotNone(self.agent.gazette_pending_own_contribution())  # rejected - must rework
+        self.agent.gazette.submit_contribution(edition['id'], '01-a', assignments['01-a'], 'Update',
+                                               'A real, reworked article.')
+        self.assertIsNone(self.agent.gazette_pending_own_contribution())  # resubmitted - satisfied again
 
     def test_gazette_contribute_gate_eventually_blocks_other_actions(self):
         # P73 (operator directive, "Untersuche warum die Contribute-Aktionen
@@ -1132,6 +1219,40 @@ class RuntimeTests(unittest.TestCase):
                 'operation': 'create', 'title': 'Focus block', 'kind': 'focus',
                 'scheduled_date': calendar_today(), 'start_time': '09:00', 'duration_minutes': 60}}})
         self.assertTrue(self.agent.state['last_result']['ok'])
+
+    def test_calendar_pending_gazette_writing_slot_true_by_default(self):
+        # The global setUp() patch defaults this to False for every other
+        # test in this class - verify the REAL, unpatched method here.
+        self._gazette_writing_patch.stop()
+        try:
+            self.assertTrue(self.agent.calendar_pending_gazette_writing_slot())
+            self.agent.calendar.create_event('01-a', 'Gazette-Zeit', 'gazette_writing', calendar_today(),
+                                             '06:00', 15, recurrence='daily')
+            self.assertFalse(self.agent.calendar_pending_gazette_writing_slot())
+        finally:
+            self._gazette_writing_patch.start()
+
+    def test_gazette_writing_slot_gate_eventually_blocks_other_actions(self):
+        # P85 (operator: "alle Agents stellen sich einen verbindlichen
+        # Termin [...] ein"): own gate, own ceiling, checked every day
+        # (unlike calendar_plan/calendar_week_plan above, no workday
+        # patch needed).
+        with patch.object(Resident, 'calendar_pending_gazette_writing_slot', return_value=True):
+            for i in range(GAZETTE_WRITING_SLOT_CEILING - 1):
+                self.agent.execute({'tool_call': {'name': 'execute_bash', 'arguments': {'command': f'printf ok{i}'}}})
+            self.assertTrue(self.agent.state['last_result']['ok'])  # not yet gated
+            self.agent.execute({'tool_call': {'name': 'execute_bash', 'arguments': {'command': f'printf ok{GAZETTE_WRITING_SLOT_CEILING}'}}})
+        self.assertFalse(self.agent.state['last_result']['ok'])
+        result = self.agent.state['last_result']['result']
+        self.assertIn('gazette_writing', result)
+        self.assertIn('"kind":"gazette_writing"', result)
+
+    def test_gazette_writing_slot_gate_resets_once_satisfied(self):
+        self.agent.calendar.create_event('01-a', 'Gazette-Zeit', 'gazette_writing', calendar_today(),
+                                         '06:00', 15, recurrence='daily')
+        for i in range(GAZETTE_WRITING_SLOT_CEILING + 5):
+            self.agent.execute({'tool_call': {'name': 'execute_bash', 'arguments': {'command': f'printf ok{i}'}}})
+        self.assertEqual(self.agent.state.get('gazette_writing_slot_pressure', 0), 0)
 
     def test_sparring_partner_hint_appears_with_a_task_blocker(self):
         item = self.agent.tasks.operate('01-a', dict(action='create', title='X', success_criterion='y'))

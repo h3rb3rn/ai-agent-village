@@ -454,7 +454,7 @@ class CompileEditionTests(unittest.TestCase):
         self.assertNotIn("game-winner", rendered)
 
     def test_drawn_tie_renders_as_unentschieden(self):
-        self.store.declare_game_winner("2026-09-28", "01-king", "unentschieden")
+        self.store.declare_game_winner("2026-09-28", "01-king", "unentschieden", "Beide Schaetzungen gleich weit daneben.")
         rendered = self.store.compile_edition("2026-09-28")
         self.assertIn("<strong>Gewinner:</strong> Unentschieden", rendered)
 
@@ -483,7 +483,7 @@ class DeclareGameWinnerTests(unittest.TestCase):
         self.assertIsNotNone(result["game_winner_declared_at"])
 
     def test_unentschieden_is_a_valid_winner_value(self):
-        result = self.store.declare_game_winner("2026-09-28", "01-king", "unentschieden")
+        result = self.store.declare_game_winner("2026-09-28", "01-king", "unentschieden", "Beide gleich nah am echten Wert.")
         self.assertEqual(result["game_winner"], "unentschieden")
 
     def test_cannot_declare_winner_on_a_compiled_edition(self):

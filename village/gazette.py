@@ -470,11 +470,22 @@ class GazetteStore:
         winner = str(winner or "").strip()
         if winner not in (*edition["game_pair"], "unentschieden"):
             raise ValueError(f"winner must be one of {edition['game_pair']} or 'unentschieden'")
+        # P85 (operator feedback: "was war der tatsaechliche Wert [...] wer
+        # hat gewonnen?" - fehlt komplett): a bare winner name explains
+        # nothing by itself, especially for a Schaetzfrage where "who won"
+        # is meaningless without the real value it was judged against.
+        # King is the one person both participants' private game_result
+        # content never requires to state the ground truth - this is where
+        # it must land.
+        note = str(note or "").strip()[:400]
+        if not note:
+            raise ValueError("declare_winner requires a non-empty note explaining the decision "
+                             "(for a Schaetzfrage: state the actual/true value it was judged against)")
         with self._conn() as c:
             c.execute(
                 "UPDATE gazette_editions SET game_winner=?, game_winner_note=?, "
                 "game_winner_declared_by=?, game_winner_declared_at=? WHERE id=?",
-                (winner, str(note).strip()[:400], declared_by, now(), edition_id),
+                (winner, note, declared_by, now(), edition_id),
             )
             c.commit()
         return self.get_edition(edition_id)  # type: ignore

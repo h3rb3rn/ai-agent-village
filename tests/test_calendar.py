@@ -85,6 +85,30 @@ class CreateEventTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.store.create_event("01-king", "X", "focus", "2026-09-28", "09:00", 10000)
 
+    def test_gazette_writing_must_fit_the_05_to_09_window(self):
+        # P85 (operator: "einen verbindlichen Termin von mind. 15 Minuten
+        # zwischen 5 Uhr und 9 Uhr [...] um den taeglichen Artikel zu
+        # verfassen") - enforced structurally, not just advisory.
+        event = self.store.create_event("01-king", "Gazette-Zeit", "gazette_writing", "2026-09-28", "06:00", 15)
+        self.assertEqual(event["kind"], "gazette_writing")
+        with self.assertRaises(ValueError):  # starts before 05:00
+            self.store.create_event("01-king", "X", "gazette_writing", "2026-09-28", "04:45", 15)
+        with self.assertRaises(ValueError):  # ends after 09:00
+            self.store.create_event("01-king", "X", "gazette_writing", "2026-09-28", "08:50", 30)
+        with self.assertRaises(ValueError):  # below the 15-minute floor
+            self.store.create_event("01-king", "X", "gazette_writing", "2026-09-28", "06:00", 10)
+
+    def test_daily_recurrence_includes_weekends(self):
+        # Unlike daily_weekday - the Gazette itself publishes every day.
+        event = self.store.create_event("01-king", "Gazette-Zeit", "gazette_writing", "2026-09-26", "06:00", 15,
+                                        recurrence="daily")  # a Saturday
+        with self.store._conn() as c:
+            dates = [r["scheduled_date"] for r in c.execute(
+                "SELECT scheduled_date FROM calendar_events WHERE series_id=? ORDER BY scheduled_date",
+                (event["series_id"],))]
+        self.assertIn("2026-09-26", dates)  # Saturday
+        self.assertIn("2026-09-27", dates)  # Sunday
+
     def test_creating_touches_the_organizers_day(self):
         # Real "today" (calendar_today(), wall-clock), not the event's own
         # scheduled_date - planning a future event still counts as doing
