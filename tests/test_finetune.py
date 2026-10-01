@@ -1,7 +1,9 @@
 """P76: AI Village self-improvement fine-tuning governance - store-level tests."""
 import shutil
+import sqlite3
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from village.finetune import FinetuneStore, GPU_COUNT
@@ -54,6 +56,75 @@ class GpuClaimTests(unittest.TestCase):
     def test_release_unknown_index_is_rejected(self):
         with self.assertRaises(ValueError):
             self.store.release_gpu(99, "01-a")
+
+
+class GpuPriorityReservationTests(unittest.TestCase):
+    """P90 (Gazette game prize: "GPU-/Finetuning-Vorrang")."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="village-finetune-"))
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.store = FinetuneStore(self.tmp / "coordination.sqlite3")
+
+    def test_reserves_one_idle_gpu_for_the_winner(self):
+        index = self.store.reserve_gpu_priority("02-explorer")
+        self.assertIn(index, range(GPU_COUNT))
+        status = {g["gpu_index"]: g for g in self.store.gpu_status()}
+        self.assertEqual(status[index]["reserved_for"], "02-explorer")
+        self.assertIsNone(status[index]["claimed_by"])  # never touches an actual claim
+
+    def test_never_reserves_an_already_claimed_gpu(self):
+        for i, agent in enumerate(["01-a", "02-b", "03-c", "04-d"]):
+            self.store.claim_gpu(agent, f"run{i}")
+        # all 4 are now claimed - nothing idle left to reserve.
+        self.assertIsNone(self.store.reserve_gpu_priority("02-explorer"))
+
+    def test_a_different_agent_cannot_claim_the_reserved_gpu_while_others_are_free(self):
+        reserved = self.store.reserve_gpu_priority("02-explorer")
+        # claim 3 of the remaining free GPUs so only the reserved one is left.
+        others = [i for i in range(GPU_COUNT) if i != reserved]
+        for i, agent in zip(others, ["01-a", "03-c", "04-d"]):
+            self.store.claim_gpu(agent, f"run-{agent}", preferred_index=i)
+        with self.assertRaises(ValueError):
+            self.store.claim_gpu("99-bystander", "run-bystander")
+
+    def test_the_winner_itself_may_claim_the_reserved_gpu(self):
+        reserved = self.store.reserve_gpu_priority("02-explorer")
+        index = self.store.claim_gpu("02-explorer", "run-explorer")
+        self.assertEqual(index, reserved)
+        status = {g["gpu_index"]: g for g in self.store.gpu_status()}
+        self.assertEqual(status[reserved]["claimed_by"], "02-explorer")
+        self.assertIsNone(status[reserved]["reserved_for"])  # claimed clears the reservation
+
+    def test_a_different_agent_may_still_claim_a_different_free_gpu(self):
+        self.store.reserve_gpu_priority("02-explorer")
+        index = self.store.claim_gpu("99-bystander", "run-bystander")
+        self.assertIn(index, range(GPU_COUNT))
+
+    def test_claiming_the_reserved_gpu_by_anyone_clears_the_reservation(self):
+        # Not forced open for a bystander (see the "cannot jump" test
+        # above) - but once that GPU is claimed by ANYONE after its
+        # reservation legitimately expires, the reservation is gone.
+        reserved = self.store.reserve_gpu_priority("02-explorer")
+        with sqlite3.connect(self.store.db_path) as c:
+            expired = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+            c.execute("UPDATE finetune_gpu_reservations SET expires_at=? WHERE gpu_index=?", (expired, reserved))
+            c.commit()
+        index = self.store.claim_gpu("99-bystander", "run-bystander", preferred_index=reserved)
+        self.assertEqual(index, reserved)
+
+    def test_an_expired_reservation_never_blocks_a_claim(self):
+        reserved = self.store.reserve_gpu_priority("02-explorer")
+        with sqlite3.connect(self.store.db_path) as c:
+            expired = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+            c.execute("UPDATE finetune_gpu_reservations SET expires_at=? WHERE gpu_index=?", (expired, reserved))
+            c.commit()
+        others = [i for i in range(GPU_COUNT) if i != reserved]
+        for i, agent in zip(others, ["01-a", "03-c", "04-d"]):
+            self.store.claim_gpu(agent, f"run-{agent}", preferred_index=i)
+        # with the reservation expired, the bystander may now take it.
+        index = self.store.claim_gpu("99-bystander", "run-bystander")
+        self.assertEqual(index, reserved)
 
 
 class ProposeRunTests(unittest.TestCase):

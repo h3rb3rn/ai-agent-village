@@ -25,7 +25,7 @@ earlier model change this session (see docs/evidence/P72.md's Nachtrag).
 from __future__ import annotations
 import sqlite3
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -39,6 +39,13 @@ GPU_COUNT = 4
 RUN_STATUSES = ("proposed", "running", "completed", "failed", "abandoned")
 SWAP_STATUSES = ("pending", "king_approved", "rejected", "applied")
 REVIEW_AGENT = "01-king"
+
+# P90 (operator-chosen Gazette game prize: "GPU-/Finetuning-Vorrang"):
+# the winner of the daily Gazette game gets first refusal on one
+# currently-IDLE M10 GPU for this many hours - reserve_gpu_priority()
+# below only ever reserves capacity nobody is using at the moment it is
+# granted, so this can never preempt or interrupt a peer's running job.
+GPU_PRIORITY_RESERVATION_HOURS = 24.0
 
 
 def now() -> str:
@@ -74,6 +81,14 @@ class FinetuneStore:
                 gpu_index INTEGER PRIMARY KEY, claimed_by TEXT, run_id TEXT, claimed_at TEXT)""")
             for i in range(GPU_COUNT):
                 c.execute("INSERT OR IGNORE INTO finetune_gpu_claims(gpu_index) VALUES(?)", (i,))
+            # P90: a reservation only ever narrows which FREE index a
+            # non-holder's claim_gpu() may land on - it is deleted the
+            # moment its GPU is actually claimed (by anyone) or once it
+            # expires, and never touches an already-claimed GPU, so it
+            # carries zero risk to any running job.
+            c.execute("""CREATE TABLE IF NOT EXISTS finetune_gpu_reservations(
+                gpu_index INTEGER PRIMARY KEY, reserved_for TEXT NOT NULL,
+                reserved_at TEXT NOT NULL, expires_at TEXT NOT NULL)""")
             c.execute("CREATE INDEX IF NOT EXISTS idx_finetune_runs_agent ON finetune_runs(agent_id, status)")
             c.execute("CREATE INDEX IF NOT EXISTS idx_finetune_swap_status ON finetune_swap_requests(status)")
             c.commit()
@@ -83,22 +98,73 @@ class FinetuneStore:
         c.row_factory = sqlite3.Row
         return c
 
+    def _purge_expired_reservations(self, c) -> None:
+        c.execute("DELETE FROM finetune_gpu_reservations WHERE expires_at < ?", (now(),))
+
     def claim_gpu(self, agent: str, run_id: str, preferred_index: Optional[int] = None) -> int:
         """Claims one free M10 GPU index for this run, preferring
         preferred_index if it is actually free. Raises if none are free -
         the resident is expected to wait/check back, never to guess an
-        already-claimed index and collide with a peer's job."""
+        already-claimed index and collide with a peer's job.
+
+        P90: a free index currently reserved (see reserve_gpu_priority())
+        for a DIFFERENT agent is skipped - the caller may still claim any
+        OTHER free GPU, it just cannot jump the reservation. A reservation
+        for the calling agent itself, or an expired one, is no obstacle."""
         with self._conn() as c:
             c.execute("BEGIN IMMEDIATE")
+            self._purge_expired_reservations(c)
             free = [r["gpu_index"] for r in c.execute(
                 "SELECT gpu_index FROM finetune_gpu_claims WHERE claimed_by IS NULL ORDER BY gpu_index"
             ).fetchall()]
-            if not free:
+            reserved_for = {r["gpu_index"]: r["reserved_for"] for r in c.execute(
+                "SELECT gpu_index, reserved_for FROM finetune_gpu_reservations"
+            ).fetchall()}
+            usable = [i for i in free if reserved_for.get(i, agent) == agent]
+            if not usable:
+                if free:
+                    raise ValueError(f"the only free M10 GPU(s) ({free}) are reserved for the current "
+                                     "Gazette game winner's priority claim - try a different one once it "
+                                     "frees up, or wait for the reservation to expire")
                 raise ValueError("no free M10 GPU right now - all 4 are claimed; check back or ask who can release one")
-            index = preferred_index if preferred_index in free else free[0]
+            index = preferred_index if preferred_index in usable else usable[0]
             c.execute(
                 "UPDATE finetune_gpu_claims SET claimed_by=?, run_id=?, claimed_at=? WHERE gpu_index=?",
                 (agent, run_id, now(), index),
+            )
+            # Claimed (by anyone, including the reservation's own holder) -
+            # the reservation has served its purpose either way.
+            c.execute("DELETE FROM finetune_gpu_reservations WHERE gpu_index=?", (index,))
+            c.commit()
+        return index
+
+    def reserve_gpu_priority(self, agent: str, hours: float = GPU_PRIORITY_RESERVATION_HOURS) -> Optional[int]:
+        """P90 (Gazette game prize: 'GPU-/Finetuning-Vorrang'): reserves one
+        currently-IDLE M10 GPU exclusively for ``agent`` for ``hours`` -
+        never touches a GPU that is already claimed, so this can never
+        preempt or interrupt a peer's running job. Returns the reserved
+        index, or None if every GPU was already claimed at grant time (and
+        nothing is reserved in that case - a reservation is a head start on
+        idle capacity, not a queued entitlement)."""
+        with self._conn() as c:
+            c.execute("BEGIN IMMEDIATE")
+            self._purge_expired_reservations(c)
+            free = {r["gpu_index"] for r in c.execute(
+                "SELECT gpu_index FROM finetune_gpu_claims WHERE claimed_by IS NULL"
+            ).fetchall()}
+            already_reserved = {r["gpu_index"] for r in c.execute(
+                "SELECT gpu_index FROM finetune_gpu_reservations"
+            ).fetchall()}
+            available = sorted(free - already_reserved)
+            if not available:
+                c.commit()
+                return None
+            index = available[0]
+            expires = (datetime.now(timezone.utc) + timedelta(hours=hours)).isoformat()
+            c.execute(
+                "INSERT OR REPLACE INTO finetune_gpu_reservations(gpu_index,reserved_for,reserved_at,expires_at) "
+                "VALUES(?,?,?,?)",
+                (index, agent, now(), expires),
             )
             c.commit()
         return index
@@ -116,7 +182,17 @@ class FinetuneStore:
 
     def gpu_status(self) -> List[Dict[str, Any]]:
         with self._conn() as c:
-            return [dict(r) for r in c.execute("SELECT * FROM finetune_gpu_claims ORDER BY gpu_index")]
+            self._purge_expired_reservations(c)
+            c.commit()
+            rows = [dict(r) for r in c.execute("SELECT * FROM finetune_gpu_claims ORDER BY gpu_index")]
+            reservations = {r["gpu_index"]: dict(r) for r in c.execute(
+                "SELECT * FROM finetune_gpu_reservations"
+            ).fetchall()}
+        for row in rows:
+            reservation = reservations.get(row["gpu_index"])
+            row["reserved_for"] = reservation["reserved_for"] if reservation else None
+            row["reservation_expires_at"] = reservation["expires_at"] if reservation else None
+        return rows
 
     def propose_run(self, agent: str, base_model: str, method: str, dataset_description: str,
                     preferred_gpu_index: Optional[int] = None, notes: str = "") -> Dict[str, Any]:

@@ -156,7 +156,9 @@
     "last_event": "Last event {age} ago",
     "ctx": "ctx",
     "aria_last_events": "Last {n} events",
-    "no_agent_data": "No agent data available yet."
+    "no_agent_data": "No agent data available yet.",
+    "trophy_title": "{n} Gazette game win(s)",
+    "quizmaster_title": "Today's Gazette quizmaster - sets the daily game question"
   },
   "calendar_panel": {
     "title": "Calendar · Appointment overview",

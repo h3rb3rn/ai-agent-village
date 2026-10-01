@@ -155,5 +155,55 @@ class GazetteDashboardTests(unittest.TestCase):
             self.assertEqual(status, 404, bad)
 
 
+class GazetteGameStatsTests(unittest.TestCase):
+    """P90 (Gazette game prize: "Sichtbares Abzeichen/Titel im Dashboard")."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        root = Path(self.tmp.name)
+        (root / "board").mkdir()
+        self.saved_root = webui.ROOT
+        webui.ROOT = root
+        self.addCleanup(lambda: setattr(webui, 'ROOT', self.saved_root))
+        self.store = GazetteStore(root / "board" / "coordination.sqlite3")
+
+    def win_an_edition(self, edition_id, winner, peers=("02-explorer", "03-librarian")):
+        self.store.open_edition("01-king", list(peers), edition_id=edition_id, game_task="Q?")
+        for agent in peers:
+            self.store.submit_contribution(edition_id, agent, "game_result", "Guess", "x", solution="x")
+        self.store.declare_game_winner(edition_id, "01-king", winner, "because")
+        self.store.close_edition(edition_id, "01-king")
+
+    def test_empty_store_has_no_wins_and_no_quizmaster(self):
+        stats = webui.gazette_game_stats()
+        self.assertEqual(stats, {"wins": {}, "quizmaster": None})
+
+    def test_wins_are_tallied_per_agent_across_editions(self):
+        self.win_an_edition("2026-09-26", "02-explorer")
+        self.win_an_edition("2026-09-27", "02-explorer")
+        self.win_an_edition("2026-09-28", "03-librarian")
+        stats = webui.gazette_game_stats()
+        self.assertEqual(stats["wins"], {"02-explorer": 2, "03-librarian": 1})
+
+    def test_unentschieden_never_counts_as_a_win(self):
+        self.store.open_edition("01-king", ["02-explorer", "03-librarian"], edition_id="2026-09-26", game_task="Q?")
+        for agent in ("02-explorer", "03-librarian"):
+            self.store.submit_contribution("2026-09-26", agent, "game_result", "Guess", "x", solution="x")
+        self.store.declare_game_winner("2026-09-26", "01-king", "unentschieden", "tied")
+        self.store.close_edition("2026-09-26", "01-king")
+        self.assertEqual(webui.gazette_game_stats()["wins"], {})
+
+    def test_quizmaster_reflects_the_currently_open_edition(self):
+        self.win_an_edition("2026-09-26", "02-explorer")
+        self.store.open_edition("01-king", ["02-explorer", "03-librarian"], edition_id="2026-09-27")
+        stats = webui.gazette_game_stats()
+        self.assertEqual(stats["quizmaster"], "02-explorer")
+
+    def test_quizmaster_is_none_when_no_edition_is_open(self):
+        self.win_an_edition("2026-09-26", "02-explorer")
+        self.assertIsNone(webui.gazette_game_stats()["quizmaster"])
+
+
 if __name__ == "__main__":
     unittest.main()

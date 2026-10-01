@@ -54,6 +54,7 @@ from village.gazette import HEADLINE_MAX_CHARS as GAZETTE_HEADLINE_MAX_CHARS
 from village.gazette import MAX_COLUMN_CHARS as GAZETTE_MAX_COLUMN_CHARS
 from village.gazette import today as gazette_today
 from village.gazette import REVIEWER_AGENT as GAZETTE_REVIEWER
+from village.gazette import game_participants
 from village.calendar import today as calendar_today
 from village.calendar import is_workday as calendar_is_workday
 from village.calendar import shift_date as calendar_shift_date
@@ -148,12 +149,12 @@ GAZETTE_ASSIGN_CEILING = 10
 # womit gewonnen hat." The 'game_result' kind (unlike the regular
 # per-resident rotation P73 just gated) has never had ANY pressure behind
 # it at all - it is deliberately excluded from assign_kinds()'s mandatory
-# rotation (see village/gazette.py), so the P73 gate never covers it
-# either. Same proven ceiling, two more gates: one for each drawn
-# participant's own game_result, one for King's separate winner
-# declaration once both are in (GAME_POOL's own text already names him
-# arbiter: "King kuert einen Favoriten").
-GAZETTE_GAME_RESULT_CEILING = 10
+# rotation (see village/gazette.py). P90 (operator: "Ich moechte das Spiel
+# nicht mehr verbindlich sondern freiwillig machen"): playing it stays
+# ungated for everyone, permanently - only King's separate winner
+# declaration, once at least two residents have voluntarily played, keeps
+# a ceiling (GAME_POOL's own text already names him arbiter: "King kuert
+# einen Favoriten").
 GAZETTE_GAME_WINNER_CEILING = 10
 
 # P75 (operator directive, 2026-09-30): "Implementiere jetzt die
@@ -566,46 +567,65 @@ class Resident:
             return None
         return edition['id'], assigned_kind
 
-    def gazette_pending_game_result(self):
-        """(edition_id, role) if THIS agent is part of the active edition's
-        drawn game pair and has not yet submitted a game_result - None
-        otherwise. P74: 'game_result' is deliberately excluded from
-        assign_kinds()'s rotation, so gazette_pending_own_contribution()
-        never covers it - this is its own, separate obligation. P82
-        (operator feedback: "Die Auslosung ist auch nicht eindeutig"):
-        role is now always one of 'opener' (pair[0], poses the task) or
-        'responder' (pair[1], answers it) - see open_edition()'s own
-        comment for why that fixed position carries real meaning now."""
+    def gazette_game_invitation(self):
+        """edition_id if THIS agent may voluntarily play today's game
+        (a task has been posed and this agent has not yet submitted a
+        guess) - None otherwise. Purely advisory (see snapshot()'s own
+        use of this) - never a gate/pressure counter.
+
+        P90 (operator feedback: "da nur zwei Teilnehmer am Spiel
+        teilnehmen und auch nur Teilnehmer schaetzt ist der, der die
+        Aufgabe stellt sogesehen kein Spiel Teilnehmer [...] Ich moechte
+        das Spiel nicht mehr verbindlich sondern freiwillig machen"):
+        replaces the old gazette_pending_game_result() (which restricted
+        play to a fixed drawn pair, and had become one of the hard gates
+        below) - anyone may play once today's quizmaster has posed a
+        question, and nobody is pressured into it."""
         edition = self.gazette.get_edition(self.gazette_active_edition_id())
-        if not edition or edition['status'] == 'compiled':
-            return None
-        pair = edition.get('game_pair', [])
-        if self.id not in pair:
+        if not edition or edition['status'] == 'compiled' or not edition.get('game_task'):
             return None
         if any(c['agent'] == self.id and c['kind'] == 'game_result' for c in edition['contributions']):
             return None
-        role = 'opener' if pair and pair[0] == self.id else 'responder'
-        return (edition['id'], role)
+        return edition['id']
+
+    def gazette_quizmaster_pending_task(self):
+        """edition_id if THIS agent holds today's quizmaster crown (see
+        village/gazette.py's open_edition()) and has not yet posed a
+        question - None otherwise. Purely advisory, same as
+        gazette_game_invitation() - nobody is pressured into running the
+        game at all; King remains free to set the task himself even when
+        someone else holds the crown, same editorial authority he already
+        has everywhere else in this pipeline."""
+        edition = self.gazette.get_edition(self.gazette_active_edition_id())
+        if not edition or edition['status'] == 'compiled':
+            return None
+        if edition.get('game_quizmaster') != self.id or edition.get('game_task'):
+            return None
+        return edition['id']
 
     def gazette_pending_game_winner(self):
-        """(edition_id, [pair]) if THIS agent is King, the active edition
-        has a drawn pair, BOTH have submitted their game_result, and no
-        winner has been declared yet - None otherwise. Requiring both
-        accounts first means King judges with the full picture, same
-        rationale as gazette_pending_reviews() only ever surfacing
-        actually-submitted content."""
+        """(edition_id, [participants]) if THIS agent is King, at least 2
+        distinct residents have voluntarily submitted a game_result for
+        the active edition, and no winner has been declared yet - None
+        otherwise. Requiring at least 2 real participants first means
+        King only ever judges an actual contest, same rationale as
+        gazette_pending_reviews() only ever surfacing actually-submitted
+        content.
+
+        P90 (operator feedback: "es kann immer nur der eine Teilnehmer
+        gewinnen der schaetzt [...] es muessen [...] mehr Agents
+        Teilnehmen"): replaces the old fixed-drawn-pair check - the real,
+        dynamic, voluntary participant set (game_participants()) decides
+        whether there is anything to judge at all."""
         if self.id != '01-king':
             return None
         edition = self.gazette.get_edition(self.gazette_active_edition_id())
         if not edition or edition['status'] == 'compiled':
             return None
-        pair = edition.get('game_pair', [])
-        if len(pair) < 2 or edition.get('game_winner'):
+        participants = game_participants(edition)
+        if len(participants) < 2 or edition.get('game_winner'):
             return None
-        submitted = {c['agent'] for c in edition['contributions'] if c['kind'] == 'game_result'}
-        if not all(p in submitted for p in pair):
-            return None
-        return edition['id'], pair
+        return edition['id'], participants
 
     def gazette_meetings_source_hint(self, context):
         """When assigned the 'meetings' kind (P73, operator directive: "eine
@@ -1040,10 +1060,11 @@ class Resident:
             gazette_edition = self.gazette.get_edition(self.gazette_active_edition_id())
             if not gazette_edition:
                 context['gazette_daily_note'] = (
-                    "No AI Village Gazette edition is open for today yet. As King, call "
-                    "gazette_operation with operation=open once to draw today's game and "
-                    "pairing, then tell every peer by board_message so they know to "
-                    "contribute via gazette_operation contribute."
+                    "No AI Village Gazette edition is open for today yet. As King (the editor), "
+                    "call gazette_operation with operation=open - optionally with game_name=... "
+                    "and game_task=... to choose today's game yourself, or omit both for a random "
+                    "pick from the pool with the task set later - then tell every peer by "
+                    "board_message so they know to contribute via gazette_operation contribute."
                 )
             else:
                 opened_epoch = event_time({'timestamp': gazette_edition['opened_at']})
@@ -1054,16 +1075,12 @@ class Resident:
                     for e in events
                 )
                 if not announced:
-                    pair = gazette_edition['game_pair']
-                    # P82 (operator feedback: "Die Auslosung ist auch nicht
-                    # eindeutig"): name the roles in King's own announce
-                    # hint too, not just a bare name list.
-                    pairing_text = (f"{pair[0]} (stellt die Aufgabe) vs. {pair[1]} (antwortet)"
-                                    if len(pair) >= 2 else ', '.join(pair))
+                    # P90: no more drawn pair to name - participation is
+                    # voluntary for everyone now (see
+                    # gazette_game_invitation()).
                     context['gazette_daily_note'] = (
                         f"Today's AI Village Gazette edition is open (game: "
-                        f"{gazette_edition['game_name']}; pairing: "
-                        f"{pairing_text}). You have not yet told "
+                        f"{gazette_edition['game_name']}). You have not yet told "
                         "the village: send a board_message to ALL mentioning the Gazette so "
                         "peers know to contribute via gazette_operation contribute."
                     )
@@ -1123,56 +1140,63 @@ class Resident:
                         "Today's AI Village Gazette edition is open and you have not contributed "
                         "yet. Send one gazette_operation contribute - pick any kind that fits: "
                         "state/mood/wishes/topics/suggestions/learning/outlook/village_news/column "
-                        "(game_result is reserved for today's drawn pair; column is optional, for a "
-                        f"genuinely in-depth topic). {gazette_style_hint}"
+                        "(game_result is voluntary, see below if today's game has a task yet; "
+                        f"column is optional, for a genuinely in-depth topic). {gazette_style_hint}"
                     )
-        # P74 (operator feedback): "Es ist nicht ersichtlich welcher Agent
-        # was gemacht und womit gewonnen hat [...] gestellte Aufgabe und
-        # erfolgte Loesung der Agents sowie den benannten Gewinner." Appended
+        # P90 (operator feedback: "Ich moechte das Spiel nicht mehr
+        # verbindlich sondern freiwillig machen [...] Agents sollen
+        # motiviert sein am Gewinnspiel Teilzunehmen"): both the quizmaster
+        # nudge and the play invitation below are purely advisory, appended
         # to whatever gazette_daily_note the block above already produced
-        # (or starts one, if none did) - game participation is orthogonal
-        # to the regular per-resident rotation P73 already covers.
-        pending_game = self.gazette_pending_game_result()
-        if pending_game:
-            eid, role = pending_game
-            # P82 (operator feedback: "Die Auslosung ist auch nicht
-            # eindeutig [...] nicht die Frage und Antwort"): role-specific
-            # instructions, not the old symmetric text both participants
-            # got regardless of who was meant to originate the question -
-            # and task/solution are now their own required fields (see
+        # (or starts one, if none did) - neither is ever backed by a
+        # pressure gate (see guard()), unlike King's winner-declaration duty
+        # further down, which stays mandatory once a real contest exists.
+        # The quizmaster nudge only ever piggybacks on an ALREADY-active
+        # gazette_daily_note (King's own open/announce/assign/contribute/
+        # review chain above, or a peer's regular contribute invitation
+        # below) - it never creates one by itself. Setting a task is
+        # King's (or the crown holder's) own free choice, same as playing
+        # the game itself is everyone else's; a day with nothing
+        # genuinely pending must stay completely quiet (P85's own
+        # invariant: "taeglich [...] eine feste Deadline, nicht
+        # beteiligungsabhaengig" applies here too, in spirit).
+        pending_task = self.gazette_quizmaster_pending_task()
+        if pending_task and context.get('gazette_daily_note'):
+            quizmaster_hint = (
+                f" You hold today's Gazette quizmaster crown (edition {pending_task}) - "
+                "pose one concrete question/challenge with gazette_operation "
+                "operation='set_game_task', task=... whenever you like; residents can only play "
+                "once you have."
+            )
+            context['gazette_daily_note'] = (context['gazette_daily_note'] + quizmaster_hint).strip()
+        invitation = self.gazette_game_invitation()
+        if invitation:
+            # P82 (operator feedback: "nicht die Frage und Antwort") -
+            # solution is still its own required field (see
             # village/gazette.py's submit_contribution), not just prose
             # folded into 'content'.
-            if role == 'opener':
-                role_instruction = (
-                    "You are the opener: pose one concrete task/question/challenge that fits today's "
-                    "game, put it verbatim in task=..., and give your own solution=... to it."
-                )
-            else:
-                role_instruction = (
-                    "You are the responder: restate the opener's task verbatim in task=... so it is not "
-                    "lost, and give your own solution=... - your own actual answer/move, not the rules."
-                )
             game_hint = (
-                f" You are part of today's drawn game pair (edition {eid}): submit a gazette_operation "
-                f"contribute with kind='game_result', task=..., solution=... once you have actually "
-                f"played your part. {role_instruction} Add a short free-text content=... assessment of "
-                "who won and why if you like - King declares the official winner afterwards."
+                f" Today's Gazette game (edition {invitation}) is open to anyone who wants to play - "
+                "entirely optional. If you'd like to: submit a gazette_operation contribute with "
+                "kind='game_result', solution=... (your own guess/answer; add a short free-text "
+                "content=... if you like) - King declares the official winner once at least two "
+                "residents have played."
             )
             context['gazette_daily_note'] = (context.get('gazette_daily_note', '') + game_hint).strip()
         pending_winner = self.gazette_pending_game_winner()
         if pending_winner:
-            eid, pair = pending_winner
+            eid, participants = pending_winner
             # P85 (operator feedback: "was war der tatsaechliche Wert [...]
             # wer hat gewonnen?" - fehlt komplett): note is now required -
             # a bare winner name explains nothing, especially for a
             # Schaetzfrage where "who won" is meaningless without the real
             # value it was judged against.
             winner_hint = (
-                f" Both {pair[0]} and {pair[1]} have submitted their game_result for edition {eid}: "
-                "declare the official winner with gazette_operation operation='declare_winner', "
-                "winner=<one of them, or 'unentschieden' if genuinely tied>, and a required note "
-                "stating WHY - for a Schaetzfrage: the actual/true value both guesses were judged "
-                "against, not just a bare name."
+                f" {len(participants)} residents ({', '.join(participants)}) have voluntarily played "
+                f"today's game for edition {eid}: declare the official winner with gazette_operation "
+                "operation='declare_winner', winner=<one of them, or 'unentschieden' if genuinely "
+                "tied>, and a required note stating WHY - for a Schaetzfrage: the actual/true value "
+                "every guess was judged against, not just a bare name."
             )
             context['gazette_daily_note'] = (context.get('gazette_daily_note', '') + winner_hint).strip()
         # P75 (operator directive): "Kalender sollen Proaktiv von den Agents
@@ -1628,37 +1652,12 @@ class Resident:
                                         f"(fill in headline and content): {example}",
                                         f"edition={eid}; kind={kind}; pressure={pressure}; deadline={past_deadline}")
 
-        # P74 (operator feedback, "es ist nicht ersichtlich [...] womit
-        # gewonnen hat"): 'game_result' is excluded from assign_kinds()'s
-        # rotation on purpose (see village/gazette.py), so contribute_block
-        # above never covers it - a completely separate, previously
-        # unenforced obligation for whichever two agents were drawn.
-        game_result_block = None
-        if name not in ('meeting_operation', 'gazette_operation', 'idle'):
-            pending_game = self.gazette_pending_game_result()
-            if not pending_game:
-                self.state['gazette_game_result_pressure'] = 0
-            else:
-                eid, role = pending_game
-                pressure = int(self.state.get('gazette_game_result_pressure', 0)) + 1
-                self.state['gazette_game_result_pressure'] = pressure
-                self.event('gazette_game_result_required', f"edition={eid}; role={role}; pressure={pressure}")
-                past_deadline = gazette_deadline_passed(GAZETTE_CONTRIBUTE_DEADLINE_HOUR_UTC)
-                if pressure >= GAZETTE_GAME_RESULT_CEILING or past_deadline:
-                    # P82: task/solution are now required, structured fields
-                    # (see village/gazette.py's submit_contribution) - the
-                    # copy-adaptable example must include them or a model
-                    # copying it verbatim would still fail validation.
-                    example = ('{"name":"gazette_operation","arguments":{"operation":"contribute",'
-                               f'"edition_id":"{eid}","kind":"game_result","headline":"...",'
-                               '"task":"...","solution":"...","content":"..."}}')
-                    deadline_note = (f" The {GAZETTE_CONTRIBUTE_DEADLINE_HOUR_UTC}:00 UTC contribution "
-                                     "deadline has passed." if past_deadline else "")
-                    game_result_block = (f"Today's game result required before more solo work:{deadline_note} "
-                                         f"submit exactly this envelope - task=the concrete question/challenge "
-                                         f"({'you pose' if role == 'opener' else 'the opener posed, restated'}), "
-                                         f"solution=your own actual answer/move: {example}",
-                                         f"edition={eid}; role={role}; pressure={pressure}; deadline={past_deadline}")
+        # P90 (operator feedback: "Ich moechte das Spiel nicht mehr
+        # verbindlich sondern freiwillig machen"): the former
+        # game_result_block hard gate (deckelte wer gezogen wurde) is gone
+        # entirely - playing today's game is purely voluntary now (see
+        # gazette_game_invitation() and the gazette_daily_note hint above);
+        # no pressure counter is kept for it any more.
 
         # P60 (operator: "Nicht nur beobachten wenn du GAPs identifizierst,
         # sondern proaktiv loesen"): live observation showed the Chronicler's
@@ -1715,15 +1714,16 @@ class Resident:
                                    f"closable={len(closable)}; pressure={pressure}; deadline={past_deadline}")
 
         # P74: King's own separate arbiter act (GAME_POOL's own text: "King
-        # kuert einen Favoriten") - only fires once BOTH drawn participants
-        # have actually submitted their game_result.
+        # kuert einen Favoriten") - only fires once at least two residents
+        # have voluntarily played (P90: game_participants(), not a fixed
+        # drawn pair).
         game_winner_block = None
         if self.id == '01-king' and name not in ('meeting_operation', 'gazette_operation', 'idle'):
             pending_winner = self.gazette_pending_game_winner()
             if not pending_winner:
                 self.state['gazette_game_winner_pressure'] = 0
             else:
-                eid, pair = pending_winner
+                eid, participants = pending_winner
                 pressure = int(self.state.get('gazette_game_winner_pressure', 0)) + 1
                 self.state['gazette_game_winner_pressure'] = pressure
                 self.event('gazette_game_winner_required', f"edition={eid}; pressure={pressure}")
@@ -1732,11 +1732,12 @@ class Resident:
                     # copy-adaptable example must include it or a model
                     # copying it verbatim would still fail validation.
                     example = ('{"name":"gazette_operation","arguments":{"operation":"declare_winner",'
-                               f'"edition_id":"{eid}","winner":"{pair[0]}","note":"..."}}')
+                               f'"edition_id":"{eid}","winner":"{participants[0]}","note":"..."}}')
                     game_winner_block = (f"Today's game winner declaration required before more solo "
-                                         f"work: both {pair[0]} and {pair[1]} have submitted results. "
-                                         f"Submit exactly this envelope (or winner=\"unentschieden\"), note "
-                                         f"must state why/the actual value judged against: {example}",
+                                         f"work: {len(participants)} residents ({', '.join(participants)}) "
+                                         "have played. Submit exactly this envelope (or "
+                                         "winner=\"unentschieden\"), note must state why/the actual value "
+                                         f"judged against: {example}",
                                          f"edition={eid}; pressure={pressure}")
 
         # P75 (operator directive): "verpflichtende Aufgabe an die Agents
@@ -1820,10 +1821,6 @@ class Resident:
         if contribute_block:
             self.feedback(name, contribute_block[0], False)
             self.event('gazette_contribute_gate', contribute_block[1])
-            return False
-        if game_result_block:
-            self.feedback(name, game_result_block[0], False)
-            self.event('gazette_game_result_gate', game_result_block[1])
             return False
         if gazette_block:
             self.feedback(name, gazette_block[0], False)
@@ -2232,7 +2229,13 @@ class Resident:
                         # King's own daily routine) - an operator-directed
                         # out-of-band edition no longer needs a store-level
                         # bypass of this action.
-                        result = self.gazette.open_edition(self.id, peers, edition_id=args.get('edition_id') or None)
+                        # P90 (operator: "der Redakteur entscheidet welches
+                        # Spiel gespielt wird"): optional game_name/game_task
+                        # override - omitted, open_edition() falls back to
+                        # a random GAME_POOL pick / an empty task.
+                        result = self.gazette.open_edition(
+                            self.id, peers, edition_id=args.get('edition_id') or None,
+                            game_name=args.get('game_name') or None, game_task=args.get('game_task') or None)
                         self.event('gazette_opened', json.dumps(result, ensure_ascii=False)[:1000])
                         self.feedback(name, json.dumps(result, ensure_ascii=False), True)
                 elif op == 'assign':
@@ -2383,13 +2386,39 @@ class Resident:
                         else:
                             self.event('gazette_game_winner_declared',
                                        f'edition={edition_id}; winner={args.get("winner")}')
+                            # P90 (operator-chosen Gazette game prize: "GPU-/
+                            # Finetuning-Vorrang"): a genuine winner (never
+                            # 'unentschieden') gets first refusal on one
+                            # currently-idle M10 GPU - never preempts a
+                            # peer's running job (see FinetuneStore's own
+                            # comment), so this is safe to grant unconditionally.
+                            winner = args.get('winner')
+                            if winner and winner != 'unentschieden':
+                                reserved = self.finetune.reserve_gpu_priority(winner)
+                                self.event('gazette_game_prize_gpu_reserved',
+                                          f'winner={winner}; gpu_index={reserved}')
                             self.feedback(name, json.dumps(result, ensure_ascii=False)[:2000], True)
+                elif op == 'set_game_task':
+                    # P90 (operator feedback: "der Redakteur entscheidet
+                    # welches Spiel gespielt wird" + the quizmaster-crown
+                    # prize): only today's quizmaster (King by default, or
+                    # yesterday's game winner) may pose the question - see
+                    # village/gazette.py's set_game_task().
+                    edition_id = args.get('edition_id') or self.gazette_active_edition_id()
+                    try:
+                        result = self.gazette.set_game_task(edition_id, self.id, args.get('task', ''))
+                    except ValueError as exc:
+                        self.feedback(name, str(exc), False)
+                    else:
+                        self.event('gazette_game_task_set', f'edition={edition_id}')
+                        self.feedback(name, json.dumps(result, ensure_ascii=False)[:2000], True)
                 elif op == 'view':
                     edition_id = args.get('edition_id') or gazette_today()
                     result = self.gazette.get_edition(edition_id)
                     self.feedback(name, json.dumps(result, ensure_ascii=False)[:3000] if result else 'No edition yet for that date.', bool(result))
                 else:
-                    raise ValueError('gazette_operation requires operation open, assign, contribute, review, close, declare_winner, or view')
+                    raise ValueError('gazette_operation requires operation open, assign, contribute, review, close, '
+                                     'declare_winner, set_game_task, or view')
             elif name == 'calendar_operation':
                 # P75 (operator directive): every resident's own real
                 # action, never a background computation on their behalf -

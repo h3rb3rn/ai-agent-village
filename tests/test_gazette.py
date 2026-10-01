@@ -22,15 +22,47 @@ class OpenEditionTests(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
         self.store = GazetteStore(self.tmp / "coordination.sqlite3")
 
-    def test_opening_draws_a_game_and_a_pair_from_the_pool(self):
+    def test_opening_draws_a_game_from_the_pool_with_no_pair(self):
+        # P90: no more drawn pair - the random pick only ever picks the
+        # game's NAME; King (defaulting as today's quizmaster) poses the
+        # actual task later via set_game_task(), and anyone may play.
         edition = self.store.open_edition("01-king", PEERS, rng=random.Random(1))
         self.assertIn(edition["game_name"], GAME_POOL)
-        self.assertEqual(len(edition["game_pair"]), 2)
-        for agent in edition["game_pair"]:
-            self.assertIn(agent, PEERS)
-        self.assertNotEqual(edition["game_pair"][0], edition["game_pair"][1])
+        self.assertEqual(edition["game_pair"], [])
+        self.assertEqual(edition["game_task"], "")
+        self.assertEqual(edition["game_quizmaster"], "01-king")
         self.assertEqual(edition["status"], "open")
         self.assertEqual(edition["opened_by"], "01-king")
+
+    def test_king_may_choose_the_game_name_and_task_explicitly(self):
+        # P90 (operator: "der Redakteur entscheidet welches Spiel gespielt
+        # wird") - King's own explicit choice overrides the random pool.
+        edition = self.store.open_edition("01-king", PEERS, rng=random.Random(1),
+                                          game_name="Custom quiz", game_task="What is 2+2?")
+        self.assertEqual(edition["game_name"], "Custom quiz")
+        self.assertEqual(edition["game_task"], "What is 2+2?")
+
+    def test_yesterdays_winner_becomes_todays_quizmaster(self):
+        # P90 (Gazette game prize: "Quizmaster-Krone") - the crown passes
+        # to whoever won the most recently COMPILED edition's game.
+        self.store.open_edition("01-king", PEERS, edition_id="2026-09-27", rng=random.Random(1),
+                                game_task="Q1")
+        self.store.submit_contribution("2026-09-27", "02-explorer", "game_result", "Guess", "x", solution="A")
+        self.store.submit_contribution("2026-09-27", "03-librarian", "game_result", "Guess", "x", solution="B")
+        self.store.declare_game_winner("2026-09-27", "01-king", "02-explorer", "A was closest")
+        self.store.close_edition("2026-09-27", "01-king")
+        new_edition = self.store.open_edition("01-king", PEERS, edition_id="2026-09-28", rng=random.Random(1))
+        self.assertEqual(new_edition["game_quizmaster"], "02-explorer")
+
+    def test_a_tie_or_no_winner_keeps_king_as_quizmaster(self):
+        self.store.open_edition("01-king", PEERS, edition_id="2026-09-27", rng=random.Random(1),
+                                game_task="Q1")
+        self.store.submit_contribution("2026-09-27", "02-explorer", "game_result", "Guess", "x", solution="A")
+        self.store.submit_contribution("2026-09-27", "03-librarian", "game_result", "Guess", "x", solution="B")
+        self.store.declare_game_winner("2026-09-27", "01-king", "unentschieden", "too close to call")
+        self.store.close_edition("2026-09-27", "01-king")
+        new_edition = self.store.open_edition("01-king", PEERS, edition_id="2026-09-28", rng=random.Random(1))
+        self.assertEqual(new_edition["game_quizmaster"], "01-king")
 
     def test_opening_twice_is_idempotent_never_reshuffles(self):
         first = self.store.open_edition("01-king", PEERS, edition_id="2026-09-28", rng=random.Random(1))
@@ -44,8 +76,10 @@ class OpenEditionTests(unittest.TestCase):
         self.assertEqual(edition["id"], today())
 
     def test_fewer_than_two_peers_still_opens_without_crashing(self):
+        # P90: peers no longer drive a drawn pair at all - kept only for
+        # call-site compatibility.
         edition = self.store.open_edition("01-king", ["02-explorer"])
-        self.assertEqual(edition["game_pair"], ["02-explorer"])
+        self.assertEqual(edition["game_pair"], [])
 
     def test_opening_alone_creates_no_assignments(self):
         # P54: opening no longer silently computes assignments - that made
@@ -149,10 +183,10 @@ class SubmitContributionTests(unittest.TestCase):
         self.assertEqual(contrib["content"], "Zuversichtlich heute.")
 
     def test_every_documented_kind_is_accepted(self):
+        self.store.set_game_task("2026-09-28", "01-king", "Was ist die Hauptstadt von Bayern?")
         for kind in CONTRIBUTION_KINDS:
-            agent = self.edition["game_pair"][0] if kind == "game_result" else "03-librarian"
-            kwargs = {"task": "Was ist die Hauptstadt von Bayern?", "solution": "Muenchen"} if kind == "game_result" else {}
-            self.store.submit_contribution("2026-09-28", agent, kind, "Update: see full text." , f"content for {kind}", **kwargs)
+            kwargs = {"solution": "Muenchen"} if kind == "game_result" else {}
+            self.store.submit_contribution("2026-09-28", "03-librarian", kind, "Update: see full text." , f"content for {kind}", **kwargs)
 
     def test_unknown_kind_is_rejected(self):
         with self.assertRaises(ValueError):
@@ -174,24 +208,29 @@ class SubmitContributionTests(unittest.TestCase):
         self.assertEqual(len(matches), 1)
         self.assertEqual(matches[0]["content"], "final version")
 
-    def test_game_result_is_restricted_to_the_drawn_pair(self):
-        bystander = next(p for p in PEERS if p not in self.edition["game_pair"])
+    def test_game_result_is_voluntary_and_open_to_anyone_once_a_task_is_set(self):
+        # P90: no more drawn pair restricting who may play - but a guess
+        # needs something to guess at (today's quizmaster's game_task).
         with self.assertRaises(ValueError):
-            self.store.submit_contribution("2026-09-28", bystander, "game_result", "Update: see full text." , "I won even though I wasn't picked",
-                                           task="Haiku zu Herbst", solution="Blaetter fallen leise")
-        # the actually-drawn pair may submit without error
-        self.store.submit_contribution("2026-09-28", self.edition["game_pair"][0], "game_result", "Update: see full text." , "It was a close haiku duel.",
-                                       task="Haiku zu Herbst", solution="Blaetter fallen leise")
+            self.store.submit_contribution("2026-09-28", "02-explorer", "game_result", "Update: see full text.",
+                                           "No task has been posed yet", solution="guess")
+        self.store.set_game_task("2026-09-28", "01-king", "Haiku zu Herbst")
+        # now ANY resident may submit, not just a pre-drawn pair.
+        for agent in ("02-explorer", "04-artisan", "06-operator"):
+            self.store.submit_contribution("2026-09-28", agent, "game_result", "Update: see full text.",
+                                           "It was a close haiku duel.", solution="Blaetter fallen leise")
 
-    def test_game_result_requires_task_and_solution(self):
-        # P82 (operator feedback: "enthaelt nur die Auslosung, nicht die
-        # Frage und Antwort") - both are now structurally required fields,
-        # not just prose folded into 'content'.
-        opener = self.edition["game_pair"][0]
+    def test_game_result_requires_only_a_solution_not_a_task(self):
+        # P90 (operator feedback: "da nur zwei Teilnehmer am Spiel
+        # teilnehmen [...] ist der, der die Aufgabe stellt sogesehen kein
+        # Spiel Teilnehmer"): the task now lives once on the edition
+        # (set_game_task()), never resubmitted per participant.
+        self.store.set_game_task("2026-09-28", "01-king", "Frage?")
         with self.assertRaises(ValueError):
-            self.store.submit_contribution("2026-09-28", opener, "game_result", "Update: see full text.", "body", task="", solution="Muenchen")
-        with self.assertRaises(ValueError):
-            self.store.submit_contribution("2026-09-28", opener, "game_result", "Update: see full text.", "body", task="Frage?", solution="  ")
+            self.store.submit_contribution("2026-09-28", "02-explorer", "game_result", "Update: see full text.", "body", solution="  ")
+        result = self.store.submit_contribution("2026-09-28", "02-explorer", "game_result", "Update: see full text.", "body", solution="Muenchen")
+        contrib = next(c for c in result["contributions"] if c["kind"] == "game_result")
+        self.assertEqual(contrib["solution"], "Muenchen")
 
     def test_task_and_solution_are_ignored_for_other_kinds(self):
         result = self.store.submit_contribution("2026-09-28", "03-librarian", "mood", "Update: see full text.", "Zuversichtlich.",
@@ -241,6 +280,42 @@ class SubmitContributionTests(unittest.TestCase):
         contrib = next(c for c in result["contributions"] if c["kind"] == "meetings")
         self.assertGreater(len(contrib["content"]), MAX_CONTRIBUTION_CHARS)
         self.assertLessEqual(len(contrib["content"]), MAX_COLUMN_CHARS)
+
+
+class SetGameTaskTests(unittest.TestCase):
+    """P90: only today's quizmaster may pose the actual game question."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="village-gazette-"))
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.store = GazetteStore(self.tmp / "coordination.sqlite3")
+        self.edition = self.store.open_edition("01-king", PEERS, edition_id="2026-09-28", rng=random.Random(1))
+
+    def test_quizmaster_may_set_the_task(self):
+        result = self.store.set_game_task("2026-09-28", "01-king", "What is 2+2?")
+        self.assertEqual(result["game_task"], "What is 2+2?")
+
+    def test_non_quizmaster_is_rejected(self):
+        with self.assertRaises(ValueError):
+            self.store.set_game_task("2026-09-28", "02-explorer", "What is 2+2?")
+
+    def test_empty_task_is_rejected(self):
+        with self.assertRaises(ValueError):
+            self.store.set_game_task("2026-09-28", "01-king", "   ")
+
+    def test_quizmaster_may_refine_the_task_before_close(self):
+        self.store.set_game_task("2026-09-28", "01-king", "First draft")
+        result = self.store.set_game_task("2026-09-28", "01-king", "Refined question")
+        self.assertEqual(result["game_task"], "Refined question")
+
+    def test_cannot_set_task_on_a_compiled_edition(self):
+        self.store.close_edition("2026-09-28", "01-king")
+        with self.assertRaises(ValueError):
+            self.store.set_game_task("2026-09-28", "01-king", "Too late")
+
+    def test_unknown_edition_is_rejected(self):
+        with self.assertRaises(ValueError):
+            self.store.set_game_task("1999-01-01", "01-king", "x")
 
 
 class ListEditionsTests(unittest.TestCase):
@@ -404,35 +479,55 @@ class CompileEditionTests(unittest.TestCase):
         # Must not also show up in the per-resident interview grid.
         self.assertNotIn("<h3>02-explorer</h3>", rendered)
 
-    def test_game_pairing_is_rendered_with_unambiguous_roles(self):
-        # P82 (operator feedback: "Die Auslosung ist auch nicht eindeutig") -
-        # the compiled edition must name who poses the task and who answers
-        # it, not just list two agent ids.
-        edition = self.store.get_edition("2026-09-28")
-        opener, responder = edition["game_pair"]
+    def test_game_task_and_quizmaster_are_rendered(self):
+        # P90: no more drawn-pair roles - King (or the crown-holding
+        # quizmaster) poses one question, shown once on the edition.
+        self.store.set_game_task("2026-09-28", "01-king", "What is the capital of Bavaria?")
         rendered = self.store.compile_edition("2026-09-28")
-        self.assertIn(f"{opener} (poses the task)", rendered)
-        self.assertIn(f"{responder} (answers)", rendered)
+        self.assertIn("<strong>Task:</strong> What is the capital of Bavaria?", rendered)
+        # King is both opener and quizmaster here, so no separate
+        # "Posed by" byline is expected (see compile_edition()'s own
+        # comment: only shown when it differs from opened_by).
+        self.assertNotIn("Posed by", rendered)
 
-    def test_game_result_shows_task_and_solution_structurally(self):
+    def test_quizmaster_byline_shown_when_it_differs_from_the_opener(self):
+        # setUp() already opened "2026-09-28" (as King, default quizmaster) -
+        # use an earlier/later pair of dates that does not collide with it.
+        self.store.open_edition("01-king", PEERS, edition_id="2026-09-26", rng=random.Random(1), game_task="Q1")
+        self.store.submit_contribution("2026-09-26", "02-explorer", "game_result", "Guess", "x", solution="A")
+        self.store.submit_contribution("2026-09-26", "03-librarian", "game_result", "Guess", "x", solution="B")
+        self.store.declare_game_winner("2026-09-26", "01-king", "02-explorer", "closest")
+        self.store.close_edition("2026-09-26", "01-king")
+        self.store.open_edition("01-king", PEERS, edition_id="2026-09-27", rng=random.Random(1))
+        rendered = self.store.compile_edition("2026-09-27")
+        self.assertIn("Posed by", rendered)
+        self.assertIn("02-explorer", rendered)
+
+    def test_game_result_shows_solution_structurally_voluntary_participants(self):
         # P82 (operator feedback: "enthaelt nur die Auslosung, nicht die
-        # Frage und Antwort") - task/solution must be visible in the
-        # compiled edition, not only inside optional free-text content.
-        edition = self.store.get_edition("2026-09-28")
-        opener, responder = edition["game_pair"]
-        self.store.submit_contribution("2026-09-28", opener, "game_result", "Quizfrage gestellt",
-                                       "Ich habe nach der Hauptstadt gefragt.",
-                                       task="Was ist die Hauptstadt von Bayern?", solution="Ich habe die Frage gestellt.")
-        self.store.submit_contribution("2026-09-28", responder, "game_result", "Antwort gegeben",
-                                       "Kurze Ueberlegung, dann die Antwort.",
-                                       task="Was ist die Hauptstadt von Bayern?", solution="Muenchen")
-        self.store.review_contribution("2026-09-28", opener, "game_result", REVIEWER_AGENT, "approve")
-        self.store.review_contribution("2026-09-28", responder, "game_result", REVIEWER_AGENT, "approve")
+        # Frage und Antwort") - solution must be visible in the compiled
+        # edition, not only inside optional free-text content. P90: any
+        # number of voluntary participants, not a fixed pair.
+        self.store.set_game_task("2026-09-28", "01-king", "Was ist die Hauptstadt von Bayern?")
+        self.store.submit_contribution("2026-09-28", "02-explorer", "game_result", "Antwort gegeben",
+                                       "Kurze Ueberlegung, dann die Antwort.", solution="Muenchen")
+        self.store.submit_contribution("2026-09-28", "03-librarian", "game_result", "Andere Antwort",
+                                       "Auch ueberlegt.", solution="Nuernberg")
+        self.store.review_contribution("2026-09-28", "02-explorer", "game_result", REVIEWER_AGENT, "approve")
+        self.store.review_contribution("2026-09-28", "03-librarian", "game_result", REVIEWER_AGENT, "approve")
         rendered = self.store.compile_edition("2026-09-28")
         self.assertIn("<strong>Task:</strong> Was ist die Hauptstadt von Bayern?", rendered)
         self.assertIn("<strong>Solution:</strong> Muenchen", rendered)
-        self.assertIn(f"{opener} (poses the task)", rendered)
-        self.assertIn(f"{responder} (answers)", rendered)
+        self.assertIn("<strong>Solution:</strong> Nuernberg", rendered)
+
+    def test_fewer_than_two_participants_is_honestly_stated(self):
+        # P90 (operator feedback: "es kann immer nur der eine Teilnehmer
+        # gewinnen der schaetzt") - a single guess (or none) must say so,
+        # not stay silent as if nothing happened.
+        self.store.set_game_task("2026-09-28", "01-king", "Q?")
+        self.store.submit_contribution("2026-09-28", "02-explorer", "game_result", "Guess", "x", solution="A")
+        rendered = self.store.compile_edition("2026-09-28")
+        self.assertIn("Not enough participants for a contest today (1 submission(s))", rendered)
 
     def test_missing_headline_does_not_break_rendering(self):
         # Defensive: a pre-P69 row (already-archived editions) has no
@@ -455,12 +550,13 @@ class CompileEditionTests(unittest.TestCase):
     def test_declared_game_winner_is_rendered(self):
         # P74 (operator feedback): "womit gewonnen hat [...] den benannten
         # Gewinner" - the one piece that was genuinely missing.
-        edition = self.store.get_edition("2026-09-28")
-        winner = edition["game_pair"][0]
-        self.store.declare_game_winner("2026-09-28", "01-king", winner, "klare Antwort zuerst")
+        self.store.set_game_task("2026-09-28", "01-king", "Q?")
+        self.store.submit_contribution("2026-09-28", "02-explorer", "game_result", "Guess", "x", solution="A")
+        self.store.submit_contribution("2026-09-28", "03-librarian", "game_result", "Guess", "x", solution="B")
+        self.store.declare_game_winner("2026-09-28", "01-king", "02-explorer", "klare Antwort zuerst")
         rendered = self.store.compile_edition("2026-09-28")
         self.assertIn('<p class="game-winner">', rendered)
-        self.assertIn(f"<strong>Winner:</strong> {winner}", rendered)
+        self.assertIn("<strong>Winner:</strong> 02-explorer", rendered)
         self.assertIn("klare Antwort zuerst", rendered)
 
     def test_undeclared_winner_renders_no_winner_line(self):
@@ -468,6 +564,9 @@ class CompileEditionTests(unittest.TestCase):
         self.assertNotIn("game-winner", rendered)
 
     def test_drawn_tie_renders_as_unentschieden(self):
+        self.store.set_game_task("2026-09-28", "01-king", "Q?")
+        self.store.submit_contribution("2026-09-28", "02-explorer", "game_result", "Guess", "x", solution="A")
+        self.store.submit_contribution("2026-09-28", "03-librarian", "game_result", "Guess", "x", solution="B")
         self.store.declare_game_winner("2026-09-28", "01-king", "unentschieden", "Beide Schaetzungen gleich weit daneben.")
         rendered = self.store.compile_edition("2026-09-28")
         self.assertIn("<strong>Winner:</strong> Tie", rendered)
@@ -480,36 +579,52 @@ class DeclareGameWinnerTests(unittest.TestCase):
         self.store = GazetteStore(self.tmp / "coordination.sqlite3")
         self.edition = self.store.open_edition("01-king", PEERS, edition_id="2026-09-28", rng=random.Random(1))
 
+    def submit_two_guesses(self, edition_id="2026-09-28"):
+        self.store.set_game_task(edition_id, "01-king", "Q?")
+        self.store.submit_contribution(edition_id, "02-explorer", "game_result", "Guess", "x", solution="A")
+        self.store.submit_contribution(edition_id, "03-librarian", "game_result", "Guess", "x", solution="B")
+
     def test_unknown_edition_is_rejected(self):
         with self.assertRaises(ValueError):
             self.store.declare_game_winner("1999-01-01", "01-king", "02-explorer")
 
-    def test_winner_must_be_a_drawn_participant_or_unentschieden(self):
+    def test_winner_must_be_an_actual_participant_or_unentschieden(self):
+        self.submit_two_guesses()
         with self.assertRaises(ValueError):
-            self.store.declare_game_winner("2026-09-28", "01-king", "09-chronicler")  # not drawn
+            self.store.declare_game_winner("2026-09-28", "01-king", "09-chronicler")  # never submitted a guess
 
     def test_valid_winner_is_recorded(self):
-        winner = self.edition["game_pair"][0]
-        result = self.store.declare_game_winner("2026-09-28", "01-king", winner, "gute Begruendung")
-        self.assertEqual(result["game_winner"], winner)
+        self.submit_two_guesses()
+        result = self.store.declare_game_winner("2026-09-28", "01-king", "02-explorer", "gute Begruendung")
+        self.assertEqual(result["game_winner"], "02-explorer")
         self.assertEqual(result["game_winner_note"], "gute Begruendung")
         self.assertEqual(result["game_winner_declared_by"], "01-king")
         self.assertIsNotNone(result["game_winner_declared_at"])
 
     def test_unentschieden_is_a_valid_winner_value(self):
+        self.submit_two_guesses()
         result = self.store.declare_game_winner("2026-09-28", "01-king", "unentschieden", "Beide gleich nah am echten Wert.")
         self.assertEqual(result["game_winner"], "unentschieden")
 
     def test_cannot_declare_winner_on_a_compiled_edition(self):
+        self.submit_two_guesses()
+        self.store.review_contribution("2026-09-28", "02-explorer", "game_result", "01-king", "approve")
+        self.store.review_contribution("2026-09-28", "03-librarian", "game_result", "01-king", "approve")
         self.store.close_edition("2026-09-28", "01-king")
         with self.assertRaises(ValueError):
-            self.store.declare_game_winner("2026-09-28", "01-king", self.edition["game_pair"][0])
+            self.store.declare_game_winner("2026-09-28", "01-king", "02-explorer")
 
-    def test_edition_without_a_drawn_pair_is_rejected(self):
-        edition = self.store.open_edition("01-king", [], edition_id="2026-09-29")
-        self.assertEqual(edition["game_pair"], [])
+    def test_fewer_than_two_participants_is_rejected(self):
+        # P90 (operator feedback: "es kann immer nur der eine Teilnehmer
+        # gewinnen der schaetzt [...] es muessen [...] mehr Agents
+        # Teilnehmen") - no participants, or only one, is structurally not
+        # a contest; King cannot declare a hollow single-guesser "win".
         with self.assertRaises(ValueError):
-            self.store.declare_game_winner("2026-09-29", "01-king", "unentschieden")
+            self.store.declare_game_winner("2026-09-28", "01-king", "unentschieden")
+        self.store.set_game_task("2026-09-28", "01-king", "Q?")
+        self.store.submit_contribution("2026-09-28", "02-explorer", "game_result", "Guess", "x", solution="A")
+        with self.assertRaises(ValueError):
+            self.store.declare_game_winner("2026-09-28", "01-king", "02-explorer")
 
 
 class CloseEditionTests(unittest.TestCase):

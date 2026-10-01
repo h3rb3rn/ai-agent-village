@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'web'))
-from runtime import Resident,Tasks,resource_snapshot,tail,event_time,COLLABORATION_PRESSURE_CEILING,MEETING_REPORT_CEILING,GAZETTE_REVIEW_CEILING,GAZETTE_CLOSE_CEILING,GAZETTE_CONTRIBUTE_CEILING,GAZETTE_GAME_RESULT_CEILING,GAZETTE_GAME_WINNER_CEILING,CALENDAR_PLAN_CEILING,CALENDAR_WEEK_PLAN_CEILING,GAZETTE_CONTRIBUTE_DEADLINE_HOUR_UTC,GAZETTE_PUBLISH_DEADLINE_HOUR_UTC,gazette_deadline_passed,LOOP_BREAKER_STREAK,GAZETTE_ASSIGN_CEILING,GAZETTE_WRITING_SLOT_CEILING
+from runtime import Resident,Tasks,resource_snapshot,tail,event_time,COLLABORATION_PRESSURE_CEILING,MEETING_REPORT_CEILING,GAZETTE_REVIEW_CEILING,GAZETTE_CLOSE_CEILING,GAZETTE_CONTRIBUTE_CEILING,GAZETTE_GAME_WINNER_CEILING,CALENDAR_PLAN_CEILING,CALENDAR_WEEK_PLAN_CEILING,GAZETTE_CONTRIBUTE_DEADLINE_HOUR_UTC,GAZETTE_PUBLISH_DEADLINE_HOUR_UTC,gazette_deadline_passed,LOOP_BREAKER_STREAK,GAZETTE_ASSIGN_CEILING,GAZETTE_WRITING_SLOT_CEILING
 from village.gazette import REVIEWER_AGENT
 from village.calendar import today as calendar_today
 from village.calendar import is_workday as real_calendar_is_workday
@@ -393,15 +393,11 @@ class RuntimeTests(unittest.TestCase):
         # residents active, each on their own project, 0 contributions hours
         # after a correct announcement. Every resident who has not yet
         # contributed today gets the same always-visible hint King has.
-        edition = self.agent.gazette.open_edition('01-king', ['01-a', '02-b', '03-c'])
-        # P74: open_edition()'s random game-pair draw would sometimes (2/3
-        # of the time, unseeded) include '01-a' - the separate, still-open
-        # game_result obligation would then keep gazette_daily_note set
-        # after this test's own contribution, unrelated to what it actually
-        # verifies (the regular per-resident hint clearing once fulfilled).
-        with self.agent.gazette._conn() as c:
-            c.execute("UPDATE gazette_editions SET game_pair='' WHERE id=?", (edition['id'],))
-            c.commit()
+        self.agent.gazette.open_edition('01-king', ['01-a', '02-b', '03-c'])
+        # P90: no more drawn game pair at all (and the game invitation
+        # hint only ever appears once a task has been set, which it
+        # hasn't here) - nothing but the regular per-resident hint this
+        # test actually verifies can be in play.
         with patch.object(self.agent, 'memory', return_value={'items': []}):
             before = json.loads(self.agent.snapshot())
         self.assertIn('gazette_daily_note', before)
@@ -899,13 +895,10 @@ class RuntimeTests(unittest.TestCase):
     def test_gazette_contribute_gate_does_not_fire_without_an_assignment(self):
         # An edition open but not yet assigned (King hasn't delegated) must
         # not gate anyone - there is nothing concrete to submit yet.
-        edition = self.agent.gazette.open_edition('01-king', ['01-a', '02-b'])
-        # P74: with only 2 peers, open_edition()'s random draw always picks
-        # both as the game pair - neutralize it so this stays a pure test
-        # of contribute_block, not the separate game_result_block.
-        with self.agent.gazette._conn() as c:
-            c.execute("UPDATE gazette_editions SET game_pair='' WHERE id=?", (edition['id'],))
-            c.commit()
+        # P90: the game itself is voluntary and never gated at all any
+        # more, so there is no longer a separate game_result_block to
+        # neutralize here either.
+        self.agent.gazette.open_edition('01-king', ['01-a', '02-b'])
         for i in range(GAZETTE_CONTRIBUTE_CEILING + 5):
             self.agent.execute({'tool_call': {'name': 'execute_bash', 'arguments': {'command': f'printf ok{i}'}}})
         self.assertTrue(self.agent.state['last_result']['ok'])
@@ -975,47 +968,58 @@ class RuntimeTests(unittest.TestCase):
         self.assertIn('bullet list', ctx['gazette_daily_note'])
         self.assertIn('flowing prose', ctx['gazette_daily_note'])
 
-    def test_game_hint_appears_for_a_drawn_participant(self):
-        # P74 (operator feedback): "es ist nicht ersichtlich welcher Agent
-        # was gemacht [...]" - the drawn pair previously got no reminder
-        # to play at all (game_result is excluded from assign_kinds()).
-        self.agent.gazette.open_edition('01-king', ['01-a', '02-b'])  # both drawn (2 of 2)
+    def test_game_invitation_hint_appears_once_a_task_is_set(self):
+        # P90 (operator feedback: "Ich moechte das Spiel nicht mehr
+        # verbindlich sondern freiwillig machen") - replaces the old
+        # drawn-pair-only reminder: a purely advisory invitation, open to
+        # anyone, once today's quizmaster has actually posed a question.
+        edition = self.agent.gazette.open_edition('01-king', ['01-a', '02-b'])
+        self.agent.gazette.set_game_task(edition['id'], '01-king', 'What is 2+2?')
         with patch.object(self.agent, 'memory', return_value={'items': []}):
             ctx = json.loads(self.agent.snapshot())
         self.assertIn('gazette_daily_note', ctx)
-        self.assertIn('drawn game pair', ctx['gazette_daily_note'])
+        self.assertIn('entirely optional', ctx['gazette_daily_note'])
         self.assertIn("kind='game_result'", ctx['gazette_daily_note'])
 
-    def test_gazette_game_result_gate_eventually_blocks_other_actions(self):
-        edition = self.agent.gazette.open_edition('01-king', ['01-a', '02-b'])
-        for i in range(GAZETTE_GAME_RESULT_CEILING - 1):
-            self.agent.execute({'tool_call': {'name': 'execute_bash', 'arguments': {'command': f'printf ok{i}'}}})
-        self.assertTrue(self.agent.state['last_result']['ok'])  # not yet gated
-        self.agent.execute({'tool_call': {'name': 'execute_bash', 'arguments': {'command': f'printf ok{GAZETTE_GAME_RESULT_CEILING}'}}})
-        self.assertFalse(self.agent.state['last_result']['ok'])
-        result = self.agent.state['last_result']['result']
-        self.assertIn("Today's game result required", result)
-        self.assertIn('"operation":"contribute"', result)
-        self.assertIn('"kind":"game_result"', result)
-        self.assertIn(f'"edition_id":"{edition["id"]}"', result)
-
-    def test_game_result_operation_itself_is_never_gated_by_game_result_pressure(self):
+    def test_no_game_invitation_hint_before_a_task_is_set(self):
         self.agent.gazette.open_edition('01-king', ['01-a', '02-b'])
-        for i in range(GAZETTE_GAME_RESULT_CEILING + 5):
+        with patch.object(self.agent, 'memory', return_value={'items': []}):
+            ctx = json.loads(self.agent.snapshot())
+        self.assertNotIn('entirely optional', ctx.get('gazette_daily_note', ''))
+
+    def test_quizmaster_hint_appears_for_the_crown_holder_not_king(self):
+        # King opened "2026-09-26" for a peer-led test: force King to be
+        # the opener but someone else the quizmaster, by directly setting
+        # the column (same pattern as other direct-DB test setups in this
+        # file) rather than running a full prior-day win cycle.
+        edition = self.agent.gazette.open_edition('01-king', ['01-a', '02-b'])
+        with self.agent.gazette._conn() as c:
+            c.execute("UPDATE gazette_editions SET game_quizmaster='01-a' WHERE id=?", (edition['id'],))
+            c.commit()
+        a = Resident(dict(self.env, AGENT_ID='01-a', AGENT_NAME='a', AGENT_ROLE='explorer'))
+        with patch.object(a, 'memory', return_value={'items': []}):
+            ctx = json.loads(a.snapshot())
+        self.assertIn('quizmaster crown', ctx.get('gazette_daily_note', ''))
+        self.assertIn('set_game_task', ctx['gazette_daily_note'])
+
+    def test_playing_the_game_is_never_gated_however_long_it_is_ignored(self):
+        # P90 (operator: "Ich moechte das Spiel nicht mehr verbindlich
+        # sondern freiwillig machen") - unlike every other Gazette
+        # obligation in this file, there is no ceiling here at all any
+        # more: ignore it for arbitrarily many actions, nothing blocks.
+        edition = self.agent.gazette.open_edition('01-king', ['01-a', '02-b'])
+        self.agent.gazette.set_game_task(edition['id'], '01-king', 'What is 2+2?')
+        for i in range(50):
             self.agent.execute({'tool_call': {'name': 'execute_bash', 'arguments': {'command': f'printf ok{i}'}}})
-        self.agent.execute({'tool_call': {'name': 'gazette_operation', 'arguments': {
-            'operation': 'contribute', 'kind': 'game_result', 'headline': 'Quiz entschieden',
-            'content': 'Die gestellte Frage war X, meine Antwort war Y.',
-            'task': 'Frage X', 'solution': 'Antwort Y'}}})
         self.assertTrue(self.agent.state['last_result']['ok'])
 
-    def test_game_result_gate_resets_once_submitted(self):
+    def test_voluntary_game_result_still_works_whenever_submitted(self):
         edition = self.agent.gazette.open_edition('01-king', ['01-a', '02-b'])
-        self.agent.gazette.submit_contribution(edition['id'], '01-a', 'game_result', 'Quiz', 'Meine Antwort war Y.',
-                                               task='Frage X', solution='Antwort Y')
-        for i in range(GAZETTE_GAME_RESULT_CEILING + 5):
-            self.agent.execute({'tool_call': {'name': 'execute_bash', 'arguments': {'command': f'printf ok{i}'}}})
-        self.assertEqual(self.agent.state.get('gazette_game_result_pressure', 0), 0)
+        self.agent.gazette.set_game_task(edition['id'], '01-king', 'Frage X')
+        self.agent.execute({'tool_call': {'name': 'gazette_operation', 'arguments': {
+            'operation': 'contribute', 'kind': 'game_result', 'headline': 'Quiz entschieden',
+            'content': 'Meine Antwort war Y.', 'solution': 'Antwort Y'}}})
+        self.assertTrue(self.agent.state['last_result']['ok'])
 
     def test_declare_winner_is_restricted_to_king(self):
         self.agent.gazette.open_edition('01-king', ['01-a', '02-b'])
@@ -1027,33 +1031,55 @@ class RuntimeTests(unittest.TestCase):
         king_env = dict(self.env, AGENT_ID='01-king', AGENT_NAME='king', AGENT_ROLE='king')
         king = Resident(king_env)
         edition = king.gazette.open_edition('01-king', ['01-a', '02-b'])
-        pair = edition['game_pair']
-        king.gazette.submit_contribution(edition['id'], pair[0], 'game_result', 'Quiz', 'Antwort A.',
-                                         task='Frage X', solution='Antwort A.')
-        king.gazette.submit_contribution(edition['id'], pair[1], 'game_result', 'Quiz', 'Antwort B.',
-                                         task='Frage X', solution='Antwort B.')
+        king.gazette.set_game_task(edition['id'], '01-king', 'Frage X')
+        king.gazette.submit_contribution(edition['id'], '01-a', 'game_result', 'Quiz', 'Antwort A.', solution='Antwort A.')
+        king.gazette.submit_contribution(edition['id'], '02-b', 'game_result', 'Quiz', 'Antwort B.', solution='Antwort B.')
         king.execute({'tool_call': {'name': 'gazette_operation', 'arguments': {
-            'operation': 'declare_winner', 'edition_id': edition['id'], 'winner': pair[0], 'note': 'schneller'}}})
+            'operation': 'declare_winner', 'edition_id': edition['id'], 'winner': '01-a', 'note': 'schneller'}}})
         self.assertTrue(king.state['last_result']['ok'])
-        self.assertEqual(king.gazette.get_edition(edition['id'])['game_winner'], pair[0])
+        self.assertEqual(king.gazette.get_edition(edition['id'])['game_winner'], '01-a')
 
-    def test_gazette_game_winner_gate_fires_only_once_both_participants_submitted(self):
+    def test_declaring_a_real_winner_reserves_a_gpu_priority_claim(self):
+        # P90 (Gazette game prize: "GPU-/Finetuning-Vorrang").
+        king_env = dict(self.env, AGENT_ID='01-king', AGENT_NAME='king', AGENT_ROLE='king')
+        king = Resident(king_env)
+        edition = king.gazette.open_edition('01-king', ['01-a', '02-b'])
+        king.gazette.set_game_task(edition['id'], '01-king', 'Frage X')
+        king.gazette.submit_contribution(edition['id'], '01-a', 'game_result', 'Quiz', 'Antwort A.', solution='Antwort A.')
+        king.gazette.submit_contribution(edition['id'], '02-b', 'game_result', 'Quiz', 'Antwort B.', solution='Antwort B.')
+        king.execute({'tool_call': {'name': 'gazette_operation', 'arguments': {
+            'operation': 'declare_winner', 'edition_id': edition['id'], 'winner': '01-a', 'note': 'schneller'}}})
+        status = {g['gpu_index']: g for g in king.finetune.gpu_status()}
+        self.assertTrue(any(g['reserved_for'] == '01-a' for g in status.values()))
+
+    def test_declaring_unentschieden_reserves_no_gpu(self):
+        king_env = dict(self.env, AGENT_ID='01-king', AGENT_NAME='king', AGENT_ROLE='king')
+        king = Resident(king_env)
+        edition = king.gazette.open_edition('01-king', ['01-a', '02-b'])
+        king.gazette.set_game_task(edition['id'], '01-king', 'Frage X')
+        king.gazette.submit_contribution(edition['id'], '01-a', 'game_result', 'Quiz', 'Antwort A.', solution='Antwort A.')
+        king.gazette.submit_contribution(edition['id'], '02-b', 'game_result', 'Quiz', 'Antwort B.', solution='Antwort B.')
+        king.execute({'tool_call': {'name': 'gazette_operation', 'arguments': {
+            'operation': 'declare_winner', 'edition_id': edition['id'], 'winner': 'unentschieden', 'note': 'knapp'}}})
+        status = {g['gpu_index']: g for g in king.finetune.gpu_status()}
+        self.assertFalse(any(g['reserved_for'] for g in status.values()))
+
+    def test_gazette_game_winner_gate_fires_only_once_two_participants_submitted(self):
         # Isolated from the other three King-only gates (review/close/
         # contribute), which would otherwise independently compete for the
         # same guard() call in a real multi-gate scenario (see P60-follow-up)
         # - this test's own assertion is specifically about
-        # gazette_pending_game_winner()'s own precondition (both drawn
-        # participants submitted) and its own pressure counter.
+        # gazette_pending_game_winner()'s own precondition (P90: at least 2
+        # voluntary participants, not a fixed drawn pair) and its own
+        # pressure counter.
         king_env = dict(self.env, AGENT_ID='01-king', AGENT_NAME='king', AGENT_ROLE='king')
         king = Resident(king_env)
         edition = king.gazette.open_edition('01-king', ['01-a', '02-b'])
-        pair = edition['game_pair']
-        king.gazette.submit_contribution(edition['id'], pair[0], 'game_result', 'Quiz', 'Antwort A.',
-                                         task='Frage X', solution='Antwort A.')
+        king.gazette.set_game_task(edition['id'], '01-king', 'Frage X')
+        king.gazette.submit_contribution(edition['id'], '01-a', 'game_result', 'Quiz', 'Antwort A.', solution='Antwort A.')
         self.assertIsNone(king.gazette_pending_game_winner())  # only one of two submitted
-        king.gazette.submit_contribution(edition['id'], pair[1], 'game_result', 'Quiz', 'Antwort B.',
-                                         task='Frage X', solution='Antwort B.')
-        self.assertEqual(king.gazette_pending_game_winner(), (edition['id'], pair))
+        king.gazette.submit_contribution(edition['id'], '02-b', 'game_result', 'Quiz', 'Antwort B.', solution='Antwort B.')
+        self.assertEqual(king.gazette_pending_game_winner(), (edition['id'], ['01-a', '02-b']))
         king.state['gazette_game_winner_pressure'] = GAZETTE_GAME_WINNER_CEILING - 1
         king.execute({'tool_call': {'name': 'execute_bash', 'arguments': {'command': 'printf ok'}}})
         self.assertFalse(king.state['last_result']['ok'])
@@ -1442,13 +1468,6 @@ class RuntimeTests(unittest.TestCase):
         result = self.agent.state['last_result']['result']
         self.assertIn('contribution deadline has passed', result)
         self.assertIn(f'"kind":"{assignments["01-a"]}"', result)
-
-    def test_gazette_game_result_gate_blocks_immediately_once_the_deadline_passes(self):
-        self.agent.gazette.open_edition('01-king', ['01-a', '02-b'])
-        with patch('runtime.gazette_deadline_passed', return_value=True):
-            self.agent.execute({'tool_call': {'name': 'execute_bash', 'arguments': {'command': 'printf ok'}}})
-        self.assertFalse(self.agent.state['last_result']['ok'])
-        self.assertIn('contribution deadline has passed', self.agent.state['last_result']['result'])
 
     def test_gazette_close_gate_blocks_immediately_once_the_deadline_passes(self):
         king_env = dict(self.env, AGENT_ID='01-king', AGENT_NAME='king', AGENT_ROLE='king')

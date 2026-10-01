@@ -170,7 +170,7 @@ def edition_sections(edition: Dict[str, Any], issue_number: int, previous_id: st
 
     P89: ``lang`` selects the same structural labels (GAZETTE_LABELS) the
     HTML archive uses - contribution content is identical either way."""
-    from village.gazette import CONTRIBUTION_KINDS, gazette_labels
+    from village.gazette import CONTRIBUTION_KINDS, gazette_labels, game_participants
 
     labels = gazette_labels(lang)
     approved = [c for c in edition["contributions"] if c.get("review_status") == "approved"]
@@ -202,34 +202,34 @@ def edition_sections(edition: Dict[str, Any], issue_number: int, previous_id: st
             sections.extend(article_sections(c))
         sections.append(("gap", ""))
 
-    # P82 (operator feedback: "Der Spielreport enthaelt nur die Auslosung,
-    # nicht die Frage und Antwort. Die Auslosung ist auch nicht eindeutig.")
-    # - same structural fix as compile_edition(): explicit roles instead of
-    # a bare name pair, and the task/solution fields shown directly rather
-    # than relying on 'content' alone.
+    # P90 (operator feedback: "es kann immer nur der eine Teilnehmer
+    # gewinnen der schaetzt [...] es muessen [...] mehr Agents
+    # Teilnehmen") - same structural fix as compile_edition(): no more
+    # fixed drawn pair/roles. Today's quizmaster poses one question
+    # (game_task), participation is the dynamic, voluntary set of
+    # everyone who actually submitted a game_result (game_participants()).
     sections.append(("heading", labels["section_game"]))
     sections.append(("body", edition["game_name"]))
-    pair = edition["game_pair"]
-    role_of: Dict[str, str] = {}
-    if len(pair) >= 2:
-        role_of = {pair[0]: labels["role_task"], pair[1]: labels["role_answer"]}
-        sections.append(("body", labels["drawn_pair"].format(
-            a=pair[0], b=pair[1], role_a=labels["role_task"], role_b=labels["role_answer"])))
-    elif pair:
-        sections.append(("body", labels["drawn_single"].format(a=pair[0])))
+    if edition.get("game_quizmaster") and edition["game_quizmaster"] != edition["opened_by"]:
+        sections.append(("body", f"{labels['quizmaster_label']}: {edition['game_quizmaster']}"))
+    if edition.get("game_task"):
+        sections.append(("body", f"{labels['task_label']}: {edition['game_task']}"))
     game_results = by_kind.get("game_result", [])
-    task_text = next((c["task"] for c in game_results if c.get("task")), "")
-    if task_text:
-        sections.append(("body", f"{labels['task_label']}: {task_text}"))
     for c in game_results:
         out: List[Section] = []
         if c.get("headline"):
             out.append(("subhead", c["headline"]))
-        role = role_of.get(c["agent"], labels["role_participant"])
-        out.append(("body", f"{labels['solution_label']}: {c['solution']} — {c['agent']} ({role})"))
+        out.append(("body", f"{labels['solution_label']}: {c['solution']} — {c['agent']}"))
         if c.get("content"):
             out.append(("body", c["content"]))
         sections.extend(out)
+    participants = game_participants(edition)
+    if edition.get("game_winner"):
+        winner = labels["tie_label"] if edition["game_winner"] == "unentschieden" else edition["game_winner"]
+        note = f" – {edition['game_winner_note']}" if edition.get("game_winner_note") else ""
+        sections.append(("body", f"{labels['winner_label']}: {winner}{note}"))
+    elif edition.get("game_task") and len(participants) < 2:
+        sections.append(("body", labels["no_contest"].format(n=len(participants))))
     sections.append(("gap", ""))
 
     if by_kind.get("column"):

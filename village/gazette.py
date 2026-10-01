@@ -90,6 +90,7 @@ HEADLINE_MAX_CHARS = 120
 # rest of this module.
 GAME_TASK_MAX_CHARS = 300
 GAME_SOLUTION_MAX_CHARS = 600
+GAME_NAME_MAX_CHARS = 160
 
 
 def max_chars_for_kind(kind: str) -> int:
@@ -150,6 +151,8 @@ GAZETTE_LABELS: Dict[str, Dict[str, Any]] = {
         "solution_label": "Solution",
         "winner_label": "Winner",
         "tie_label": "Tie",
+        "quizmaster_label": "Posed by",
+        "no_contest": "Not enough participants for a contest today ({n} submission(s))",
     },
     "de": {
         "kind": {
@@ -183,6 +186,8 @@ GAZETTE_LABELS: Dict[str, Dict[str, Any]] = {
         "solution_label": "Lösung",
         "winner_label": "Gewinner",
         "tie_label": "Unentschieden",
+        "quizmaster_label": "Gestellt von",
+        "no_contest": "Heute nicht genug Teilnehmer für einen Wettkampf ({n} Einreichung(en))",
     },
 }
 DEFAULT_GAZETTE_LANG = "en"
@@ -196,6 +201,15 @@ def gazette_labels(lang: Optional[str]) -> Dict[str, Any]:
 # that imported the old flat (German-only) KIND_LABELS directly still gets
 # a working dict - the German kind-name mapping, unchanged.
 KIND_LABELS = GAZETTE_LABELS["de"]["kind"]
+
+
+def game_participants(edition: Dict[str, Any]) -> List[str]:
+    """P90: the real, dynamic, voluntary set of agents who have actually
+    submitted a game_result for this edition - replaces the old fixed
+    drawn pair (edition['game_pair']) as the source of truth for "who is
+    playing today". Sorted for deterministic, stable ordering wherever
+    this is rendered or compared against."""
+    return sorted({c["agent"] for c in edition.get("contributions", []) if c["kind"] == "game_result"})
 
 # P55 assigned this to 09-chronicler - thematically fitting (this module's
 # own docstring already named the Gazette as meant to "serve as a chronicle
@@ -296,6 +310,29 @@ class GazetteStore:
                 c.execute("ALTER TABLE gazette_editions ADD COLUMN game_winner_declared_by TEXT")
             if "game_winner_declared_at" not in existing_edition_cols:
                 c.execute("ALTER TABLE gazette_editions ADD COLUMN game_winner_declared_at TEXT")
+            # P90 (operator feedback, 2026-10-01: "da nur zwei Teilnehmer am
+            # Spiel teilnehmen und auch nur Teilnehmer schaetzt ist der, der
+            # die Aufgabe stellt sogesehen kein Spiel Teilnehmer [...] es
+            # kann immer nur der eine Teilnehmer gewinnen der schaetzt").
+            # The fixed drawn-pair model (P82) structurally could never
+            # produce a real contest for an estimation-style game: only one
+            # of the two ever actually guesses. Redesigned: King (the
+            # editor) poses/selects the question explicitly instead of a
+            # drawn "opener", stored here once per edition (`game_task`,
+            # read directly by compile_edition() instead of scavenging it
+            # off a participant's own submission); participation is now a
+            # dynamic, voluntary set (anyone may submit a solution, see
+            # submit_contribution()/declare_game_winner() below), not a
+            # pre-drawn pair - `game_pair` is kept only for backward
+            # compatibility with already-archived rows, never written to by
+            # open_edition() again. `game_quizmaster` carries the "crown":
+            # whoever won the most recent prior edition's game gets to set
+            # today's question (via the new set_game_task()); defaults back
+            # to King when nobody has won yet (or the last game tied).
+            if "game_task" not in existing_edition_cols:
+                c.execute("ALTER TABLE gazette_editions ADD COLUMN game_task TEXT NOT NULL DEFAULT ''")
+            if "game_quizmaster" not in existing_edition_cols:
+                c.execute("ALTER TABLE gazette_editions ADD COLUMN game_quizmaster TEXT")
             c.commit()
 
     def _conn(self):
@@ -304,10 +341,11 @@ class GazetteStore:
         return c
 
     def open_edition(self, king_agent: str, peers: List[str], edition_id: Optional[str] = None,
-                     rng: Optional[random.Random] = None) -> Dict[str, Any]:
+                     rng: Optional[random.Random] = None, game_name: Optional[str] = None,
+                     game_task: Optional[str] = None) -> Dict[str, Any]:
         """Idempotent: opening today's edition twice returns the same one
-        (same game/pairing) rather than re-drawing - King's own repeated
-        action must not reshuffle an edition already announced to peers.
+        rather than re-drawing - King's own repeated action must not
+        reshuffle an edition already announced to peers.
 
         P70 (live find, operator directive 2026-09-29): a contribution
         submitted after its own edition was already compiled became
@@ -319,30 +357,40 @@ class GazetteStore:
         edition (breaks the write-once archive guarantee), any pending
         contribution still stranded on a compiled edition is carried
         forward into whichever edition opens next, so it takes its place
-        alongside that day's genuinely new contributions."""
+        alongside that day's genuinely new contributions.
+
+        P90 (operator feedback: "der Redakteur entscheidet welches Spiel
+        gespielt wird"): ``game_name``/``game_task`` are King's own
+        optional, explicit choice - omitted, this falls back to a random
+        GAME_POOL pick for the name (as before) and an empty task (set
+        later via set_game_task()). No pair is drawn any more (see the
+        module-level P90 comment on the schema migration above) -
+        ``peers`` is kept as a parameter for call-site compatibility but is
+        no longer read here."""
         eid = edition_id or today()
         existing = self.get_edition(eid)
         if existing:
             return existing
         rng = rng or random.Random()
-        game = rng.choice(GAME_POOL)
-        # P82 (operator feedback: "Die Auslosung ist auch nicht eindeutig"):
-        # rng.sample() already returns the pair in random order, but nothing
-        # previously attached meaning to that order - both drawn agents got
-        # the identical symmetric instruction, so the compiled edition only
-        # ever showed an unordered "Ausgelost: A, B" with no way to tell who
-        # was meant to pose the task and who was meant to answer it. Fixed
-        # position, real meaning: pair[0] opens (poses the task/question/
-        # streitpunkt/startwort), pair[1] responds - stored as that same
-        # list order, no new column needed, and rendered explicitly in
-        # compile_edition() and named explicitly in each agent's own hint
-        # (see runtime.py's gazette_pending_game_result()).
-        pair = rng.sample(peers, 2) if len(peers) >= 2 else list(peers)
+        game = str(game_name).strip()[:GAME_NAME_MAX_CHARS] if game_name else rng.choice(GAME_POOL)
+        task = str(game_task or "").strip()[:GAME_TASK_MAX_CHARS]
+        # The "crown": whoever won the most recently COMPILED edition's
+        # game gets to pose today's question via set_game_task() - King
+        # remains the fallback quizmaster whenever nobody has won yet, or
+        # the last game ended in a tie/with no real contest.
+        with self._conn() as c:
+            prev_row = c.execute(
+                "SELECT game_winner FROM gazette_editions WHERE status='compiled' AND id < ? "
+                "ORDER BY id DESC LIMIT 1", (eid,)
+            ).fetchone()
+        prev_winner = prev_row["game_winner"] if prev_row else None
+        quizmaster = prev_winner if prev_winner and prev_winner != "unentschieden" else king_agent
         with self._conn() as c:
             c.execute(
-                "INSERT OR IGNORE INTO gazette_editions(id,status,opened_by,opened_at,game_name,game_pair,compiled_at) "
-                "VALUES(?,?,?,?,?,?,NULL)",
-                (eid, "open", king_agent, now(), game, ",".join(pair)),
+                "INSERT OR IGNORE INTO gazette_editions"
+                "(id,status,opened_by,opened_at,game_name,game_pair,game_task,game_quizmaster,compiled_at) "
+                "VALUES(?,?,?,?,?,?,?,?,NULL)",
+                (eid, "open", king_agent, now(), game, "", task, quizmaster),
             )
             orphans = c.execute(
                 "SELECT id, agent, kind, created_at FROM gazette_contributions "
@@ -404,6 +452,28 @@ class GazetteStore:
             ).fetchone()
             return row["kind"] if row else None
 
+    def set_game_task(self, edition_id: str, agent: str, task: str) -> Dict[str, Any]:
+        """P90 (operator feedback: "der Redakteur entscheidet welches Spiel
+        gespielt wird" + the quizmaster-crown prize): only today's
+        quizmaster (see open_edition()'s own comment - King by default, or
+        yesterday's game winner) may pose the actual question. Idempotent
+        update, not append-only: the quizmaster may refine the wording any
+        time before close, same as any other not-yet-reviewed content."""
+        edition = self.get_edition(edition_id)
+        if not edition:
+            raise ValueError(f"unknown gazette edition: {edition_id}")
+        if edition["status"] == "compiled":
+            raise ValueError(f"gazette edition {edition_id} is already compiled/closed")
+        if agent != edition["game_quizmaster"]:
+            raise ValueError(f"only today's quizmaster ({edition['game_quizmaster']}) may set the game task")
+        task = str(task or "").strip()[:GAME_TASK_MAX_CHARS]
+        if not task:
+            raise ValueError("set_game_task requires a non-empty task (the concrete question/challenge)")
+        with self._conn() as c:
+            c.execute("UPDATE gazette_editions SET game_task=? WHERE id=?", (task, edition_id))
+            c.commit()
+        return self.get_edition(edition_id)  # type: ignore
+
     def get_edition(self, edition_id: str) -> Optional[Dict[str, Any]]:
         with self._conn() as c:
             row = c.execute("SELECT * FROM gazette_editions WHERE id=?", (edition_id,)).fetchone()
@@ -444,21 +514,21 @@ class GazetteStore:
         content = str(content).strip()[:max_chars_for_kind(kind)]
         if not content:
             raise ValueError("gazette contribution requires non-empty content")
-        # P82 (operator feedback: "enthaelt nur die Auslosung, nicht die
-        # Frage und Antwort"): the prose instruction to fold task/solution
-        # into 'content' proved as unreliable here as it was for 'meetings'
-        # - structurally required fields instead, same fix class as P58's
-        # literal JSON example. Both are cleared to '' for every other kind
-        # (a stray task/solution on a 'mood' row would never be rendered
-        # anywhere, but keeping them empty avoids silently storing noise).
+        # P90 (operator feedback: "da nur zwei Teilnehmer am Spiel
+        # teilnehmen und auch nur Teilnehmer schaetzt [...] kein Spiel
+        # Teilnehmer"): the task/question now lives once on the edition
+        # itself (game_task, set by today's quizmaster - see
+        # set_game_task()), never resubmitted per participant; a
+        # game_result contribution is purely "my own guess/solution",
+        # voluntary for anyone, not restricted to a pre-drawn pair. The
+        # legacy ``task`` parameter is still accepted (and stored, for any
+        # caller that still passes one) but never required - only
+        # ``solution`` is.
         task = str(task).strip()[:GAME_TASK_MAX_CHARS]
         solution = str(solution).strip()[:GAME_SOLUTION_MAX_CHARS]
-        if kind == "game_result":
-            if not task:
-                raise ValueError("game_result requires a non-empty task (the concrete question/challenge posed)")
-            if not solution:
-                raise ValueError("game_result requires a non-empty solution (your own answer/move)")
-        else:
+        if kind == "game_result" and not solution:
+            raise ValueError("game_result requires a non-empty solution (your own guess/answer)")
+        if kind != "game_result":
             task = ""
             solution = ""
         edition = self.get_edition(edition_id)
@@ -474,8 +544,12 @@ class GazetteStore:
         if edition["status"] == "compiled":
             raise ValueError(f"gazette edition {edition_id} is already compiled/closed; "
                              "wait for the next edition to open and contribute there")
-        if kind == "game_result" and agent not in edition["game_pair"]:
-            raise ValueError(f"only today's drawn pair {edition['game_pair']} may submit a game_result")
+        # P90: voluntary and open to anyone - but only once today's
+        # quizmaster has actually posed a question; nothing to guess at
+        # otherwise.
+        if kind == "game_result" and not edition["game_task"]:
+            raise ValueError(f"no game task has been set for edition {edition_id} yet - "
+                             f"wait for {edition['game_quizmaster']} (today's quizmaster) to pose one")
         ts = now()
         with self._conn() as c:
             # P55: every (re)submission starts/returns to 'pending' - an
@@ -526,21 +600,30 @@ class GazetteStore:
     def declare_game_winner(self, edition_id: str, declared_by: str, winner: str, note: str = "") -> Dict[str, Any]:
         """King's explicit arbiter act for the daily game (P74, operator
         feedback: "womit gewonnen hat [...] den benannten Gewinner").
-        Deliberately a real, separate action - not inferred from the two
+        Deliberately a real, separate action - not inferred from the
         game_result contributions - same principle as assign_kinds() being
         King's own act rather than a silently attributed computation.
-        winner must be one of today's drawn pair, or the literal
-        'unentschieden' for a genuine tie/no clear winner."""
+
+        P90 (operator feedback: "es kann immer nur der eine Teilnehmer
+        gewinnen der schaetzt [...] es muessen [...] mehr Agents
+        Teilnehmen"): participation is now the dynamic, voluntary set of
+        everyone who actually submitted a game_result (game_participants())
+        rather than a fixed drawn pair - a "winner" requires at least two
+        distinct participants, otherwise there was structurally no contest
+        to judge (this is enforced here, not left to King's discretion, so
+        a hollow single-guesser "win" can never be declared)."""
         edition = self.get_edition(edition_id)
         if not edition:
             raise ValueError(f"unknown gazette edition: {edition_id}")
         if edition["status"] == "compiled":
             raise ValueError(f"gazette edition {edition_id} is already compiled/closed")
-        if not edition["game_pair"]:
-            raise ValueError(f"gazette edition {edition_id} has no drawn game pair")
+        participants = game_participants(edition)
+        if len(participants) < 2:
+            raise ValueError(f"today's game needs at least 2 distinct participants before a winner can be "
+                             f"declared - only {participants} submitted a game_result so far")
         winner = str(winner or "").strip()
-        if winner not in (*edition["game_pair"], "unentschieden"):
-            raise ValueError(f"winner must be one of {edition['game_pair']} or 'unentschieden'")
+        if winner not in (*participants, "unentschieden"):
+            raise ValueError(f"winner must be one of {participants} or 'unentschieden'")
         # P85 (operator feedback: "was war der tatsaechliche Wert [...] wer
         # hat gewonnen?" - fehlt komplett): a bare winner name explains
         # nothing by itself, especially for a Schaetzfrage where "who won"
@@ -605,15 +688,17 @@ class GazetteStore:
             head = f'<h4>{esc(c_["headline"])}</h4>' if c_.get("headline") else ""
             return f'<article>{head}<p>{esc(c_["content"])}</p><p class="byline">— {esc(c_["agent"])}</p></article>'
 
-        def game_article(c_: Dict[str, Any], role_label: str, labels_: Dict[str, Any]) -> str:
+        def game_article(c_: Dict[str, Any], labels_: Dict[str, Any]) -> str:
             # P82 (operator feedback: "enthaelt nur die Auslosung, nicht die
-            # Frage und Antwort"): the structured task/solution fields (see
-            # submit_contribution()) are rendered explicitly here, instead
-            # of relying on them having been folded into free-text 'content'
+            # Frage und Antwort"): the structured solution field (see
+            # submit_contribution()) is rendered explicitly here, instead
+            # of relying on it having been folded into free-text 'content'
             # - 'content' still appears underneath as optional extra colour.
+            # P90: no more "role" (opener/responder) - every participant is
+            # simply a voluntary guesser now.
             head = f'<h4>{esc(c_["headline"])}</h4>' if c_.get("headline") else ""
             extra = f'<p>{esc(c_["content"])}</p>' if c_.get("content") else ""
-            return (f'<article>{head}<p class="byline">{esc(c_["agent"])} ({role_label})</p>'
+            return (f'<article>{head}<p class="byline">{esc(c_["agent"])}</p>'
                     f'<p><strong>{esc(labels_["solution_label"])}:</strong> {esc(c_["solution"])}</p>{extra}</article>')
 
         html_lang = lang or DEFAULT_GAZETTE_LANG
@@ -635,35 +720,34 @@ class GazetteStore:
         # P74 (operator feedback): "Es ist nicht ersichtlich welcher Agent
         # was gemacht und womit gewonnen hat [...] gestellte Aufgabe und
         # erfolgte Loesung der Agents sowie den benannten Gewinner."
-        # P82 (operator feedback, same day, next read of a real edition):
-        # "Der Spielreport enthaelt nur die Auslosung, nicht die Frage und
-        # Antwort. Die Auslosung ist auch nicht eindeutig." Both gaps
-        # closed structurally: the drawn pair now carries an explicit,
-        # unambiguous role (pair[0]=opener poses the task, pair[1]=
-        # responder answers it - see open_edition()), rendered here in
-        # plain language instead of a bare name list; the task itself is
-        # taken from whichever game_result contribution has one (normally
-        # the opener's, but either can carry it), shown once rather than
-        # buried inside prose.
+        # P90 (operator feedback: "da nur zwei Teilnehmer am Spiel
+        # teilnehmen und auch nur Teilnehmer schaetzt ist der, der die
+        # Aufgabe stellt sogesehen kein Spiel Teilnehmer [...] es kann
+        # immer nur der eine Teilnehmer gewinnen der schaetzt"): the fixed
+        # drawn-pair model (P82) is gone - today's quizmaster (King by
+        # default, or the crown-holding previous winner) poses one
+        # question (game_task, set via set_game_task()), and participation
+        # is the dynamic, voluntary set of everyone who actually submitted
+        # a guess (game_participants()). A winner line only ever appears
+        # when King actually declared one (which declare_game_winner()
+        # itself refuses unless at least 2 distinct people played) - with
+        # fewer than 2, this says so honestly instead of staying silent.
         parts.append(f"<section><h2>{esc(labels['section_game'])}</h2>")
         parts.append(f'<p>{esc(edition["game_name"])}</p>')
-        pair = edition["game_pair"]
-        role_of = {}
-        if len(pair) >= 2:
-            role_of = {pair[0]: labels["role_task"], pair[1]: labels["role_answer"]}
-            parts.append(f'<p class="byline">{esc(labels["drawn_pair"].format(a=pair[0], b=pair[1], role_a=labels["role_task"], role_b=labels["role_answer"]))}</p>')
-        elif pair:
-            parts.append(f'<p class="byline">{esc(labels["drawn_single"].format(a=pair[0]))}</p>')
+        if edition.get("game_quizmaster") and edition["game_quizmaster"] != edition["opened_by"]:
+            parts.append(f'<p class="byline">{esc(labels["quizmaster_label"])}: {esc(edition["game_quizmaster"])}</p>')
+        if edition.get("game_task"):
+            parts.append(f'<p><strong>{esc(labels["task_label"])}:</strong> {esc(edition["game_task"])}</p>')
         game_results = by_kind.get("game_result", [])
-        task_text = next((c_["task"] for c_ in game_results if c_.get("task")), "")
-        if task_text:
-            parts.append(f'<p><strong>{esc(labels["task_label"])}:</strong> {esc(task_text)}</p>')
         for c_ in game_results:
-            parts.append(game_article(c_, role_of.get(c_["agent"], labels["role_participant"]), labels))
+            parts.append(game_article(c_, labels))
+        participants = game_participants(edition)
         if edition.get("game_winner"):
             winner_label = labels["tie_label"] if edition["game_winner"] == "unentschieden" else esc(edition["game_winner"])
             note = f' – {esc(edition["game_winner_note"])}' if edition.get("game_winner_note") else ""
             parts.append(f'<p class="game-winner"><strong>{esc(labels["winner_label"])}:</strong> {winner_label}{note}</p>')
+        elif edition.get("game_task") and len(participants) < 2:
+            parts.append(f'<p class="game-no-contest">{esc(labels["no_contest"].format(n=len(participants)))}</p>')
         parts.append("</section>")
 
         if by_kind.get("meetings"):

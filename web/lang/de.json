@@ -156,7 +156,9 @@
     "last_event": "Letztes Ereignis vor {age}",
     "ctx": "ctx",
     "aria_last_events": "Letzte {n} Ereignisse",
-    "no_agent_data": "Noch keine Agent-Daten vorhanden."
+    "no_agent_data": "Noch keine Agent-Daten vorhanden.",
+    "trophy_title": "{n} Gazette-Spielsieg(e)",
+    "quizmaster_title": "Heutiger Gazette-Quizmaster - stellt die Tagesfrage"
   },
   "calendar_panel": {
     "title": "Kalender · Terminübersicht",

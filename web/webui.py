@@ -240,6 +240,28 @@ def gazette_index(limit=60):
         pass
     return sorted(rows, key=lambda r: r["id"], reverse=True)
 
+def gazette_game_stats():
+    """P90 (Gazette game prize: "Sichtbares Abzeichen/Titel im Dashboard"):
+    a win-count per agent (derived from every COMPILED edition's
+    game_winner - no separate tally table needed, 'unentschieden'/empty
+    never counts) plus today's/the latest open edition's quizmaster, for
+    the dashboard's agent cards to show a trophy badge and a crown. Pure
+    read, same defensive-empty-on-error pattern as gazette_index()."""
+    wins: dict = {}
+    quizmaster = None
+    try:
+        store = GazetteStore(ROOT / "board" / "coordination.sqlite3")
+        for edition in store.list_editions(limit=500):
+            winner = edition.get("game_winner")
+            if winner and winner != "unentschieden":
+                wins[winner] = wins.get(winner, 0) + 1
+        open_editions = [e for e in store.list_editions(limit=5) if e.get("status") != "compiled"]
+        if open_editions:
+            quizmaster = open_editions[0].get("game_quizmaster")
+    except OSError:
+        pass
+    return {"wins": wins, "quizmaster": quizmaster}
+
 def lab_index():
     """Solo tasks + collaborative teams, normalized into one feed for the
     Forschungslabor dashboard (P87, operator: "eine Zentrale Anlaufstelle
@@ -337,7 +359,17 @@ class Handler(BaseHTTPRequestHandler):
             step = max(1, len(history) // 240)
             summary = [{'timestamp': s.get('timestamp'), 'host': s.get('host'), 'gpu': s.get('gpu'), 'loaded': sum(bool(a.get('ollama')) for a in s.get('agents', [])), 'containers': len(s.get('resources', {}).get('containers', [])), 'process_count': len(s.get('resources', {}).get('processes', []))} for s in history[::step]]
             events = sorted(activity(500) + inference_events(500), key=lambda x: x.get('timestamp', ''))
-            return send(self, HTTPStatus.OK, json.dumps({'current': telemetry(), 'history': summary, 'events': events, 'outcomes': outcome_stats(events), 'skill_history': skill_history(events)}, ensure_ascii=False), 'application/json; charset=utf-8')
+            # P90 (Gazette game prize: "Sichtbares Abzeichen/Titel im
+            # Dashboard"): a per-agent win count (trophy) and today's
+            # quizmaster (crown) enriched directly onto each agent entry -
+            # cheap, read-only, same defensive-empty pattern as every other
+            # gazette_* helper here.
+            current = telemetry()
+            game_stats = gazette_game_stats()
+            for agent in current.get('agents', []):
+                agent['gazette_wins'] = game_stats['wins'].get(agent.get('id'), 0)
+                agent['is_quizmaster'] = agent.get('id') == game_stats['quizmaster']
+            return send(self, HTTPStatus.OK, json.dumps({'current': current, 'history': summary, 'events': events, 'outcomes': outcome_stats(events), 'skill_history': skill_history(events)}, ensure_ascii=False), 'application/json; charset=utf-8')
         if route == '/api/signals':
             return send(self, HTTPStatus.OK, json.dumps(signal_index(), ensure_ascii=False), 'application/json; charset=utf-8')
         if route == '/api/gazette':
