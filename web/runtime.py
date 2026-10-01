@@ -1890,6 +1890,33 @@ class Resident:
     def execute(self, parsed):
         tool = parsed['tool_call']; name = tool['name']; args = tool['arguments']
         if parsed.get('fallback_reason'):
+            reason = parsed['fallback_reason']
+            # P88 (live incident: 04-artisan self-sustaining lockdown found
+            # right after P86 shipped): decision.py rejects a well-formed
+            # action with "action X is not available to you [...]" whenever
+            # it names something outside the CURRENT allowed set - the
+            # loop-breaker's own menu restriction (P72/P86), not a content
+            # mistake. That rejection used to count toward invalid_streak
+            # and recent_rejected_fingerprints exactly like genuinely broken
+            # JSON - so an agent that keeps correctly wanting the one real
+            # next action (not currently in the widened menu) kept both
+            # re-triggering invalid_streak AND feeding the very fingerprint-
+            # repeat mechanism (P72) that can hold the loop-breaker active
+            # for up to REPEATED_REJECTION_WINDOW_SECONDS regardless of
+            # invalid_streak resets - observed live: 04-artisan cycling
+            # "try board_message (rejected, not available) -> resubmit an
+            # already-saved meeting report (the only thing left allowed,
+            # succeeds, resets invalid_streak) -> try board_message again"
+            # for hours without ever actually getting unstuck, because the
+            # rejection itself kept refreshing the fingerprint-repeat count
+            # that was holding it locked in the first place. This specific
+            # reason is now a free pass: still reported to the resident
+            # (so it learns what IS currently allowed), but never
+            # penalized - the agent did nothing wrong content-wise.
+            if reason.startswith('action ') and 'is not available to you' in reason:
+                self.feedback('invalid_decision', reason, False)
+                self.event('invalid_decision', reason)
+                return
             self.state['invalid_streak'] = self.state.get('invalid_streak', 0)+1
             preview=read_json(self.home/'last-response.json',{}).get('content','')[-1200:]
             meeting_hint = ''

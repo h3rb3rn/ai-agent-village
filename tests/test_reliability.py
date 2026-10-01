@@ -1014,3 +1014,34 @@ class LoopBreakerTests(unittest.TestCase):
         self.agent.execute({'tool_call': {'name': 'gazette_operation', 'arguments': {
             'operation': 'contribute', 'kind': 'mood', 'headline': 'H', 'content': 'C'}}})
         self.assertFalse(self.agent.state['last_result']['ok'])
+
+    def test_menu_restricted_rejection_never_increments_invalid_streak(self):
+        # P88 (live incident right after P86 shipped: 04-artisan cycled for
+        # hours between "try board_message, rejected as not-available" and
+        # "resubmit an already-saved meeting report, the only thing left
+        # allowed" without ever genuinely getting unstuck). A rejection
+        # caused purely by the loop-breaker's own menu restriction is not a
+        # content mistake and must cost nothing.
+        reason = 'action board_message is not available to you; choose one of: idle, meeting_operation'
+        fallback = {'fallback_reason': reason, 'tool_call': {'name': 'board_message', 'arguments': {'message': 'x'}}}
+        self.agent.execute(fallback)
+        self.assertEqual(self.agent.state.get('invalid_streak', 0), 0)
+        self.assertFalse(self.agent.state['last_result']['ok'])
+        self.assertEqual(self.agent.state['last_result']['result'], reason)
+
+    def test_menu_restricted_rejection_never_feeds_the_repeated_fingerprint_tracker(self):
+        # Repeating the exact same menu-restricted rejection many times
+        # must never itself extend/retrigger the loop-breaker - only a
+        # genuine content mistake recurring should.
+        reason = 'action board_message is not available to you; choose one of: idle, meeting_operation'
+        fallback = {'fallback_reason': reason, 'tool_call': {'name': 'board_message', 'arguments': {'message': 'x'}}}
+        for _ in range(rt.LOOP_BREAKER_REPEAT + 5):
+            self.agent.execute(fallback)
+        self.assertEqual(self.agent.state.get('recent_rejected_fingerprints', []), [])
+        self.assertFalse(self.agent._loop_breaker_active())
+
+    def test_a_genuine_content_mistake_is_still_tracked_normally(self):
+        # The P88 exemption must stay narrow - an ordinary malformed/broken
+        # decision still counts exactly as before.
+        self.reject('{"name":"broken')
+        self.assertEqual(self.agent.state.get('invalid_streak', 0), 1)
