@@ -9,12 +9,17 @@ proposals and votes without assigning a global score or intelligence ranking.
 from __future__ import annotations
 
 import contextlib
+import json
 import sqlite3
 import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+# P87: shared with village/coordinator.py's tasks.depends_on - same loose,
+# informal cross-reference semantics, imported rather than duplicated.
+from village.coordinator import normalize_depends_on
 
 
 def utc_now() -> str:
@@ -97,6 +102,14 @@ class TeamStore:
                 CREATE INDEX IF NOT EXISTS idx_team_subtasks_team ON team_subtasks(team_id, status);
                 """
             )
+            # P87 (operator: Forschungslabor-Dashboard, "Abhaengigkeiten zu
+            # anderen Themen/Projekten") - same loose, informal cross-
+            # reference as village/coordinator.py's tasks.depends_on
+            # (migration 5 there); see that column's own comment for why
+            # it is not a foreign key.
+            existing_cols = {row[1] for row in db.execute("PRAGMA table_info(teams)").fetchall()}
+            if "depends_on" not in existing_cols:
+                db.execute("ALTER TABLE teams ADD COLUMN depends_on TEXT")
 
     def _member(self, db: sqlite3.Connection, team_id: str, agent: str) -> sqlite3.Row:
         row = db.execute(
@@ -117,11 +130,13 @@ class TeamStore:
         if not project or not goal or not role:
             raise ValueError("create requires project, goal and role")
         expires = args.get("expires_at")
+        depends_on = json.dumps(normalize_depends_on(args.get("depends_on"), team_id))
         with self._conn() as db:
             db.execute("BEGIN IMMEDIATE")
             db.execute(
-                "INSERT INTO teams(id,project,goal,role,coordination_mode,status,created_by,expires_at,created_at,updated_at) VALUES(?,?,?,?,?,'forming',?,?,?,?)",
-                (team_id, project, goal, role, mode, actor, expires, now, now),
+                "INSERT INTO teams(id,project,goal,role,coordination_mode,status,created_by,expires_at,"
+                "depends_on,created_at,updated_at) VALUES(?,?,?,?,?,'forming',?,?,?,?,?)",
+                (team_id, project, goal, role, mode, actor, expires, depends_on, now, now),
             )
             db.execute(
                 "INSERT INTO team_members(team_id,agent_id,role_variant,joined_at) VALUES(?,?,?,?)",
@@ -238,7 +253,18 @@ class TeamStore:
             members = [dict(x) for x in db.execute("SELECT * FROM team_members WHERE team_id=? AND status='active' ORDER BY joined_at", (team_id,))]
             subtasks = [dict(x) for x in db.execute("SELECT * FROM team_subtasks WHERE team_id=? ORDER BY created_at", (team_id,))]
             result = dict(row); result["members"] = members; result["subtasks"] = subtasks
+            result["depends_on"] = json.loads(result["depends_on"]) if result.get("depends_on") else []
             return result
+
+    def list_all(self, limit: int = 200) -> List[Dict[str, Any]]:
+        """Every team regardless of status, newest first - the cross-agent
+        view a dashboard overview needs (P87), unlike list_for_agent()'s
+        single-agent scope."""
+        with self._conn() as db:
+            ids = [r["id"] for r in db.execute(
+                "SELECT id FROM teams ORDER BY created_at DESC LIMIT ?", (limit,)
+            )]
+        return [self.get(i) for i in ids]
 
     def get_subtask(self, subtask_id: str) -> Dict[str, Any]:
         with self._conn() as db:

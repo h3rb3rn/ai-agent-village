@@ -10,6 +10,8 @@ from urllib.parse import parse_qs, urlsplit
 from village.events import append_event
 from village.gazette import GazetteStore
 from village.calendar import CalendarStore
+from village.coordinator import CoordinationStore
+from village.teams import TeamStore
 from event_history import read_history
 
 ROOT = Path(os.environ["VILLAGE_ROOT"])
@@ -237,11 +239,80 @@ def gazette_index(limit=60):
         pass
     return sorted(rows, key=lambda r: r["id"], reverse=True)
 
+def lab_index():
+    """Solo tasks + collaborative teams, normalized into one feed for the
+    Forschungslabor dashboard (P87, operator: "eine Zentrale Anlaufstelle
+    [...] womit sich die Agents entweder Solo oder Gemeinschaftlich
+    beschaeftigen [...] mit aktuellem Stand und Abhaengigkeiten"). Pure
+    read, same defensive-empty-on-error pattern as gazette_index()/
+    calendar_index() - never raises into the request handler.
+
+    'column' is the dashboard's own 4-way Kanban mapping, derived here
+    (not a stored field) so it always reflects live status/blockers
+    rather than needing its own migration:
+      queued      - not yet claimed/formed
+      in_progress - claimed/active, no blocker on record
+      deferred    - active but blocked (tasks only - teams have no
+                    single-owner blockers field to key off)
+      done        - complete/closed
+    """
+    items = []
+    board = ROOT / "board"
+    try:
+        tasks_store = CoordinationStore(board / "coordination.sqlite3", board)
+        for t in tasks_store.list_tasks():
+            status = t.get("status")
+            if status == "complete":
+                column = "done"
+            elif status == "active":
+                column = "deferred" if t.get("blockers") else "in_progress"
+            else:
+                column = "queued"
+            items.append({
+                "id": t["id"], "kind": "solo", "title": t["title"],
+                "summary": t.get("goal") or t.get("success_criterion"),
+                "status": status, "column": column,
+                "owner": t.get("owner"), "members": [t["owner"]] if t.get("owner") else [],
+                "author": t.get("author"), "depends_on": t.get("depends_on") or [],
+                "last_finding": t.get("last_finding"), "next_step": t.get("next_step"),
+                "blockers": t.get("blockers"), "evidence": t.get("evidence"),
+                "success_criterion": t.get("success_criterion"),
+                "created_at": t.get("created_at"), "updated_at": t.get("updated_at"),
+            })
+    except OSError:
+        pass
+    try:
+        teams_store = TeamStore(board / "coordination.sqlite3")
+        for team in teams_store.list_all():
+            subtasks = team.get("subtasks") or []
+            open_subs = [s for s in subtasks if s.get("status") != "complete"]
+            if team.get("status") == "closed":
+                column = "done"
+            elif team.get("status") == "forming":
+                column = "queued"
+            elif subtasks and not open_subs:
+                column = "done"
+            else:
+                column = "in_progress"
+            items.append({
+                "id": team["id"], "kind": "team", "title": team.get("project"),
+                "summary": team.get("goal"), "status": team.get("status"), "column": column,
+                "owner": None, "members": [m["agent_id"] for m in team.get("members") or []],
+                "author": team.get("created_by"), "depends_on": team.get("depends_on") or [],
+                "role": team.get("role"), "coordination_mode": team.get("coordination_mode"),
+                "subtasks": [{"id": s["id"], "title": s["title"], "status": s["status"],
+                             "owner": s.get("owner"), "evidence": s.get("evidence")} for s in subtasks],
+                "created_at": team.get("created_at"), "updated_at": team.get("updated_at"),
+            })
+    except OSError:
+        pass
+    return sorted(items, key=lambda x: x.get("updated_at") or "", reverse=True)
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args): pass
     def do_GET(self):
         route = urlsplit(self.path).path
-        if route in ('/', '/dashboard', '/agents', '/habitat', '/board', '/timeline', '/signals', '/gazette'):
+        if route in ('/', '/dashboard', '/agents', '/habitat', '/board', '/timeline', '/signals', '/gazette', '/lab'):
             return send(self, HTTPStatus.OK, (ASSETS / 'observatory.html').read_text())
         if route in ('/assets/observatory.css', '/assets/observatory.js'):
             name = route.rsplit('/', 1)[-1]
@@ -258,6 +329,8 @@ class Handler(BaseHTTPRequestHandler):
             return send(self, HTTPStatus.OK, json.dumps(signal_index(), ensure_ascii=False), 'application/json; charset=utf-8')
         if route == '/api/gazette':
             return send(self, HTTPStatus.OK, json.dumps(gazette_index(), ensure_ascii=False), 'application/json; charset=utf-8')
+        if route == '/api/lab':
+            return send(self, HTTPStatus.OK, json.dumps(lab_index(), ensure_ascii=False), 'application/json; charset=utf-8')
         if route == '/api/calendar':
             # P78 (operator: "auch noch Tag/Woche/Monats Ansicht"): a range
             # instead of a single day, so day/week/month all share this one

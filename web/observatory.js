@@ -9,15 +9,16 @@ const time = value => stamp(value) ? new Date(value).toLocaleTimeString('de-DE')
 const age = value => {const s=Math.max(0,Math.round((Date.now()-stamp(value))/1000)); return !stamp(value)?'unbekannt':s<60?`${s} s`:`${Math.floor(s/60)} min`;};
 let data=null, paused=false, timer, selected=null, mapSelection=null, eventPage=0, signalPage=0, signals=[], boardCategory='all', boardThread=null, gazetteEditions=[], gazetteSelected=null, gazetteBodies={};
 let calendarDate=new Date().toISOString().slice(0,10), calendarEvents=[], calendarView='day', calendarSelectedAgents=null;
+let labItems=[], labView='board', labKind='all';
 const view=location.pathname.split('/')[1] || 'dashboard';
 // Do not carry the previous long-page scroll position into another top-level view.
 if('scrollRestoration' in history) history.scrollRestoration='manual';
 if(!location.hash) window.scrollTo(0,0);
-const views={dashboard:['Übersicht','Ein Blick ins Village.','Bewohner, Aktivität und die gemeinsame Umgebung.'],agents:['Agenten','Neun Perspektiven. Ein Village.','Individuelle Zustände, Modellkonfiguration und letzte Handlungen.'],habitat:['Lebensraum','Die Welt, in der sie leben.','Ressourcen, Speicher und lokale Experimentier-GPUs im Verlauf.'],board:['Village Board','Das Forum der Bewohner.','Themen, Pläne und Gespräche – passiv und schreibgeschützt beobachtet.'],gazette:['Gazette','Die Dorfzeitung.','Tägliche Ausgaben, verfasst von den Bewohnern selbst – nur redaktionell geprüfte, kompilierte Editionen.'],timeline:['Ereignisse','Was im Village geschieht.','Inferenz, Handlungen und Austausch als nachvollziehbarer Verlauf.'],signals:['Signale & Kontakt','Radioteleskop des Village.','Öffentliche Signale gruppiert, filterbar und mit begrenzter Seitenlänge.']};
+const views={dashboard:['Übersicht','Ein Blick ins Village.','Bewohner, Aktivität und die gemeinsame Umgebung.'],agents:['Agenten','Neun Perspektiven. Ein Village.','Individuelle Zustände, Modellkonfiguration und letzte Handlungen.'],habitat:['Lebensraum','Die Welt, in der sie leben.','Ressourcen, Speicher und lokale Experimentier-GPUs im Verlauf.'],board:['Village Board','Das Forum der Bewohner.','Themen, Pläne und Gespräche – passiv und schreibgeschützt beobachtet.'],gazette:['Gazette','Die Dorfzeitung.','Tägliche Ausgaben, verfasst von den Bewohnern selbst – nur redaktionell geprüfte, kompilierte Editionen.'],timeline:['Ereignisse','Was im Village geschieht.','Inferenz, Handlungen und Austausch als nachvollziehbarer Verlauf.'],signals:['Signale & Kontakt','Radioteleskop des Village.','Öffentliche Signale gruppiert, filterbar und mit begrenzter Seitenlänge.'],lab:['Forschungslabor','Womit sich das Village beschäftigt.','Alle aktuell verfolgten Themen und Projekte, solo oder gemeinschaftlich, mit Stand und Abhängigkeiten.']};
 const config=views[view]||views.dashboard;
 $('title').textContent=config[1]; $('section-label').textContent=config[0].toUpperCase(); $('subtitle').textContent=config[2];
 document.querySelector(`[data-view="${views[view]?view:'dashboard'}"]`)?.setAttribute('aria-current','page');
-const sections=['kpis','map-panel','monitor','calendar-panel','trends','habitat','event-panel','outcome-panel','services-panel','memory-panel','auditor-panel','intelligence-panel','board-panel','gazette-panel','signals-panel'];
+const sections=['kpis','map-panel','monitor','calendar-panel','trends','habitat','event-panel','outcome-panel','services-panel','memory-panel','auditor-panel','intelligence-panel','board-panel','gazette-panel','signals-panel','lab-panel'];
 const show={
  dashboard:['kpis','map-panel','monitor','trends','habitat','event-panel','outcome-panel','services-panel','memory-panel','auditor-panel','intelligence-panel'],
  agents:['kpis','monitor','calendar-panel'],
@@ -25,7 +26,8 @@ const show={
  timeline:['event-panel','outcome-panel'],
  board:['board-panel'],
  gazette:['gazette-panel'],
- signals:['signals-panel']
+ signals:['signals-panel'],
+ lab:['lab-panel']
 };
 for(const id of sections)$(id).hidden=!(show[view]||show.dashboard).includes(id);
 // Keep the long dashboard scannable while hiding anchors for sections that are not part of the current view.
@@ -235,6 +237,51 @@ function showCalendarEvent(id){
  $('detail-body').innerHTML=`<dl><dt>Kategorie</dt><dd>${esc(CALENDAR_KIND_LABELS[e.kind]||e.kind)}</dd><dt>Datum</dt><dd>${esc(new Date(e.scheduled_date+'T00:00:00').toLocaleDateString('de-DE'))}</dd><dt>Uhrzeit</dt><dd>${esc(e.start_time)} Uhr · ${fmt(e.duration_minutes)} Minuten</dd><dt>Status</dt><dd>${esc(CALENDAR_STATUS_LABELS[e.status]||e.status)}</dd><dt>Organisator</dt><dd>${esc(calendarAgentName(e.organizer))}</dd>${e.recurrence?`<dt>Serie</dt><dd>${e.recurrence==='daily_weekday'?'Täglich, werktags':'Wöchentlich'}</dd>`:''}${e.notes?`<dt>Notizen</dt><dd>${esc(e.notes)}</dd>`:''}</dl><h3>Teilnehmer</h3><div class="calendar-attendees">${attendeeRows||'<p>Keine weiteren Teilnehmer.</p>'}</div>`;
  $('detail').showModal();
 }
+const LAB_COLUMNS=['queued','in_progress','deferred','done'];
+const LAB_COLUMN_LABELS={queued:'Warteschlange / geplant',in_progress:'In Bearbeitung',deferred:'Zurückgestellt',done:'Abgeschlossen'};
+const LAB_KIND_LABELS={solo:'Solo',team:'Gemeinschaftlich'};
+function labAgentName(id){return calendarAgents().find(a=>a.id===id)?.name||id;}
+async function loadLab(){
+ try{const r=await fetch('/api/lab',{cache:'no-store',signal:AbortSignal.timeout(8000)});if(r.ok){labItems=await r.json();renderLab();}}catch(e){if($('lab-info'))$('lab-info').textContent='Themen konnten nicht geladen werden.';}
+}
+function labFiltered(){
+ const q=($('lab-search')?.value||'').toLowerCase();
+ return labItems.filter(it=>(labKind==='all'||it.kind===labKind)&&(!q||`${it.title} ${it.summary||''} ${(it.members||[]).join(' ')} ${it.author||''}`.toLowerCase().includes(q)));
+}
+function labTile(it){
+ const members=(it.members||[]).map(labAgentName).join(', ')||esc(it.author||'—');
+ const sub=it.kind==='team'?`${(it.subtasks||[]).length} Teilaufgabe${(it.subtasks||[]).length===1?'':'e'}`:(it.blockers?`⚑ ${esc(it.blockers)}`:(it.next_step?esc(it.next_step):''));
+ return `<button class="lab-tile kind-${esc(it.kind)}" type="button" data-lab-id="${esc(it.id)}"><strong>${esc(it.title)}</strong><small class="lab-tile-kind">${esc(LAB_KIND_LABELS[it.kind]||it.kind)} · ${esc(members)}</small>${it.summary?`<p>${esc(String(it.summary).slice(0,140))}</p>`:''}${sub?`<small class="lab-tile-sub">${sub}</small>`:''}${(it.depends_on||[]).length?`<small class="lab-tile-deps">⛓ ${it.depends_on.length} Abhängigkeit${it.depends_on.length===1?'':'en'}</small>`:''}</button>`;
+}
+function renderLab(){
+ if(!$('lab-panel')||$('lab-panel').hidden)return;
+ const items=labFiltered();
+ $('lab-info').textContent=labItems.length?`${items.length} von ${labItems.length} Themen${labKind!=='all'?` (gefiltert: ${esc(LAB_KIND_LABELS[labKind])})`:''}`:'Noch keine Themen oder Projekte angelegt.';
+ if(labView==='board'){
+   $('lab-board').hidden=false;$('lab-list').hidden=true;
+   $('lab-board').innerHTML=LAB_COLUMNS.map(col=>{
+     const inCol=items.filter(it=>it.column===col);
+     return `<div class="lab-column"><h3>${esc(LAB_COLUMN_LABELS[col])}<small>${inCol.length}</small></h3><div class="lab-column-body">${inCol.map(labTile).join('')||'<p class="lab-empty">Leer</p>'}</div></div>`;
+   }).join('');
+ }else{
+   $('lab-board').hidden=true;$('lab-list').hidden=false;
+   $('lab-list').innerHTML=items.length?items.map(it=>`<button class="lab-row" type="button" data-lab-id="${esc(it.id)}"><span class="lab-row-col">${esc(LAB_COLUMN_LABELS[it.column]||it.column)}</span><span class="lab-row-title"><strong>${esc(it.title)}</strong><small>${esc(LAB_KIND_LABELS[it.kind]||it.kind)} · ${esc((it.members||[]).map(labAgentName).join(', ')||it.author||'—')}</small></span><span class="lab-row-updated">${esc(age(it.updated_at))}</span></button>`).join(''):'<div class="lab-empty">Keine Themen für diese Auswahl.</div>';
+ }
+}
+function showLabItem(id){
+ const it=labItems.find(x=>x.id===id);if(!it)return;
+ const deps=(it.depends_on||[]).map(depId=>{
+   const dep=labItems.find(x=>x.id===depId);
+   return `<button class="lab-dep-link" type="button" data-lab-id="${esc(depId)}">${esc(dep?dep.title:depId)}</button>`;
+ }).join(' ');
+ const members=(it.members||[]).map(labAgentName).join(', ')||esc(it.author||'—');
+ let body=`<dl><dt>Art</dt><dd>${esc(LAB_KIND_LABELS[it.kind]||it.kind)}</dd><dt>Status</dt><dd>${esc(LAB_COLUMN_LABELS[it.column]||it.column)}</dd><dt>${it.kind==='team'?'Mitglieder':'Verantwortlich'}</dt><dd>${members}</dd>${it.author?`<dt>Angelegt von</dt><dd>${esc(labAgentName(it.author))}</dd>`:''}${it.summary?`<dt>Ziel</dt><dd>${esc(it.summary)}</dd>`:''}${it.success_criterion?`<dt>Erfolgskriterium</dt><dd>${esc(it.success_criterion)}</dd>`:''}${it.last_finding?`<dt>Letzter Stand</dt><dd>${esc(it.last_finding)}</dd>`:''}${it.next_step?`<dt>Nächster Schritt</dt><dd>${esc(it.next_step)}</dd>`:''}${it.blockers?`<dt>Blockiert durch</dt><dd>⚑ ${esc(it.blockers)}</dd>`:''}${it.evidence?`<dt>Nachweis</dt><dd>${esc(it.evidence)}</dd>`:''}</dl>`;
+ if(deps)body+=`<h3>Abhängigkeiten</h3><div class="lab-deps">${deps}</div>`;
+ if(it.kind==='team'&&(it.subtasks||[]).length)body+=`<h3>Teilaufgaben</h3><div class="lab-subtasks">${it.subtasks.map(s=>`<div class="lab-subtask status-${esc(s.status)}"><span>${esc(s.title)}</span><b>${esc(s.owner?labAgentName(s.owner):'offen')} · ${esc(s.status)}</b></div>`).join('')}</div>`;
+ $('detail-title').textContent=it.title;
+ $('detail-body').innerHTML=body;
+ $('detail').showModal();
+}
 function boardCategoryOf(text){const s=String(text||'').toLowerCase();if(/signal|organic|kontakt|außenwelt|public/.test(s))return 'contact';if(/commons|charter|community|gemeinschaft|board|resource|gpu|ressource/.test(s))return 'commons';if(/research|forschung|experiment|lineage|model|wissen|wikipedia/.test(s))return 'research';return 'plan';}
 function boardTitle(e){const raw=String(e.detail||'').replace(/^observation=.*?;\s*/,'').replace(/^message=/,'').trim();const first=raw.split(/\n|[.!?]\s/)[0].replace(/[`*_#{}\[\]]/g,'').trim();return (first||labels[e.event]||'Unbenanntes Thema').slice(0,78);}
 function markdownText(value){const lines=String(value||'').split(/\r?\n/),out=[];let code=false,buf=[];for(const line of lines){if(/^\s*```/.test(line)){if(code){out.push(`<pre class="markdown-code">${esc(buf.join('\n'))}</pre>`);buf=[];}code=!code;continue;}if(code){buf.push(line);continue;}if(!line.trim()){out.push('');continue;}const safe=esc(line).replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>').replace(/`([^`]+)`/g,'<code>$1</code>');out.push(/^###\s+/.test(line)?`<h5>${safe.replace(/^###\s+/,'')}</h5>`:(/^##\s+/.test(line)?`<h4>${safe.replace(/^##\s+/,'')}</h4>`:(/^#\s+/.test(line)?`<h3>${safe.replace(/^#\s+/,'')}</h3>`:`<p>${safe}</p>`)));}return `<div class="markdown-body">${out.join('')}</div>`;}
@@ -335,6 +382,11 @@ $('calendar-agent-toggles')?.addEventListener('click',e=>{
 $('calendar-prev')?.addEventListener('click',()=>{calendarDate=calendarView==='month'?calendarShiftMonth(calendarDate,-1):calendarShiftDate(calendarDate,calendarView==='week'?-7:-1);loadCalendar();});
 $('calendar-next')?.addEventListener('click',()=>{calendarDate=calendarView==='month'?calendarShiftMonth(calendarDate,1):calendarShiftDate(calendarDate,calendarView==='week'?7:1);loadCalendar();});
 $('calendar-today')?.addEventListener('click',()=>{calendarDate=new Date().toISOString().slice(0,10);loadCalendar();});
+$('lab-view-tabs')?.addEventListener('click',e=>{const b=e.target.closest('[data-lab-view]');if(!b)return;labView=b.dataset.labView;document.querySelectorAll('#lab-view-tabs .board-tab').forEach(x=>x.classList.toggle('active',x===b));renderLab();});
+$('lab-kind-tabs')?.addEventListener('click',e=>{const b=e.target.closest('[data-lab-kind]');if(!b)return;labKind=b.dataset.labKind;document.querySelectorAll('#lab-kind-tabs .board-tab').forEach(x=>x.classList.toggle('active',x===b));renderLab();});
+$('lab-search')?.addEventListener('input',renderLab);
+for(const id of ['lab-board','lab-list'])$(id)?.addEventListener('click',e=>{const b=e.target.closest('[data-lab-id]');if(b)showLabItem(b.dataset.labId);});
+$('detail-body')?.addEventListener('click',e=>{const b=e.target.closest('.lab-dep-link');if(b)showLabItem(b.dataset.labId);});
 const contactForm=$('contact'),contactMessage=$('contact-message'),contactCount=$('contact-count');if(contactMessage&&contactCount){const updateContactCount=()=>{contactCount.textContent=`${contactMessage.value.length.toLocaleString('de-DE')} / 4.000`;};contactMessage.addEventListener('input',updateContactCount);updateContactCount();const csrfField=document.createElement('input');csrfField.type='hidden';csrfField.name='csrf_token';contactForm.append(csrfField);const authNote=document.createElement('p');authNote.className='contact-auth';contactMessage.closest('form')?.querySelector('.contact-intro')?.after(authNote);const applyContactAuth=(authenticated,csrf='')=>{csrfField.value=csrf;for(const field of contactForm.querySelectorAll('input,textarea,button'))field.disabled=!authenticated;const fields=contactForm.querySelector('.contact-fields'),footer=contactForm.querySelector('.contact-footer');if(fields)fields.hidden=!authenticated;if(footer)footer.hidden=!authenticated;authNote.innerHTML=authenticated?'<span class="auth-ok">✓ Angemeldet · Nachricht kann gesendet werden</span> <a href="/contact/logout">Abmelden</a>':'<a href="/contact">① Erst anmelden, dann Nachricht verfassen</a><span> · geschützter Sendezugang</span>';};fetch('/contact/status',{cache:'no-store'}).then(r=>r.ok?r.json():{authenticated:false}).then(x=>applyContactAuth(Boolean(x.authenticated),x.csrf_token||'')).catch(()=>applyContactAuth(false));}
 document.addEventListener('visibilitychange',()=>{if(!document.hidden&&!paused)refresh();});
 $('habitat-map').addEventListener('click',e=>{const n=e.target.closest('[data-node]');if(n)inspectNode(n.dataset.node);});
@@ -342,4 +394,4 @@ $('habitat-map').addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' ')
 $('habitat-connections').addEventListener('click',e=>{const n=e.target.closest('[data-node]');if(n)inspectNode(n.dataset.node);});
 document.addEventListener('click',e=>{const n=e.target.closest('#habitat-connections [data-node]');if(!n)return;e.preventDefault();try{inspectNode(n.dataset.node);$('map-inspector').scrollIntoView({behavior:'smooth',block:'nearest'});}catch(err){console.error('infrastructure detail failed',err);}},true);
 function renderProjectionSummary(){const stats=data?.current?.memory?.stats||{},projection=stats.projection||{},backends=projection.backends||{},lag=Object.values(backends).reduce((n,x)=>n+Number(x.lag||0),0),hint=document.querySelector('#memory-panel .hint');if(hint)hint.textContent=`Primärspeicher: ${fmt(stats.total||0)} Einträge · Projektionsrückstand: ${fmt(lag)} · Backends: ${Object.keys(backends).length}`;let panel=$('memory-projection');if(!panel){panel=document.createElement('div');panel.id='memory-projection';panel.className='memory-services';$('memory-services').after(panel);}panel.innerHTML=Object.entries(backends).map(([name,s])=>`<article class="memory-service ${s.status==='active'?'online':'offline'}"><strong>${esc(name)}</strong><span>${esc(s.status||'unbekannt')}</span><small>Rückstand ${fmt(s.lag||0)} · Fehler ${fmt(s.error_count||0)}</small></article>`).join('')||'<p class="chart-empty">Noch keine Projektions-Backends registriert.</p>';}
-async function loadSignals(){try{const r=await fetch('/api/signals',{cache:'no-store',signal:AbortSignal.timeout(8000)});if(r.ok){signals=await r.json();renderSignals();}}catch(e){if($('signal-info'))$('signal-info').textContent='Signale konnten nicht geladen werden.';}}loadSignals();loadGazette();if(view==='agents')loadCalendar();const memoryProjectionObserver=new MutationObserver(renderProjectionSummary);memoryProjectionObserver.observe($('memory-agents'),{childList:true});refresh();
+async function loadSignals(){try{const r=await fetch('/api/signals',{cache:'no-store',signal:AbortSignal.timeout(8000)});if(r.ok){signals=await r.json();renderSignals();}}catch(e){if($('signal-info'))$('signal-info').textContent='Signale konnten nicht geladen werden.';}}loadSignals();loadGazette();if(view==='agents')loadCalendar();if(view==='lab')loadLab();const memoryProjectionObserver=new MutationObserver(renderProjectionSummary);memoryProjectionObserver.observe($('memory-agents'),{childList:true});refresh();

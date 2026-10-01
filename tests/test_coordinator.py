@@ -31,6 +31,45 @@ class TestCoordinationStore(unittest.TestCase):
             versions = [r["version"] for r in cursor.fetchall()]
             self.assertIn(1, versions)
 
+    def test_depends_on_is_stored_and_returned(self) -> None:
+        # P87 (operator: Forschungslabor-Dashboard, "Abhaengigkeiten zu
+        # anderen Themen/Projekten").
+        other = self.store.operate("01-a", {"action": "create", "title": "Other", "success_criterion": "a real check"})
+        task = self.store.operate("01-a", {
+            "action": "create", "title": "Depends on other", "success_criterion": "a real check",
+            "depends_on": [other["id"]],
+        })
+        self.assertEqual(task["depends_on"], [other["id"]])
+        self.assertEqual(self.store.get_task(task["id"])["depends_on"], [other["id"]])
+
+    def test_depends_on_is_capped_deduplicated_and_never_self_referencing(self) -> None:
+        many = [f"fake-{i}" for i in range(10)] + ["fake-0"]
+        task = self.store.operate("01-a", {
+            "action": "create", "title": "Many deps", "success_criterion": "a real check",
+            "depends_on": many,
+        })
+        self.assertEqual(len(task["depends_on"]), 5)
+        self.assertEqual(len(set(task["depends_on"])), 5)
+        task2 = self.store.operate("01-a", {
+            "action": "create", "title": "Self dep", "success_criterion": "a real check",
+            "depends_on": [],
+        })
+        # A task cannot name its own (not-yet-known-at-create-time) id, but
+        # normalize_depends_on() must not choke if it somehow appeared.
+        from village.coordinator import normalize_depends_on
+        self.assertEqual(normalize_depends_on([task2["id"], "other"], own_id=task2["id"]), ["other"])
+
+    def test_depends_on_missing_is_an_empty_list_not_an_error(self) -> None:
+        task = self.store.operate("01-a", {"action": "create", "title": "No deps", "success_criterion": "a real check"})
+        self.assertEqual(task["depends_on"], [])
+
+    def test_progress_can_update_depends_on(self) -> None:
+        other = self.store.operate("01-a", {"action": "create", "title": "Other", "success_criterion": "a real check"})
+        task = self.store.operate("01-a", {"action": "create", "title": "T", "success_criterion": "a real check"})
+        self.store.operate("01-a", {"action": "claim", "task_id": task["id"]})
+        updated = self.store.operate("01-a", {"action": "progress", "task_id": task["id"], "depends_on": [other["id"]]})
+        self.assertEqual(updated["depends_on"], [other["id"]])
+
     def test_concurrent_claims_race_condition_safe(self) -> None:
         """Verify that when two concurrent workers claim a task, exactly one succeeds."""
         # Create an open task

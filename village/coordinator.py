@@ -29,7 +29,7 @@ def utc_now() -> str:
 
 
 # Schema version managed by migrations
-LATEST_SCHEMA_VERSION = 4
+LATEST_SCHEMA_VERSION = 5
 
 
 def is_weak_criterion(criterion: str) -> bool:
@@ -43,6 +43,26 @@ def is_weak_criterion(criterion: str) -> bool:
         "work in progress", "wip", "none"
     }
     return cleaned in placeholders
+
+
+MAX_DEPENDS_ON = 5
+
+
+def normalize_depends_on(raw: Any, own_id: Optional[str] = None) -> List[str]:
+    """Cleans an agent-supplied depends_on list: strings only, trimmed,
+    deduplicated, never self-referencing, capped at MAX_DEPENDS_ON (P87).
+    Deliberately not checked against real task ids here - see migration
+    5's own comment on why this is a loose, informal cross-reference."""
+    if not isinstance(raw, list):
+        return []
+    seen: List[str] = []
+    for item in raw:
+        task_id = str(item).strip()[:80]
+        if task_id and task_id != own_id and task_id not in seen:
+            seen.append(task_id)
+        if len(seen) >= MAX_DEPENDS_ON:
+            break
+    return seen
 
 
 class CoordinationStore:
@@ -258,6 +278,25 @@ class CoordinationStore:
                     "INSERT INTO schema_migrations (version, applied_at) VALUES (4, ?)",
                     (utc_now(),),
                 )
+
+            if current_version < 5:
+                # Migration 5 (P87, operator directive: "Forschungslabor"
+                # dashboard, "Abhaengigkeiten zu anderen Themen/Projekten"):
+                # a real, agent-declared link to other tasks this one
+                # depends on - JSON array of task ids, nullable/'[]' default
+                # so existing rows need no backfill. Deliberately not a
+                # foreign key (a referenced task may be completed/removed
+                # later; the dashboard shows "unknown" gracefully for a
+                # stale id rather than this table enforcing referential
+                # integrity across what is meant to be a loose, informal
+                # cross-reference, not a hard build-dependency graph).
+                existing_cols = {col[1] for col in conn.execute("PRAGMA table_info(tasks)").fetchall()}
+                if "depends_on" not in existing_cols:
+                    conn.execute("ALTER TABLE tasks ADD COLUMN depends_on TEXT")
+                conn.execute(
+                    "INSERT INTO schema_migrations (version, applied_at) VALUES (5, ?)",
+                    (utc_now(),),
+                )
             conn.commit()
 
         # Set restrictive group-writable file mode for coordination db
@@ -393,6 +432,7 @@ class CoordinationStore:
             "next_step": r["next_step"] if "next_step" in keys else None,
             "blockers": r["blockers"] if "blockers" in keys else None,
             "artifact_refs": json.loads(r["artifact_refs"]) if ("artifact_refs" in keys and r["artifact_refs"]) else [],
+            "depends_on": json.loads(r["depends_on"]) if ("depends_on" in keys and r["depends_on"]) else [],
             "evidence": r["evidence"],
             "completion_verified": bool(r["completion_verified"]),
             "revision": r["version"],
@@ -478,6 +518,7 @@ class CoordinationStore:
                 next_step = str(args.get("next_step") or "").strip()[:800] or None
                 blockers = str(args.get("blockers") or "").strip()[:800] or None
                 artifact_refs = json.dumps(args.get("artifact_refs") or [])
+                depends_on = json.dumps(normalize_depends_on(args.get("depends_on"), task_id))
                 weak = 1 if is_weak_criterion(criterion) else 0
 
                 conn.execute(
@@ -485,11 +526,12 @@ class CoordinationStore:
                     INSERT INTO tasks (
                         id, title, success_criterion, author, owner, status,
                         lease_until, evidence, completion_verified, version,
-                        goal, last_finding, next_step, blockers, artifact_refs, weak_criterion,
+                        goal, last_finding, next_step, blockers, artifact_refs, depends_on, weak_criterion,
                         created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, NULL, 'open', 0.0, NULL, 0, 1, ?, NULL, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, NULL, 'open', 0.0, NULL, 0, 1, ?, NULL, ?, ?, ?, ?, ?, ?, ?)
                     """,
-                    (task_id, title, criterion, actor, goal, next_step, blockers, artifact_refs, weak, now_str, now_str),
+                    (task_id, title, criterion, actor, goal, next_step, blockers, artifact_refs, depends_on,
+                     weak, now_str, now_str),
                 )
                 conn.execute(
                     """
@@ -575,6 +617,8 @@ class CoordinationStore:
                 next_step = str(args.get("next_step") or row["next_step"] or "").strip()[:800] or None
                 blockers = str(args["blockers"]).strip()[:800] if "blockers" in args and args["blockers"] else (None if "blockers" in args else row["blockers"])
                 artifact_refs = json.dumps(args.get("artifact_refs")) if "artifact_refs" in args else row["artifact_refs"]
+                depends_on = (json.dumps(normalize_depends_on(args.get("depends_on"), task_id))
+                             if "depends_on" in args else row["depends_on"])
                 new_criterion = str(args.get("success_criterion", "")).strip()[:800] if "success_criterion" in args else row["success_criterion"]
                 weak = 1 if is_weak_criterion(new_criterion) else 0
 
@@ -582,11 +626,12 @@ class CoordinationStore:
                 conn.execute(
                     """
                     UPDATE tasks
-                    SET last_finding = ?, next_step = ?, blockers = ?, artifact_refs = ?,
+                    SET last_finding = ?, next_step = ?, blockers = ?, artifact_refs = ?, depends_on = ?,
                         success_criterion = ?, weak_criterion = ?, version = ?, updated_at = ?
                     WHERE id = ?
                     """,
-                    (last_finding, next_step, blockers, artifact_refs, new_criterion, weak, new_version, now_str, task_id),
+                    (last_finding, next_step, blockers, artifact_refs, depends_on, new_criterion, weak,
+                     new_version, now_str, task_id),
                 )
                 conn.execute(
                     """

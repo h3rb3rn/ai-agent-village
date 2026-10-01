@@ -61,7 +61,8 @@ ACTION_SPECS: Dict[str, Dict[str, Any]] = {
         "properties": {
             "action": {"enum": ["create", "claim", "progress", "complete", "yield"]},
             "task_id": _s(80), "title": _s(200), "success_criterion": _s(400), "goal": _s(400),
-            "evidence": _s(800), "last_finding": _s(600), "next_step": _s(400), "blockers": _s(400)},
+            "evidence": _s(800), "last_finding": _s(600), "next_step": _s(400), "blockers": _s(400),
+            "depends_on": {"type": "array", "items": _s(80), "maxItems": 5}},
         "required": ["action"]},
     "team_operation": {
         "doc": "operation=create(project,goal,role)|join(team_id)|leave(team_id)|create_subtask(team_id,title,criterion)|claim_subtask(subtask_id)|complete_subtask(subtask_id,evidence)|propose_role(team_id,role,rationale)|vote_role(proposal_id,choice)",
@@ -69,7 +70,8 @@ ACTION_SPECS: Dict[str, Dict[str, Any]] = {
             "operation": {"enum": ["create", "join", "leave", "create_subtask", "claim_subtask", "complete_subtask", "propose_role", "vote_role"]},
             "project": _s(200), "goal": _s(400), "role": _s(120), "team_id": _s(80), "title": _s(200),
             "criterion": _s(400), "subtask_id": _s(80), "evidence": _s(800), "rationale": _s(400),
-            "proposal_id": _s(80), "choice": {"enum": ["accept", "reject"]}},
+            "proposal_id": _s(80), "choice": {"enum": ["accept", "reject"]},
+            "depends_on": {"type": "array", "items": _s(80), "maxItems": 5}},
         "required": ["operation"]},
     "artifact_operation": {
         "doc": "operation=register(artifact_id,file_path,test_description?)|claim_success(artifact_id,test_command?)|verify(artifact_id,test_command,details?)|adopt(artifact_id)|inspect(artifact_id)",

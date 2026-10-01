@@ -14,6 +14,25 @@ class TeamStoreTests(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
+    def test_depends_on_is_stored_and_returned(self):
+        # P87 (operator: Forschungslabor-Dashboard, "Abhaengigkeiten zu
+        # anderen Themen/Projekten").
+        other = self.store.create("01-a", {"project": "other", "goal": "g", "role": "researcher"})
+        team = self.store.create("01-a", {"project": "p", "goal": "g", "role": "researcher",
+                                          "depends_on": [other["id"]]})
+        self.assertEqual(team["depends_on"], [other["id"]])
+        self.assertEqual(self.store.get(team["id"])["depends_on"], [other["id"]])
+
+    def test_depends_on_missing_is_an_empty_list_not_an_error(self):
+        team = self.store.create("01-a", {"project": "p", "goal": "g", "role": "researcher"})
+        self.assertEqual(team["depends_on"], [])
+
+    def test_list_all_returns_every_team_newest_first(self):
+        first = self.store.create("01-a", {"project": "first", "goal": "g", "role": "researcher"})
+        second = self.store.create("01-b", {"project": "second", "goal": "g", "role": "researcher"})
+        ids = [t["id"] for t in self.store.list_all()]
+        self.assertEqual(ids[:2], [second["id"], first["id"]])
+
     def test_multiple_agents_share_role_and_keep_subtasks(self):
         team = self.store.create("01-alpha", {
             "project": "archive",
