@@ -345,10 +345,24 @@ class CompileEditionTests(unittest.TestCase):
         self.assertIn("&lt;script&gt;", rendered)
 
     def test_includes_issue_number_and_previous_edition_reference(self):
+        # P89: compile_edition()'s default language is now English (matching
+        # the dashboard's new English-default/German-selectable chrome);
+        # structural labels only - content/ids are unaffected either way.
         self.store.open_edition("01-king", PEERS, edition_id="2026-09-27", rng=random.Random(1))
         rendered = self.store.compile_edition("2026-09-28")
-        self.assertIn("Ausgabe Nr. 2", rendered)
+        self.assertIn("Issue No. 2", rendered)
         self.assertIn("2026-09-27", rendered)
+
+    def test_german_lang_renders_the_original_german_structural_labels(self):
+        # P89: lang="de" must reproduce exactly the labels every edition
+        # archived before this package already used (the write-once German
+        # index.html files on disk never get touched again, but a fresh
+        # compile_edition(lang="de") call must still match their wording).
+        self.store.open_edition("01-king", PEERS, edition_id="2026-09-27", rng=random.Random(1))
+        rendered = self.store.compile_edition("2026-09-28", lang="de")
+        self.assertIn('<html lang="de">', rendered)
+        self.assertIn("Ausgabe Nr. 2", rendered)
+        self.assertIn("eröffnet von", rendered)
 
     def test_headline_is_rendered_above_the_body_in_the_interview_grid(self):
         self.store.submit_contribution("2026-09-28", "02-explorer", "mood", "Curiosity Drives Progress",
@@ -372,7 +386,7 @@ class CompileEditionTests(unittest.TestCase):
                                         "An in-depth, longer-form piece.")
         self.store.review_contribution("2026-09-28", "02-explorer", "column", REVIEWER_AGENT, "approve")
         rendered = self.store.compile_edition("2026-09-28")
-        self.assertIn("<h2>Kolumne</h2>", rendered)
+        self.assertIn("<h2>Column</h2>", rendered)
         self.assertIn("An in-depth, longer-form piece.", rendered)
         # A column must not also show up in the per-resident interview grid.
         self.assertNotIn("<h3>02-explorer</h3>", rendered)
@@ -385,7 +399,7 @@ class CompileEditionTests(unittest.TestCase):
                                         "Zusammenfassung der Sitzung mit Abstimmungsergebnis.")
         self.store.review_contribution("2026-09-28", "02-explorer", "meetings", REVIEWER_AGENT, "approve")
         rendered = self.store.compile_edition("2026-09-28")
-        self.assertIn("<h2>Aus den Sitzungen</h2>", rendered)
+        self.assertIn("<h2>From the Meetings</h2>", rendered)
         self.assertIn("Zusammenfassung der Sitzung mit Abstimmungsergebnis.", rendered)
         # Must not also show up in the per-resident interview grid.
         self.assertNotIn("<h3>02-explorer</h3>", rendered)
@@ -397,8 +411,8 @@ class CompileEditionTests(unittest.TestCase):
         edition = self.store.get_edition("2026-09-28")
         opener, responder = edition["game_pair"]
         rendered = self.store.compile_edition("2026-09-28")
-        self.assertIn(f"{opener} (stellt die Aufgabe)", rendered)
-        self.assertIn(f"{responder} (antwortet)", rendered)
+        self.assertIn(f"{opener} (poses the task)", rendered)
+        self.assertIn(f"{responder} (answers)", rendered)
 
     def test_game_result_shows_task_and_solution_structurally(self):
         # P82 (operator feedback: "enthaelt nur die Auslosung, nicht die
@@ -415,10 +429,10 @@ class CompileEditionTests(unittest.TestCase):
         self.store.review_contribution("2026-09-28", opener, "game_result", REVIEWER_AGENT, "approve")
         self.store.review_contribution("2026-09-28", responder, "game_result", REVIEWER_AGENT, "approve")
         rendered = self.store.compile_edition("2026-09-28")
-        self.assertIn("<strong>Aufgabe:</strong> Was ist die Hauptstadt von Bayern?", rendered)
-        self.assertIn("<strong>Lösung:</strong> Muenchen", rendered)
-        self.assertIn(f"{opener} (stellt die Aufgabe)", rendered)
-        self.assertIn(f"{responder} (antwortet)", rendered)
+        self.assertIn("<strong>Task:</strong> Was ist die Hauptstadt von Bayern?", rendered)
+        self.assertIn("<strong>Solution:</strong> Muenchen", rendered)
+        self.assertIn(f"{opener} (poses the task)", rendered)
+        self.assertIn(f"{responder} (answers)", rendered)
 
     def test_missing_headline_does_not_break_rendering(self):
         # Defensive: a pre-P69 row (already-archived editions) has no
@@ -446,7 +460,7 @@ class CompileEditionTests(unittest.TestCase):
         self.store.declare_game_winner("2026-09-28", "01-king", winner, "klare Antwort zuerst")
         rendered = self.store.compile_edition("2026-09-28")
         self.assertIn('<p class="game-winner">', rendered)
-        self.assertIn(f"<strong>Gewinner:</strong> {winner}", rendered)
+        self.assertIn(f"<strong>Winner:</strong> {winner}", rendered)
         self.assertIn("klare Antwort zuerst", rendered)
 
     def test_undeclared_winner_renders_no_winner_line(self):
@@ -456,7 +470,7 @@ class CompileEditionTests(unittest.TestCase):
     def test_drawn_tie_renders_as_unentschieden(self):
         self.store.declare_game_winner("2026-09-28", "01-king", "unentschieden", "Beide Schaetzungen gleich weit daneben.")
         rendered = self.store.compile_edition("2026-09-28")
-        self.assertIn("<strong>Gewinner:</strong> Unentschieden", rendered)
+        self.assertIn("<strong>Winner:</strong> Tie", rendered)
 
 
 class DeclareGameWinnerTests(unittest.TestCase):

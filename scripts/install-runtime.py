@@ -100,6 +100,9 @@ def build_targets(source):
         Path('/usr/local/share/ai-village/web/observatory.html'): source / 'web/observatory.html',
         Path('/usr/local/share/ai-village/web/observatory.css'): source / 'web/observatory.css',
         Path('/usr/local/share/ai-village/web/observatory.js'): source / 'web/observatory.js',
+        # P89: dashboard i18n dictionaries (English default, German selectable).
+        Path('/usr/local/share/ai-village/web/lang/en.json'): source / 'web/lang/en.json',
+        Path('/usr/local/share/ai-village/web/lang/de.json'): source / 'web/lang/de.json',
     }
     # Runtime imports are installed as a self-contained package. Keeping these
     # modules in the targeted release prevents a live host from running a newer

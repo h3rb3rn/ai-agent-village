@@ -497,6 +497,17 @@ class RuntimeTests(unittest.TestCase):
         self.assertTrue(pdf_path.read_bytes().startswith(b'%PDF-1.4'))
         self.assertIn(b'Feeling good.', pdf_path.read_bytes())
         self.assertTrue(stat.S_IMODE(pdf_path.stat().st_mode) & 0o040, 'PDF not group-readable')
+        # P89: a German sibling of both files is archived alongside the
+        # (now-default) English ones - same write-once/group-readable
+        # guarantees, structural labels only translated (content identical).
+        archive_path_de = archive_path.parent / 'index.de.html'
+        self.assertTrue(archive_path_de.exists())
+        self.assertIn('Feeling good.', archive_path_de.read_text())
+        self.assertIn('<html lang="de">', archive_path_de.read_text())
+        pdf_path_de = archive_path.parent / 'gazette.de.pdf'
+        self.assertTrue(pdf_path_de.exists())
+        self.assertTrue(pdf_path_de.read_bytes().startswith(b'%PDF-1.4'))
+        self.assertIn(b'Feeling good.', pdf_path_de.read_bytes())
 
     def test_chronicler_sees_pending_review_hint_until_cleared(self):
         # The review gate itself must not become the exact reliability

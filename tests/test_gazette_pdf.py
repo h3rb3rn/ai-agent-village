@@ -92,9 +92,11 @@ class EditionSectionsTests(unittest.TestCase):
         self.store.close_edition("2026-09-27", "01-king")
         result = self.store.close_edition("2026-09-28", "01-king")
         sections = edition_sections(result, result["issue_number"], result["previous_id"])
+        # P89: edition_sections()'s default language is now English, same
+        # as village/gazette.py's compile_edition() default.
         joined = " ".join(text for _, text in sections)
-        self.assertIn(f"Ausgabe Nr. {result['issue_number']}", joined)
-        self.assertIn("Vorherige Ausgabe: 2026-09-27", joined)
+        self.assertIn(f"Issue No. {result['issue_number']}", joined)
+        self.assertIn("Previous edition: 2026-09-27", joined)
 
     def test_headline_becomes_a_bold_subhead_line(self):
         self.store.submit_contribution("2026-09-28", "04-artisan", "village_news", "Well Repaired",
@@ -112,7 +114,7 @@ class EditionSectionsTests(unittest.TestCase):
         result = self.store.close_edition("2026-09-28", "01-king")
         sections = edition_sections(result, result["issue_number"], result["previous_id"])
         headings = [text for level, text in sections if level == "heading"]
-        self.assertIn("Kolumne", headings)
+        self.assertIn("Column", headings)
         joined = " ".join(text for _, text in sections)
         self.assertIn("An in-depth, longer-form piece.", joined)
 
@@ -131,10 +133,20 @@ class EditionSectionsTests(unittest.TestCase):
         result = self.store.close_edition("2026-09-28", "01-king")
         sections = edition_sections(result, result["issue_number"], result["previous_id"])
         joined = " ".join(text for _, text in sections)
-        self.assertIn(f"{opener} (stellt die Aufgabe)", joined)
-        self.assertIn(f"{responder} (antwortet)", joined)
-        self.assertIn("Aufgabe: Hauptstadt von Bayern?", joined)
-        self.assertIn("Lösung: Muenchen", joined)
+        self.assertIn(f"{opener} (poses the task)", joined)
+        self.assertIn(f"{responder} (answers)", joined)
+        self.assertIn("Task: Hauptstadt von Bayern?", joined)
+        self.assertIn("Solution: Muenchen", joined)
+
+    def test_german_lang_reproduces_the_original_german_structural_labels(self):
+        # P89: lang="de" must match the wording every PDF archived before
+        # this package already used.
+        result = self.store.close_edition("2026-09-28", "01-king")
+        sections = edition_sections(result, result["issue_number"], result["previous_id"], lang="de")
+        headings = [text for level, text in sections if level == "heading"]
+        self.assertIn("Spiel des Tages", headings)
+        pdf = render_edition_pdf(result, result["issue_number"], result["previous_id"], lang="de")
+        self.assertIn(b"(Spiel des Tages) Tj", pdf)
 
     def test_pdf_renders_the_headline_in_bold_courier(self):
         self.store.submit_contribution("2026-09-28", "04-artisan", "village_news", "Well Repaired",

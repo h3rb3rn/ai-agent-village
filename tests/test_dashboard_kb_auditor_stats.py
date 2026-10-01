@@ -25,24 +25,32 @@ class DashboardStatsTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         return json.loads(result.stdout.strip())
 
+    # P89: the dashboard's default rendered language changed from German to
+    # English (the WebUI chrome used to be German-only while the content was
+    # already English; an i18n layer now makes English the default with
+    # German selectable) - these assertions were updated to the new default
+    # English strings accordingly. The harness's `fetch` always resolves
+    # `{ok:false}` (no language file reachable in this DOM-free sandbox), so
+    # this also exercises observatory.js's built-in English literal fallback.
+
     def test_knowledgebase_ratio_shows_private_shared_split_and_percentages(self):
         out = self.render({"stats": {"total": 9023, "by_scope": {"private": 354, "shared": 8669},
                                      "agents": [{"agent": "dataset-import", "memories": 8669}]}})
         html = out["memoryRatio"]
-        self.assertIn("9.023 Einträge gesamt", html)
+        self.assertIn("9,023 entries total", html)
         self.assertIn("354", html)
-        self.assertIn("8.669", html)
+        self.assertIn("8,669", html)
         self.assertIn("96 %", html)  # shared share, rounded
-        self.assertIn("aus Wissensimport", html)
-        self.assertIn("von Agenten selbst geschrieben", html)
+        self.assertIn("from knowledge import", html)
+        self.assertIn("written by agents themselves", html)
 
     def test_knowledgebase_ratio_handles_the_empty_substrate_without_crashing(self):
         out = self.render({"stats": {"total": 0, "by_scope": {"private": 0, "shared": 0}, "agents": []}})
-        self.assertIn("Noch keine Einträge", out["memoryRatio"])
+        self.assertIn("No entries in the memory substrate yet", out["memoryRatio"])
 
     def test_auditor_not_yet_run_is_reported_honestly_not_as_an_error(self):
         out = self.render({"auditor": {"cycles_run": 0, "delivered_total": 0, "last_cycle_at": None}})
-        self.assertIn("Noch kein Zyklus gelaufen", out["auditorSummary"])
+        self.assertIn("No cycle has run yet", out["auditorSummary"])
         self.assertEqual(out["auditorCategories"], "")
 
     def test_auditor_summary_splits_deterministic_versus_llm_and_shows_unresolved(self):
@@ -54,18 +62,18 @@ class DashboardStatsTests(unittest.TestCase):
             "llm_candidates": 6, "llm_findings": 2, "llm_unresolved": 4,
         }})
         summary = out["auditorSummary"]
-        self.assertIn("5 Eingriffe gesamt", summary)
+        self.assertIn("5 interventions total", summary)
         self.assertIn("3", summary)  # deterministic count
-        self.assertIn("per Python-Skript", summary)
-        self.assertIn("per LLM", summary)
-        self.assertIn("6 LLM-Kandidaten", summary)
+        self.assertIn("via Python script", summary)
+        self.assertIn("via LLM", summary)
+        self.assertIn("6 LLM candidates", summary)
         self.assertIn("4", summary)  # unresolved count present
-        self.assertIn("ohne verwertbares Urteil", summary)
+        self.assertIn("without an actionable verdict", summary)
         categories = out["auditorCategories"]
-        self.assertIn("Persönlich", categories)
-        self.assertIn("Gemeinschaftswissen", categories)
-        self.assertIn("Fremdes Verzeichnis", categories)
-        self.assertIn("Formatfehler", categories)
+        self.assertIn("Personal", categories)
+        self.assertIn("Shared knowledge", categories)
+        self.assertIn("Foreign directory", categories)
+        self.assertIn("Format error", categories)
 
 
 if __name__ == "__main__":

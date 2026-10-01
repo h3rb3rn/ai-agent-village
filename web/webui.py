@@ -317,6 +317,18 @@ class Handler(BaseHTTPRequestHandler):
         if route in ('/assets/observatory.css', '/assets/observatory.js'):
             name = route.rsplit('/', 1)[-1]
             return send(self, HTTPStatus.OK, (ASSETS / name).read_text(), 'text/css' if name.endswith('.css') else 'text/javascript')
+        # P89 (operator feedback: "die Inhalte auf Englisch, die WebUI aber
+        # auf Deutsch [...] Sprachauswahl Englisch (default) und Deutsch"):
+        # the two language dictionaries, served as static JSON the SPA
+        # fetches once on load (see observatory.js's loadI18n()). Path
+        # fixed to exactly these two filenames - no traversal surface.
+        if route in ('/assets/lang/en.json', '/assets/lang/de.json'):
+            name = route.rsplit('/', 1)[-1]
+            try:
+                return send(self, HTTPStatus.OK, (ASSETS / 'lang' / name).read_text(encoding='utf-8'),
+                           'application/json; charset=utf-8')
+            except OSError:
+                return send(self, HTTPStatus.NOT_FOUND, 'not found', 'text/plain')
         if route == '/api/observatory':
             params = parse_qs(urlsplit(self.path).query)
             hours = {'1': 1, '6': 6, '24': 24, '168': 168}.get(params.get('hours', ['1'])[0], 1)
@@ -350,10 +362,18 @@ class Handler(BaseHTTPRequestHandler):
                 date_to = date_from
             return send(self, HTTPStatus.OK, json.dumps(calendar_index(date_from, date_to), ensure_ascii=False), 'application/json; charset=utf-8')
         if route.startswith('/gazette/') and route.endswith('.html'):
-            edition_id = route.removeprefix('/gazette/').removesuffix('.html')
-            if not re.fullmatch(r'[0-9]{4}-[0-9]{2}-[0-9]{2}', edition_id):
+            # P89: an optional ".de." infix selects the German archive
+            # sibling (see web/runtime.py's close dispatch, which writes
+            # both index.html [English, the new default] and
+            # index.de.html [German] for every edition going forward);
+            # the plain /gazette/<id>.html form - what every already-
+            # shared link uses - is completely unchanged.
+            m = re.fullmatch(r'/gazette/([0-9]{4}-[0-9]{2}-[0-9]{2})(\.de)?\.html', route)
+            if not m:
                 return send(self, HTTPStatus.NOT_FOUND, 'not found', 'text/plain')
-            target = GAZETTE_ARCHIVE / edition_id / 'index.html'
+            edition_id, de_suffix = m.group(1), m.group(2)
+            filename = 'index.de.html' if de_suffix else 'index.html'
+            target = GAZETTE_ARCHIVE / edition_id / filename
             if not target.is_file():
                 return send(self, HTTPStatus.NOT_FOUND, 'not found', 'text/plain')
             try:
@@ -362,17 +382,20 @@ class Handler(BaseHTTPRequestHandler):
                 return send(self, HTTPStatus.NOT_FOUND, 'not found', 'text/plain')
             return send(self, HTTPStatus.OK, body)
         if route.startswith('/gazette/') and route.endswith('.pdf'):
-            edition_id = route.removeprefix('/gazette/').removesuffix('.pdf')
-            if not re.fullmatch(r'[0-9]{4}-[0-9]{2}-[0-9]{2}', edition_id):
+            m = re.fullmatch(r'/gazette/([0-9]{4}-[0-9]{2}-[0-9]{2})(\.de)?\.pdf', route)
+            if not m:
                 return send(self, HTTPStatus.NOT_FOUND, 'not found', 'text/plain')
-            target = GAZETTE_ARCHIVE / edition_id / 'gazette.pdf'
+            edition_id, de_suffix = m.group(1), m.group(2)
+            filename = 'gazette.de.pdf' if de_suffix else 'gazette.pdf'
+            target = GAZETTE_ARCHIVE / edition_id / filename
             if not target.is_file():
                 return send(self, HTTPStatus.NOT_FOUND, 'not found', 'text/plain')
             try:
                 body = target.read_bytes()
             except OSError:
                 return send(self, HTTPStatus.NOT_FOUND, 'not found', 'text/plain')
-            return send(self, HTTPStatus.OK, body, 'application/pdf', f'attachment; filename="gazette-{edition_id}.pdf"')
+            dl_name = f'gazette-{edition_id}-de.pdf' if de_suffix else f'gazette-{edition_id}.pdf'
+            return send(self, HTTPStatus.OK, body, 'application/pdf', f'attachment; filename="{dl_name}"')
         if route == '/contact':
             if not signal_authorized(self): return auth_required(self)
             return send(self, HTTPStatus.OK, page("Signal-Zugang bestätigt", "<p>Die Anmeldung ist aktiv. Kehre zu <a href=\"/signals#contact\">Signale & Kontakt</a> zurück und sende deine Nachricht.</p>"))

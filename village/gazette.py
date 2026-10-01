@@ -109,22 +109,93 @@ GAME_POOL = (
     "Wortkette: abwechselnd ein Wort anhaengen, das mit dem letzten Buchstaben beginnt",
 )
 
-# German section headings for the compiled edition (P55) - the dashboard
-# and its nav are German-language; contribution CONTENT is never translated
-# or paraphrased, only these structural labels are.
-KIND_LABELS = {
-    "state": "Verfassung",
-    "mood": "Stimmung",
-    "wishes": "Wünsche an die Gemeinschaft",
-    "topics": "Bewegende Themen",
-    "suggestions": "Verbesserungsvorschläge",
-    "learning": "Erkenntnis des Tages",
-    "outlook": "Ausblick",
-    "game_result": "Spielergebnis",
-    "village_news": "Dorfmeldungen",
-    "meetings": "Aus den Sitzungen",
-    "column": "Kolumne",
+# P89 (operator feedback: the dashboard chrome moved to English-default/
+# German-selectable, and the operator explicitly confirmed the archive's
+# STRUCTURAL headings should follow suit - "Auch uebersetzen"). Only these
+# fixed labels (section headings, kind names, role/winner phrasing) are
+# ever translated; contribution CONTENT (what a resident actually wrote)
+# is never translated or paraphrased, in either language. "en" is the
+# default to match the dashboard's new default; "de" is kept exactly as
+# it read before this package for every edition archived up to now.
+GAZETTE_LABELS: Dict[str, Dict[str, Any]] = {
+    "en": {
+        "kind": {
+            "state": "Constitution",
+            "mood": "Mood",
+            "wishes": "Wishes to the community",
+            "topics": "Topics on their mind",
+            "suggestions": "Improvement suggestions",
+            "learning": "Insight of the day",
+            "outlook": "Outlook",
+            "game_result": "Game result",
+            "village_news": "Village news",
+            "meetings": "From the meetings",
+            "column": "Column",
+        },
+        "doc_title": "AI Village Gazette – Issue {edition_id}",
+        "masthead": "AI Village Gazette",
+        "issue_meta": "Issue No. {n} · {edition_id} · opened by {who}",
+        "previous_edition": "Previous edition: {id}",
+        "section_village_news": "Village News",
+        "section_game": "Game of the Day",
+        "section_meetings": "From the Meetings",
+        "section_column": "Column",
+        "section_interviews": "Interviews",
+        "drawn_pair": "Drawn: {a} ({role_a}) vs. {b} ({role_b})",
+        "drawn_single": "Drawn: {a}",
+        "role_task": "poses the task",
+        "role_answer": "answers",
+        "role_participant": "Participant",
+        "task_label": "Task",
+        "solution_label": "Solution",
+        "winner_label": "Winner",
+        "tie_label": "Tie",
+    },
+    "de": {
+        "kind": {
+            "state": "Verfassung",
+            "mood": "Stimmung",
+            "wishes": "Wünsche an die Gemeinschaft",
+            "topics": "Bewegende Themen",
+            "suggestions": "Verbesserungsvorschläge",
+            "learning": "Erkenntnis des Tages",
+            "outlook": "Ausblick",
+            "game_result": "Spielergebnis",
+            "village_news": "Dorfmeldungen",
+            "meetings": "Aus den Sitzungen",
+            "column": "Kolumne",
+        },
+        "doc_title": "AI Village Gazette – Ausgabe {edition_id}",
+        "masthead": "AI Village Gazette",
+        "issue_meta": "Ausgabe Nr. {n} · {edition_id} · eröffnet von {who}",
+        "previous_edition": "Vorherige Ausgabe: {id}",
+        "section_village_news": "Dorfmeldungen",
+        "section_game": "Spiel des Tages",
+        "section_meetings": "Aus den Sitzungen",
+        "section_column": "Kolumne",
+        "section_interviews": "Interviews",
+        "drawn_pair": "Ausgelost: {a} ({role_a}) vs. {b} ({role_b})",
+        "drawn_single": "Ausgelost: {a}",
+        "role_task": "stellt die Aufgabe",
+        "role_answer": "antwortet",
+        "role_participant": "Teilnehmer",
+        "task_label": "Aufgabe",
+        "solution_label": "Lösung",
+        "winner_label": "Gewinner",
+        "tie_label": "Unentschieden",
+    },
 }
+DEFAULT_GAZETTE_LANG = "en"
+
+
+def gazette_labels(lang: Optional[str]) -> Dict[str, Any]:
+    return GAZETTE_LABELS.get(lang or DEFAULT_GAZETTE_LANG, GAZETTE_LABELS[DEFAULT_GAZETTE_LANG])
+
+
+# Backward-compatible alias: village/gazette_pdf.py and any external caller
+# that imported the old flat (German-only) KIND_LABELS directly still gets
+# a working dict - the German kind-name mapping, unchanged.
+KIND_LABELS = GAZETTE_LABELS["de"]["kind"]
 
 # P55 assigned this to 09-chronicler - thematically fitting (this module's
 # own docstring already named the Gazette as meant to "serve as a chronicle
@@ -490,7 +561,7 @@ class GazetteStore:
             c.commit()
         return self.get_edition(edition_id)  # type: ignore
 
-    def compile_edition(self, edition_id: str) -> str:
+    def compile_edition(self, edition_id: str, lang: Optional[str] = None) -> str:
         """Deterministically render one edition to HTML (P55/Stufe 3 of
         docs/analysis/GAZETTE-PLAN-2026-09-28.md) - no LLM-generated
         connective text, to avoid the hallucination/format risk documented
@@ -498,7 +569,13 @@ class GazetteStore:
         of what residents actually submitted AND 09-chronicler approved
         (see REVIEWER_AGENT/review_contribution) - a pending or rejected
         contribution never appears here, regardless of how long ago it
-        was submitted."""
+        was submitted.
+
+        P89: ``lang`` only ever swaps the structural labels below (see
+        GAZETTE_LABELS) - a resident's own submitted content is identical,
+        word for word, in every language's rendering of the same edition.
+        """
+        labels = gazette_labels(lang)
         edition = self.get_edition(edition_id)
         if not edition:
             raise ValueError(f"unknown gazette edition: {edition_id}")
@@ -528,7 +605,7 @@ class GazetteStore:
             head = f'<h4>{esc(c_["headline"])}</h4>' if c_.get("headline") else ""
             return f'<article>{head}<p>{esc(c_["content"])}</p><p class="byline">— {esc(c_["agent"])}</p></article>'
 
-        def game_article(c_: Dict[str, Any], role_label: str) -> str:
+        def game_article(c_: Dict[str, Any], role_label: str, labels_: Dict[str, Any]) -> str:
             # P82 (operator feedback: "enthaelt nur die Auslosung, nicht die
             # Frage und Antwort"): the structured task/solution fields (see
             # submit_contribution()) are rendered explicitly here, instead
@@ -537,20 +614,20 @@ class GazetteStore:
             head = f'<h4>{esc(c_["headline"])}</h4>' if c_.get("headline") else ""
             extra = f'<p>{esc(c_["content"])}</p>' if c_.get("content") else ""
             return (f'<article>{head}<p class="byline">{esc(c_["agent"])} ({role_label})</p>'
-                    f'<p><strong>Lösung:</strong> {esc(c_["solution"])}</p>{extra}</article>')
+                    f'<p><strong>{esc(labels_["solution_label"])}:</strong> {esc(c_["solution"])}</p>{extra}</article>')
 
+        html_lang = lang or DEFAULT_GAZETTE_LANG
         parts = [
-            "<!doctype html><html lang=\"de\"><head><meta charset=\"utf-8\">"
-            f"<title>AI Village Gazette – Ausgabe {esc(edition_id)}</title></head><body>",
-            "<h1>AI Village Gazette</h1>",
-            f'<p class="meta">Ausgabe Nr. {issue_number} &middot; {esc(edition_id)} '
-            f"&middot; eröffnet von {esc(edition['opened_by'])}</p>",
+            f"<!doctype html><html lang=\"{esc(html_lang)}\"><head><meta charset=\"utf-8\">"
+            f"<title>{esc(labels['doc_title'].format(edition_id=edition_id))}</title></head><body>",
+            f"<h1>{esc(labels['masthead'])}</h1>",
+            f'<p class="meta">{labels["issue_meta"].format(n=issue_number, edition_id=esc(edition_id), who=esc(edition["opened_by"]))}</p>',
         ]
         if previous_id:
-            parts.append(f'<p class="prev-link">Vorherige Ausgabe: {esc(previous_id)}</p>')
+            parts.append(f'<p class="prev-link">{esc(labels["previous_edition"].format(id=previous_id))}</p>')
 
         if by_kind.get("village_news"):
-            parts.append("<section><h2>Dorfmeldungen</h2>")
+            parts.append(f"<section><h2>{esc(labels['section_village_news'])}</h2>")
             for c_ in by_kind["village_news"]:
                 parts.append(article(c_))
             parts.append("</section>")
@@ -568,26 +645,25 @@ class GazetteStore:
         # taken from whichever game_result contribution has one (normally
         # the opener's, but either can carry it), shown once rather than
         # buried inside prose.
-        parts.append("<section><h2>Spiel des Tages</h2>")
+        parts.append(f"<section><h2>{esc(labels['section_game'])}</h2>")
         parts.append(f'<p>{esc(edition["game_name"])}</p>')
         pair = edition["game_pair"]
         role_of = {}
         if len(pair) >= 2:
-            role_of = {pair[0]: "stellt die Aufgabe", pair[1]: "antwortet"}
-            parts.append(f'<p class="byline">Ausgelost: {esc(pair[0])} (stellt die Aufgabe) '
-                         f'vs. {esc(pair[1])} (antwortet)</p>')
+            role_of = {pair[0]: labels["role_task"], pair[1]: labels["role_answer"]}
+            parts.append(f'<p class="byline">{esc(labels["drawn_pair"].format(a=pair[0], b=pair[1], role_a=labels["role_task"], role_b=labels["role_answer"]))}</p>')
         elif pair:
-            parts.append(f'<p class="byline">Ausgelost: {esc(pair[0])}</p>')
+            parts.append(f'<p class="byline">{esc(labels["drawn_single"].format(a=pair[0]))}</p>')
         game_results = by_kind.get("game_result", [])
         task_text = next((c_["task"] for c_ in game_results if c_.get("task")), "")
         if task_text:
-            parts.append(f'<p><strong>Aufgabe:</strong> {esc(task_text)}</p>')
+            parts.append(f'<p><strong>{esc(labels["task_label"])}:</strong> {esc(task_text)}</p>')
         for c_ in game_results:
-            parts.append(game_article(c_, role_of.get(c_["agent"], "Teilnehmer")))
+            parts.append(game_article(c_, role_of.get(c_["agent"], labels["role_participant"]), labels))
         if edition.get("game_winner"):
-            winner_label = "Unentschieden" if edition["game_winner"] == "unentschieden" else esc(edition["game_winner"])
+            winner_label = labels["tie_label"] if edition["game_winner"] == "unentschieden" else esc(edition["game_winner"])
             note = f' – {esc(edition["game_winner_note"])}' if edition.get("game_winner_note") else ""
-            parts.append(f'<p class="game-winner"><strong>Gewinner:</strong> {winner_label}{note}</p>')
+            parts.append(f'<p class="game-winner"><strong>{esc(labels["winner_label"])}:</strong> {winner_label}{note}</p>')
         parts.append("</section>")
 
         if by_kind.get("meetings"):
@@ -595,7 +671,7 @@ class GazetteStore:
             # decisions/votes get their own section, same prominence as
             # Dorfmeldungen/Kolumne, distinct from the per-resident interview
             # grid below.
-            parts.append("<section><h2>Aus den Sitzungen</h2>")
+            parts.append(f"<section><h2>{esc(labels['section_meetings'])}</h2>")
             for c_ in by_kind["meetings"]:
                 parts.append(article(c_))
             parts.append("</section>")
@@ -604,7 +680,7 @@ class GazetteStore:
             # P69 (operator feedback): "Gelegentlich Kolumnen waeren schoen" -
             # occasional, longer-form pieces get their own section, distinct
             # from the per-resident interview grid below.
-            parts.append("<section><h2>Kolumne</h2>")
+            parts.append(f"<section><h2>{esc(labels['section_column'])}</h2>")
             for c_ in by_kind["column"]:
                 parts.append(article(c_))
             parts.append("</section>")
@@ -612,14 +688,14 @@ class GazetteStore:
         interview_kinds = [k for k in CONTRIBUTION_KINDS if k not in ("village_news", "game_result", "meetings", "column")]
         agents_with_content = sorted({c_["agent"] for k in interview_kinds for c_ in by_kind.get(k, [])})
         if agents_with_content:
-            parts.append("<section><h2>Interviews</h2>")
+            parts.append(f"<section><h2>{esc(labels['section_interviews'])}</h2>")
             for agent in agents_with_content:
                 parts.append(f"<article><h3>{esc(agent)}</h3>")
                 for kind in interview_kinds:
                     match = next((c_ for c_ in by_kind.get(kind, []) if c_["agent"] == agent), None)
                     if match:
                         head = f'<p class="headline">{esc(match["headline"])}</p>' if match.get("headline") else ""
-                        parts.append(f'{head}<p><strong>{esc(KIND_LABELS.get(kind, kind))}:</strong> {esc(match["content"])}</p>')
+                        parts.append(f'{head}<p><strong>{esc(labels["kind"].get(kind, kind))}:</strong> {esc(match["content"])}</p>')
                 parts.append("</article>")
             parts.append("</section>")
 

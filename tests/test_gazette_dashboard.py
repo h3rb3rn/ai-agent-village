@@ -52,6 +52,12 @@ class GazetteDashboardTests(unittest.TestCase):
         (archive_dir / "index.html").write_text(compiled["compiled_html"], encoding="utf-8")
         (archive_dir / "gazette.pdf").write_bytes(
             render_edition_pdf(compiled, compiled["issue_number"], compiled["previous_id"]))
+        # P89: the German archive sibling web/runtime.py's close dispatch
+        # now also writes for every edition going forward.
+        compiled_de = store.compile_edition(edition["id"], lang="de")
+        (archive_dir / "index.de.html").write_text(compiled_de, encoding="utf-8")
+        (archive_dir / "gazette.de.pdf").write_bytes(
+            render_edition_pdf(compiled, compiled["issue_number"], compiled["previous_id"], lang="de"))
 
         # A second edition that is still open with an unreviewed contribution -
         # must never appear on the list, regardless of how it is filtered.
@@ -110,6 +116,27 @@ class GazetteDashboardTests(unittest.TestCase):
         self.assertEqual(response.getheader("Content-Type"), "application/pdf")
         self.assertIn("attachment", response.getheader("Content-Disposition", ""))
 
+    def test_german_archive_html_is_served_for_a_compiled_edition(self):
+        status, body = self.request("/gazette/2026-09-20.de.html")
+        self.assertEqual(status, 200)
+        self.assertIn('<html lang="de">', body)
+        self.assertIn("Feeling good.", body)  # content identical, labels only translated
+        self.assertNotIn("More books please.", body)
+
+    def test_german_archive_pdf_is_served_for_a_compiled_edition(self):
+        status, body, response = self.request("/gazette/2026-09-20.de.pdf", raw=True)
+        self.assertEqual(status, 200)
+        self.assertTrue(body.startswith(b"%PDF-1.4"))
+        self.assertIn(b"Feeling good.", body)
+        self.assertEqual(response.getheader("Content-Type"), "application/pdf")
+
+    def test_german_archive_404s_when_only_the_english_sibling_exists(self):
+        # An edition whose close happened before this package shipped (or
+        # whose German render failed) never gets a retroactive ".de." file -
+        # the write-once guarantee is per file, not "per edition".
+        status, _ = self.request("/gazette/2026-09-21.de.html")  # open, never compiled
+        self.assertEqual(status, 404)
+
     def test_archive_pdf_404s_when_no_archive_file_exists(self):
         status, _ = self.request("/gazette/2026-09-21.pdf")  # open, never compiled/archived
         self.assertEqual(status, 404)
@@ -122,7 +149,8 @@ class GazetteDashboardTests(unittest.TestCase):
 
     def test_archive_route_rejects_non_date_and_traversal_ids(self):
         for bad in ("/gazette/../../../etc/passwd.html", "/gazette/not-a-date.html", "/gazette/2026-09-20/../secret.html",
-                    "/gazette/../../../etc/passwd.pdf", "/gazette/not-a-date.pdf"):
+                    "/gazette/../../../etc/passwd.pdf", "/gazette/not-a-date.pdf",
+                    "/gazette/../../../etc/passwd.de.html", "/gazette/not-a-date.de.pdf"):
             status, _ = self.request(bad)
             self.assertEqual(status, 404, bad)
 

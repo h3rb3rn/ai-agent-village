@@ -91,6 +91,9 @@ RELEASE_FILES = [
     ("web/observatory.html", "share/web/observatory.html", 0o644),
     ("web/observatory.css", "share/web/observatory.css", 0o644),
     ("web/observatory.js", "share/web/observatory.js", 0o644),
+    # P89: dashboard i18n dictionaries (English default, German selectable).
+    ("web/lang/en.json", "share/web/lang/en.json", 0o644),
+    ("web/lang/de.json", "share/web/lang/de.json", 0o644),
 ]
 
 

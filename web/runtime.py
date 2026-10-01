@@ -2322,6 +2322,21 @@ class Resident:
                                     archive_path.write_text(compiled_html, encoding='utf-8')
                                     try: archive_path.chmod(0o640)
                                     except OSError: pass
+                                # P89 (operator, confirmed in scope: "Auch
+                                # uebersetzen" for the archive's structural
+                                # headings): a German sibling file, same
+                                # write-once guarantee, written independently
+                                # of the English one above - a failure here
+                                # must not lose the already-written English
+                                # archive or block the close itself.
+                                archive_path_de = archive_dir / 'index.de.html'
+                                if not archive_path_de.exists():
+                                    try:
+                                        compiled_html_de = self.gazette.compile_edition(edition_id, lang='de')
+                                        archive_path_de.write_text(compiled_html_de, encoding='utf-8')
+                                        archive_path_de.chmod(0o640)
+                                    except Exception as exc:
+                                        self.event('gazette_de_archive_failed', f'edition={edition_id}; error={exc}')
                                 # P66: Gazette PDF export (Stufe 4, Teil 2) -
                                 # same write-once archive guarantee as the
                                 # HTML file. A rendering failure here must
@@ -2336,6 +2351,16 @@ class Resident:
                                         pdf_path.chmod(0o640)
                                     except Exception as exc:
                                         self.event('gazette_pdf_failed', f'edition={edition_id}; error={exc}')
+                                # P89: German PDF sibling, same rationale as
+                                # index.de.html above.
+                                pdf_path_de = archive_dir / 'gazette.de.pdf'
+                                if not pdf_path_de.exists():
+                                    try:
+                                        pdf_bytes_de = render_edition_pdf(result, issue_number, previous_id, lang='de')
+                                        pdf_path_de.write_bytes(pdf_bytes_de)
+                                        pdf_path_de.chmod(0o640)
+                                    except Exception as exc:
+                                        self.event('gazette_pdf_de_failed', f'edition={edition_id}; error={exc}')
                             self.event('gazette_compiled', f'edition={edition_id}')
                             self.feedback(name, json.dumps(result, ensure_ascii=False)[:2000], True)
                 elif op == 'declare_winner':

@@ -111,11 +111,11 @@ class BoardDirectMessageTransparencyTests(unittest.TestCase):
           {"event":"direct_message","agent":"02-explorer","timestamp":"2026-01-01T10:06:00Z","detail":"to=03-x; chars=20"}
         ]"""
         info = self.render_info(events)
-        self.assertIn("+2 private Direktgespräche", info)
+        self.assertIn("+2 private direct conversations", info)
         self.assertNotIn("chars=", info)
 
     def test_no_direct_messages_omits_the_clause_entirely(self):
         events = """[{"event":"board_message","agent":"01-king","timestamp":"2026-01-01T10:00:00Z","detail":"message=Alpha topic."}]"""
         info = self.render_info(events)
-        self.assertNotIn("private Direktgespräche", info)
+        self.assertNotIn("private direct conversations", info)
         self.assertNotIn("+0", info)

@@ -159,15 +159,20 @@ def build_pdf(sections: List[Section]) -> bytes:
     return bytes(out)
 
 
-def edition_sections(edition: Dict[str, Any], issue_number: int, previous_id: str | None) -> List[Section]:
+def edition_sections(edition: Dict[str, Any], issue_number: int, previous_id: str | None,
+                      lang: str | None = None) -> List[Section]:
     """Build the same structural sections as village/gazette.py's
     compile_edition() - deliberately duplicated rather than refactored to
     share code, since compile_edition() is already tested and shipped;
     see docs/evidence/P66.md for the tradeoff. Only ever includes
     review_status == 'approved' contributions, same guarantee as the HTML
-    archive."""
-    from village.gazette import CONTRIBUTION_KINDS, KIND_LABELS
+    archive.
 
+    P89: ``lang`` selects the same structural labels (GAZETTE_LABELS) the
+    HTML archive uses - contribution content is identical either way."""
+    from village.gazette import CONTRIBUTION_KINDS, gazette_labels
+
+    labels = gazette_labels(lang)
     approved = [c for c in edition["contributions"] if c.get("review_status") == "approved"]
     by_kind: Dict[str, List[Dict[str, Any]]] = {}
     for contrib in approved:
@@ -184,15 +189,15 @@ def edition_sections(edition: Dict[str, Any], issue_number: int, previous_id: st
         out.append(("body", f"{c['content']} — {c['agent']}"))
         return out
 
-    sections: List[Section] = [("title", "AI Village Gazette")]
-    meta = f"Ausgabe Nr. {issue_number} · {edition['id']} · eröffnet von {edition['opened_by']}"
+    sections: List[Section] = [("title", labels["masthead"])]
+    meta = labels["issue_meta"].format(n=issue_number, edition_id=edition['id'], who=edition['opened_by'])
     sections.append(("body", meta))
     if previous_id:
-        sections.append(("body", f"Vorherige Ausgabe: {previous_id}"))
+        sections.append(("body", labels["previous_edition"].format(id=previous_id)))
     sections.append(("gap", ""))
 
     if by_kind.get("village_news"):
-        sections.append(("heading", "Dorfmeldungen"))
+        sections.append(("heading", labels["section_village_news"]))
         for c in by_kind["village_news"]:
             sections.extend(article_sections(c))
         sections.append(("gap", ""))
@@ -202,25 +207,26 @@ def edition_sections(edition: Dict[str, Any], issue_number: int, previous_id: st
     # - same structural fix as compile_edition(): explicit roles instead of
     # a bare name pair, and the task/solution fields shown directly rather
     # than relying on 'content' alone.
-    sections.append(("heading", "Spiel des Tages"))
+    sections.append(("heading", labels["section_game"]))
     sections.append(("body", edition["game_name"]))
     pair = edition["game_pair"]
     role_of: Dict[str, str] = {}
     if len(pair) >= 2:
-        role_of = {pair[0]: "stellt die Aufgabe", pair[1]: "antwortet"}
-        sections.append(("body", f"Ausgelost: {pair[0]} (stellt die Aufgabe) vs. {pair[1]} (antwortet)"))
+        role_of = {pair[0]: labels["role_task"], pair[1]: labels["role_answer"]}
+        sections.append(("body", labels["drawn_pair"].format(
+            a=pair[0], b=pair[1], role_a=labels["role_task"], role_b=labels["role_answer"])))
     elif pair:
-        sections.append(("body", f"Ausgelost: {pair[0]}"))
+        sections.append(("body", labels["drawn_single"].format(a=pair[0])))
     game_results = by_kind.get("game_result", [])
     task_text = next((c["task"] for c in game_results if c.get("task")), "")
     if task_text:
-        sections.append(("body", f"Aufgabe: {task_text}"))
+        sections.append(("body", f"{labels['task_label']}: {task_text}"))
     for c in game_results:
         out: List[Section] = []
         if c.get("headline"):
             out.append(("subhead", c["headline"]))
-        role = role_of.get(c["agent"], "Teilnehmer")
-        out.append(("body", f"Lösung: {c['solution']} — {c['agent']} ({role})"))
+        role = role_of.get(c["agent"], labels["role_participant"])
+        out.append(("body", f"{labels['solution_label']}: {c['solution']} — {c['agent']} ({role})"))
         if c.get("content"):
             out.append(("body", c["content"]))
         sections.extend(out)
@@ -229,7 +235,7 @@ def edition_sections(edition: Dict[str, Any], issue_number: int, previous_id: st
     if by_kind.get("column"):
         # P69 (operator feedback): "Gelegentlich Kolumnen waeren schoen" -
         # occasional, longer-form pieces get their own section.
-        sections.append(("heading", "Kolumne"))
+        sections.append(("heading", labels["section_column"]))
         for c in by_kind["column"]:
             sections.extend(article_sections(c))
         sections.append(("gap", ""))
@@ -237,7 +243,7 @@ def edition_sections(edition: Dict[str, Any], issue_number: int, previous_id: st
     interview_kinds = [k for k in CONTRIBUTION_KINDS if k not in ("village_news", "game_result", "column")]
     agents_with_content = sorted({c["agent"] for k in interview_kinds for c in by_kind.get(k, [])})
     if agents_with_content:
-        sections.append(("heading", "Interviews"))
+        sections.append(("heading", labels["section_interviews"]))
         for agent in agents_with_content:
             sections.append(("body", agent))
             for kind in interview_kinds:
@@ -245,11 +251,12 @@ def edition_sections(edition: Dict[str, Any], issue_number: int, previous_id: st
                 if match:
                     if match.get("headline"):
                         sections.append(("subhead", match["headline"]))
-                    sections.append(("body", f"{KIND_LABELS.get(kind, kind)}: {match['content']}"))
+                    sections.append(("body", f"{labels['kind'].get(kind, kind)}: {match['content']}"))
             sections.append(("gap", ""))
 
     return sections
 
 
-def render_edition_pdf(edition: Dict[str, Any], issue_number: int, previous_id: str | None) -> bytes:
-    return build_pdf(edition_sections(edition, issue_number, previous_id))
+def render_edition_pdf(edition: Dict[str, Any], issue_number: int, previous_id: str | None,
+                        lang: str | None = None) -> bytes:
+    return build_pdf(edition_sections(edition, issue_number, previous_id, lang))
