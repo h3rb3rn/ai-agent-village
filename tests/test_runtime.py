@@ -134,7 +134,12 @@ class RuntimeTests(unittest.TestCase):
         )
         self.agent.state['collaboration_pressure'] = COLLABORATION_PRESSURE_CEILING
         self.agent.state['invalid_streak'] = LOOP_BREAKER_STREAK
-        self.assertEqual(self.agent.effective_allowed_actions(), ['idle'])
+        # P86: the loop-breaker's menu is widened past bare ['idle'] now,
+        # but 'memory_search' (this checkpoint's own required_action) is
+        # deliberately not one of the widened names - the real assertion
+        # is just that the loop-breaker is active at all.
+        self.assertTrue(self.agent._loop_breaker_active())
+        self.assertNotIn('memory_search', self.agent.effective_allowed_actions())
         self.execute('idle')
         self.assertTrue(self.agent.state['last_result']['ok'], self.agent.state['last_result'])
 

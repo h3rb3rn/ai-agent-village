@@ -959,11 +959,15 @@ class LoopBreakerTests(unittest.TestCase):
         for _ in range(rt.LOOP_BREAKER_REPEAT):
             self.reject('{"name":"broken')
             self.agent.state['invalid_streak'] = 0  # simulate an unrelated success in between
-        self.assertEqual(self.agent.effective_allowed_actions(), ['idle'])
+        self.assertTrue(self.agent._loop_breaker_active())
 
     def test_high_consecutive_streak_also_triggers_the_loop_breaker(self):
         self.agent.state['invalid_streak'] = rt.LOOP_BREAKER_STREAK
-        self.assertEqual(self.agent.effective_allowed_actions(), ['idle'])
+        # P86: widened past bare ['idle'] - 'idle' itself must still always
+        # be offered, and the menu must still exclude ordinary solo actions.
+        allowed = self.agent.effective_allowed_actions()
+        self.assertIn('idle', allowed)
+        self.assertNotIn('execute_bash', allowed)
 
     def test_below_both_thresholds_keeps_normal_actions(self):
         self.agent.state['invalid_streak'] = rt.LOOP_BREAKER_STREAK - 1
@@ -974,9 +978,39 @@ class LoopBreakerTests(unittest.TestCase):
         with patch.object(self.agent, 'memory', return_value={'items': []}):
             ctx = json.loads(self.agent.snapshot())
         self.assertIn('loop_breaker_note', ctx)
-        self.assertEqual(set(ctx['tools'].keys()), {'idle'})
+        # P86: the loop-breaker's own menu widened past bare 'idle' to also
+        # admit the *_operation names every hard gate already exempts -
+        # 'tools' must mirror exactly that widened menu, no more.
+        self.assertEqual(set(ctx['tools'].keys()),
+                         {'idle', 'meeting_operation', 'gazette_operation', 'calendar_operation'})
 
     def test_guard_rejects_non_idle_actions_while_loop_broken_but_allows_idle(self):
         self.agent.state['invalid_streak'] = rt.LOOP_BREAKER_STREAK
         self.assertFalse(self.agent.guard('execute_bash', {'command': 'ls'}))
         self.assertTrue(self.agent.guard('idle', {}))
+
+    def test_a_correct_meeting_report_gets_through_and_resets_the_streak_while_loop_broken(self):
+        # P86 (live incident: 09-chronicler and 04-artisan, two different
+        # models, each stuck 4+ hours spanning a service restart): both
+        # kept retrying the exact same, genuinely correct meeting_operation
+        # report every cycle, each attempt rejected only because it was not
+        # in the (bare-'idle') allowed set - never because the content was
+        # wrong. The widened loop-breaker menu must let exactly this
+        # through, not just idle.
+        self.agent.meetings.schedule('jour_fixe', 'status update', '2026-09-24T10:00:00Z', meeting_id='m1')
+        self.agent.state['invalid_streak'] = rt.LOOP_BREAKER_STREAK
+        self.agent.execute({'tool_call': {'name': 'meeting_operation', 'arguments': {
+            'operation': 'report', 'meeting_id': 'm1', 'achieved': 'x', 'evidence': 'y',
+            'next_step': 'z', 'blockers': ''}}})
+        self.assertTrue(self.agent.state['last_result']['ok'], self.agent.state['last_result'])
+        self.assertEqual(self.agent.state.get('invalid_streak', 0), 0)
+
+    def test_an_unrelated_operation_attempt_still_fails_its_own_validation_while_loop_broken(self):
+        # Widening the menu must never make a genuinely wrong attempt
+        # silently succeed - gazette_operation is now admitted by the
+        # loop-breaker, but with no open edition it still fails exactly as
+        # it always would, on its own merits.
+        self.agent.state['invalid_streak'] = rt.LOOP_BREAKER_STREAK
+        self.agent.execute({'tool_call': {'name': 'gazette_operation', 'arguments': {
+            'operation': 'contribute', 'kind': 'mood', 'headline': 'H', 'content': 'C'}}})
+        self.assertFalse(self.agent.state['last_result']['ok'])

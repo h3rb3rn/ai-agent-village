@@ -1200,14 +1200,21 @@ class Resident:
         # P72: "Hilfe zur Selbsthilfe" - make the loop visible to the
         # resident itself, not just silently restrict it. Mirrors why the
         # effective allowed-action list (above, in 'tools') is idle-only.
-        if self.effective_allowed_actions() == ['idle']:
+        if self._loop_breaker_active():
             streak = self.state.get('invalid_streak', 0)
+            # P86: idle is no longer the ONLY accepted action here (see
+            # _loop_breaker_allowed_actions()) - named explicitly so the
+            # hint stays true regardless of which of the widened set this
+            # resident's own role actually permits.
+            allowed_now = ', '.join(self._loop_breaker_allowed_actions())
             context['loop_breaker_note'] = (
                 f"You have failed to produce a valid action {streak} times in a row (or kept "
                 "repeating the exact same rejected content), and it has not started working. "
-                "This cycle only accepts idle - send {\"name\":\"idle\",\"arguments\":{}} to reset "
-                "cleanly. Next cycle, try a genuinely different, simpler approach to whatever you "
-                f"were attempting. {self.sparring_partner_hint()}"
+                f"This cycle only accepts: {allowed_now}. If one of them resolves a real open "
+                "obligation (e.g. an open meeting's own report), send exactly that and nothing "
+                "else; otherwise send {\"name\":\"idle\",\"arguments\":{}} to reset cleanly. Next "
+                "cycle, try a genuinely different, simpler approach to whatever you were "
+                f"attempting. {self.sparring_partner_hint()}"
             )
         query = own_project['title'] if own_project else 'observation experiment evidence project'
         try:
@@ -1362,9 +1369,35 @@ class Resident:
         that is the only shape the schema and system prompt admit.
         Triggers on either a long consecutive invalid_streak, or the same
         rejected fingerprint recurring across a longer window regardless
-        of successes in between (see LOOP_BREAKER_STREAK/_REPEAT)."""
+        of successes in between (see LOOP_BREAKER_STREAK/_REPEAT).
+
+        P86 (live incident: 09-chronicler and 04-artisan, two different
+        models, each stuck 4+ hours spanning a service restart): a plain
+        idle-only restriction assumes the model will eventually try idle
+        once nothing else works - both of these never did, even once.
+        Both kept retrying the exact same, genuinely correct action (an
+        open meeting's own report) every single cycle, each attempt
+        rejected only because 'meeting_operation' was not in the allowed
+        set right then - not because the content was ever wrong. See
+        _loop_breaker_allowed_actions() for the fix."""
+        if self._loop_breaker_active():
+            return self._loop_breaker_allowed_actions()
+        return self.policy.allowed_actions
+
+    def _loop_breaker_active(self):
+        """True exactly when effective_allowed_actions() would otherwise
+        widen past self.policy.allowed_actions (P72's trigger condition,
+        factored out of effective_allowed_actions() in P86 so both it and
+        every other "is the loop-breaker on right now" check - e.g. the
+        loop_breaker_note hint, and guard()'s own idle-was-the-only-option
+        check - agree on the same single source of truth instead of each
+        re-deriving it, which is exactly what let P86's own widening
+        silently break the P83 deadlock fix the first time it was written
+        (effective_allowed_actions() == ['idle'] stopped being a reliable
+        "loop-breaker is active" signal once it could return more than
+        one name)."""
         if self.state.get('invalid_streak', 0) >= LOOP_BREAKER_STREAK:
-            return ['idle']
+            return True
         window = [r for r in self.state.get('recent_rejected_fingerprints', [])
                  if time.time() - r['at'] < REPEATED_REJECTION_WINDOW_SECONDS]
         if window:
@@ -1372,8 +1405,30 @@ class Resident:
             for r in window:
                 counts[r['fp']] = counts.get(r['fp'], 0) + 1
             if max(counts.values()) >= LOOP_BREAKER_REPEAT:
-                return ['idle']
-        return self.policy.allowed_actions
+                return True
+        return False
+
+    def _loop_breaker_allowed_actions(self):
+        """P86: 'idle' plus the three *_operation names every hard gate in
+        guard() already universally exempts from blocking (meeting_block,
+        contribute_block, calendar_plan_block etc. all read
+        "if name not in ('meeting_operation', 'gazette_operation',
+        'calendar_operation', 'idle')" or a subset of it) - these are, by
+        this codebase's own existing design, never themselves the problem
+        a hard gate escalates against; they are each gate's own resolving
+        action. Widening the loop-breaker to admit them too costs nothing
+        when the model really is just confused (a malformed attempt at one
+        of them still fails its own validation exactly as before, and
+        invalid_streak keeps climbing) - but it is the one thing that lets
+        a model which keeps correctly identifying the right action and
+        right content ever actually get it through, instead of being
+        trapped by a stale streak that has nothing to do with that
+        specific, currently-correct attempt. Filtered through this
+        resident's own role policy so a loop-broken agent is still never
+        offered an action their role would not otherwise permit."""
+        widened = ('idle', 'meeting_operation', 'gazette_operation', 'calendar_operation')
+        allowed = [name for name in widened if name in self.policy.allowed_actions]
+        return allowed or ['idle']
 
     def guard(self, name, args):
         if is_paused(self.pause_marker) and name in ('execute_bash', 'start_job'):
@@ -1419,21 +1474,26 @@ class Resident:
         # COLLABORATION_PRESSURE_CEILING - otherwise an agent could dodge a
         # checkpoint forever by always choosing idle. That must stay intact.
         # But a second, independent mechanism (P72's loop-breaker) can restrict
-        # effective_allowed_actions() to ['idle'] ONLY - and when BOTH are active
-        # at once, gating idle here too creates a real, observed deadlock with
-        # zero valid actions left ("last_result: {action: idle, ok: False}",
-        # live on 05-interpreter with collaboration_pressure=158). The narrow
-        # fix: 'idle' is only ever exempted from THIS gate in that exact
-        # cornercase - when it is the only action the agent is allowed to
-        # attempt at all - never as a general, permanent exemption.
+        # effective_allowed_actions() to a small, curated set (P86: 'idle' plus
+        # whichever *_operation names resolve a real pending obligation) - and
+        # when BOTH are active at once, gating idle here too creates a real,
+        # observed deadlock with zero valid actions left ("last_result:
+        # {action: idle, ok: False}", live on 05-interpreter with
+        # collaboration_pressure=158). The narrow fix: 'idle' is only ever
+        # exempted from THIS gate while the loop-breaker is actually
+        # restricting this resident's menu - never as a general, permanent
+        # exemption (P86 widened the menu itself but did not change this:
+        # none of meeting_operation/gazette_operation/calendar_operation
+        # satisfy is_checkpoint_action either, so they would hit this same
+        # block too - idle must still be the guaranteed escape valve).
         # execute() already resets invalid_streak (and with it, what
         # effective_allowed_actions() computed just above would return) to 0
         # for any well-formed decision before guard() ever runs - recomputing
-        # "was idle the only option" here would therefore always see the
+        # "was the loop-breaker active" here would therefore always see the
         # post-reset, unrestricted list. Read the flag execute() captured
         # beforehand instead.
-        idle_was_only_option = self.state.pop('_idle_was_only_option', False)
-        if checkpoint and not (name == 'idle' and idle_was_only_option) \
+        loop_breaker_was_active = self.state.pop('_loop_breaker_was_active', False)
+        if checkpoint and not (name == 'idle' and loop_breaker_was_active) \
                 and not is_checkpoint_action(checkpoint, name) and checkpoint.required_action:
             pressure = int(self.state.get('collaboration_pressure', 0)) + 1
             self.state['collaboration_pressure'] = pressure
@@ -1872,15 +1932,16 @@ class Resident:
             # private last-response.json (bounded, redacted) and is only counted.
             self.state['last_rejected_fingerprint'] = fp
             return
-        # P83: captured *before* the reset below, since guard() runs after
-        # this point and would otherwise always see a fresh invalid_streak==0
-        # - by definition, reaching here with a real tool_call already means
-        # decision.py let this action name through effective_allowed_actions(),
-        # so the only way 'idle' gets this far while the loop-breaker was
-        # active is if idle was *itself* that one permitted name. guard()
-        # uses this to tell "idle, and it was the only option" apart from an
-        # ordinary idle choice with the full action list available.
-        self.state['_idle_was_only_option'] = self.effective_allowed_actions() == ['idle']
+        # P83/P86: captured *before* the reset below, since guard() runs
+        # after this point and would otherwise always see a fresh
+        # invalid_streak==0 - by definition, reaching here with a real
+        # tool_call already means decision.py let this action name through
+        # effective_allowed_actions(), so this flag tells guard() whether
+        # that happened only because the loop-breaker's own (possibly
+        # widened, see _loop_breaker_allowed_actions()) menu permitted it,
+        # as opposed to an ordinary choice with the full action list
+        # available.
+        self.state['_loop_breaker_was_active'] = self._loop_breaker_active()
         self.state['invalid_streak'] = 0
         if parsed.get('extra_blocks_ignored'):
             # P51: the model sent several action blocks in one turn (a narrated
