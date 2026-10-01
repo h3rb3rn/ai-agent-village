@@ -12,6 +12,7 @@ from village.gazette import GazetteStore
 from village.calendar import CalendarStore
 from village.coordinator import CoordinationStore
 from village.teams import TeamStore
+from village.residents import list_residents, get_resident, get_resident_art
 from event_history import read_history
 
 ROOT = Path(os.environ["VILLAGE_ROOT"])
@@ -312,7 +313,7 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args): pass
     def do_GET(self):
         route = urlsplit(self.path).path
-        if route in ('/', '/dashboard', '/agents', '/habitat', '/board', '/timeline', '/signals', '/gazette', '/lab'):
+        if route in ('/', '/dashboard', '/agents', '/habitat', '/board', '/timeline', '/signals', '/gazette', '/lab', '/residents'):
             return send(self, HTTPStatus.OK, (ASSETS / 'observatory.html').read_text())
         if route in ('/assets/observatory.css', '/assets/observatory.js'):
             name = route.rsplit('/', 1)[-1]
@@ -343,6 +344,25 @@ class Handler(BaseHTTPRequestHandler):
             return send(self, HTTPStatus.OK, json.dumps(gazette_index(), ensure_ascii=False), 'application/json; charset=utf-8')
         if route == '/api/lab':
             return send(self, HTTPStatus.OK, json.dumps(lab_index(), ensure_ascii=False), 'application/json; charset=utf-8')
+        if route == '/api/residents':
+            params = parse_qs(urlsplit(self.path).query)
+            agent_param = params.get('agent', [''])[0]
+            lang = params.get('lang', ['en'])[0]
+            if agent_param:
+                res = get_resident(agent_param, lang=lang, include_art=True)
+                if res:
+                    return send(self, HTTPStatus.OK, json.dumps(res, ensure_ascii=False), 'application/json; charset=utf-8')
+                return send(self, HTTPStatus.NOT_FOUND, json.dumps({'error': 'resident not found'}), 'application/json; charset=utf-8')
+            include_art = params.get('art', ['1'])[0] != '0'
+            return send(self, HTTPStatus.OK, json.dumps(list_residents(lang=lang, include_art=include_art), ensure_ascii=False), 'application/json; charset=utf-8')
+        if route.startswith('/assets/ascii_art/'):
+            filename = route.split('/')[-1]
+            agent_id = filename.replace('.plain.txt', '').replace('.txt', '')
+            plain = '.plain.txt' in filename
+            art = get_resident_art(agent_id, plain=plain)
+            if art:
+                return send(self, HTTPStatus.OK, art, 'text/plain; charset=utf-8')
+            return send(self, HTTPStatus.NOT_FOUND, 'not found', 'text/plain')
         if route == '/api/calendar':
             # P78 (operator: "auch noch Tag/Woche/Monats Ansicht"): a range
             # instead of a single day, so day/week/month all share this one

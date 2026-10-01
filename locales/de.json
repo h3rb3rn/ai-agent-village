@@ -92,5 +92,9 @@
     "pull_blocked": "Remote-Image-Download durch Pull-Never-Richtlinie blockiert.",
     "compute_verified": "GPU-Rechenoperation im Container erfolgreich verifiziert.",
     "compute_failed": "GPU-Berechnungsverifikation fehlgeschlagen."
+  },
+  "residents": {
+    "profile_loaded": "Bewohnerprofil erfolgreich geladen.",
+    "resident_not_found": "Bewohner nicht im Dorfkatalog gefunden."
   }
 }

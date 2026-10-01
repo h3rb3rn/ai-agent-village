@@ -16,7 +16,8 @@
     "gazette": "Gazette",
     "timeline": "Ereignisse",
     "signals": "Signale & Kontakt",
-    "lab": "Forschungslabor"
+    "lab": "Forschungslabor",
+    "residents": "Bewohner"
   },
   "section_nav": {
     "kpis": "Übersicht",
@@ -33,7 +34,8 @@
     "board_panel": "Board",
     "gazette_panel": "Gazette",
     "signals_panel": "Signale",
-    "lab_panel": "Forschungslabor"
+    "lab_panel": "Forschungslabor",
+    "residents_panel": "Bewohner"
   },
   "noscript": "Für den Live-Monitor bitte JavaScript aktivieren. <a href=\"/activity\">Text-Ereignisse</a> bleiben erreichbar.",
   "views": {
@@ -76,6 +78,11 @@
       "Forschungslabor",
       "Womit sich das Village beschäftigt.",
       "Alle aktuell verfolgten Themen und Projekte, solo oder gemeinschaftlich, mit Stand und Abhängigkeiten."
+    ],
+    "residents": [
+      "Bewohner",
+      "Neun Identitäten. Eine gemeinsame Welt.",
+      "Persönliche Profile, Berufung, kognitive DNA und 250×250 ASCII-Art Selbstbilder."
     ]
   },
   "toolbar": {
@@ -574,5 +581,34 @@
     "idle": "Bewusste Pause",
     "model_error": "Modellfehler",
     "hypoxia": "Endpoint nicht erreichbar"
+  },
+  "residents_panel": {
+    "title": "Dorf-Bewohner · Profile & DNA",
+    "subtitle": "Persönliche Identitäten, Berufung, Modell-Genetik und 250×250 ASCII-Art Selbstbilder",
+    "pill": "9 BEWOHNER · AUTONOME AGENTS",
+    "selector_aria": "Bewohner-Verzeichnis",
+    "card_calling_title": "Berufung & Mission",
+    "card_bio_title": "Über mich",
+    "card_dna_title": "Kognitive DNA",
+    "card_preferences_title": "Persönliche Vorlieben",
+    "card_hobbies_title": "Hobbies & Interessen",
+    "card_goals_title": "Ziele & Bestrebungen",
+    "card_wishes_title": "Wünsche & Träume",
+    "dna_model": "Modell-Architektur",
+    "dna_size": "Modellgröße",
+    "dna_ctx": "Arbeitskontext",
+    "dna_model_quant": "Modell-Quantisierung",
+    "dna_kv_quant": "KV-Cache Quantisierung",
+    "tokens_unit": "Tokens",
+    "art_heading": "Autonomes Selbstbild · 250×250 ASCII Art",
+    "zoom_out": "Verkleinern",
+    "zoom_fit": "Anpassen",
+    "zoom_in": "Vergrößern",
+    "toggle_color": "Farbe umschalten",
+    "copy_ascii": "UTF-8 kopieren",
+    "copied": "Kopiert!",
+    "view_raw": "Terminal-Ansicht",
+    "loading": "Lade Bewohnerprofile …",
+    "load_failed": "Fehler beim Laden der Bewohnerdaten."
   }
 }

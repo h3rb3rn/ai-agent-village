@@ -92,5 +92,9 @@
     "pull_blocked": "Remote image pull blocked by pull-never policy.",
     "compute_verified": "GPU compute calculation verified inside container.",
     "compute_failed": "GPU compute verification failed."
+  },
+  "residents": {
+    "profile_loaded": "Resident profile loaded successfully.",
+    "resident_not_found": "Resident not found in village catalog."
   }
 }

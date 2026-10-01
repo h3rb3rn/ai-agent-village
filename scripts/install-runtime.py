@@ -109,8 +109,12 @@ def build_targets(source):
     # runtime with an older, incomplete import tree.
     for module in ('__init__.py', 'actions.py', 'collaboration.py', 'policy.py', 'prompting.py', 'tools.py', 'auditor.py', 'auditor_llm.py', 'artifacts.py', 'authority.py', 'config.py',
                    'containers.py', 'control.py', 'coordinator.py', 'inference.py',
-                   'events.py', 'event_retention.py', 'firewatch.py', 'jobs.py', 'lifecycle.py', 'meetings.py', 'gazette.py', 'gazette_pdf.py', 'calendar.py', 'finetune.py', 'research.py', 'research_protocol.py', 'interventions.py', 'research_tasks.py', 'rollout.py', 'lineage.py', 'recovery.py', 'security.py', 'teams.py'):
+                   'events.py', 'event_retention.py', 'firewatch.py', 'jobs.py', 'lifecycle.py', 'meetings.py', 'gazette.py', 'gazette_pdf.py', 'calendar.py', 'finetune.py', 'research.py', 'research_protocol.py', 'interventions.py', 'research_tasks.py', 'rollout.py', 'lineage.py', 'recovery.py', 'security.py', 'teams.py', 'residents.py'):
         targets[Path('/usr/local/lib/ai-village/village') / module] = source / 'village' / module
+    art_dir = source / 'village/assets/ascii_art'
+    if art_dir.is_dir():
+        for art_file in sorted(art_dir.glob('*.txt')):
+            targets[Path('/usr/local/lib/ai-village/village/assets/ascii_art') / art_file.name] = art_file
     return targets
 
 
