@@ -40,7 +40,7 @@ Betreiber-Schätzung von 5 Token/s. Erster Ladevorgang mit neuem Kontext:
 ## Umsetzung
 
 `village/auditor_llm.py`:
-- Feste, validierte Produktionsparameter (`NUM_CTX=190000`, `KEEP_ALIVE="96h"`,
+- Feste, validierte Produktionsparameter (`NUM_CTX=262144` ← **angehoben von 190000 auf 256 K (2026-10-02)** per Betreiber-Direktive: max. nativer Kontext von `qwen3.6:35b`, Q4_0 KV-Cache kostet ~1440 MiB bei 256 K auf 4× Tesla M10 — gut innerhalb der ~9,7 GiB VRAM-Reserve nach den Modell-Gewichten; `KEEP_ALIVE="96h"`,
   `think=False` explizit als Bool, nicht nur weggelassen – das Weglassen allein
   reichte beim Modell nicht, Thinking blieb an).
 - `RESPONSE_SCHEMA`: erzwungenes JSON-Format (`has_issue`, `category`,
