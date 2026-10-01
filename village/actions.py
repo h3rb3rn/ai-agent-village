@@ -165,14 +165,15 @@ ACTION_SPECS: Dict[str, Dict[str, Any]] = {
     # silently.
     "calendar_operation": {
         "doc": "operation=create(title,kind,scheduled_date,start_time,duration_minutes,attendees?,recurrence?,"
-              "notes?)|reschedule(event_id,new_date?,new_time?,reason?)|cancel(event_id,reason?,whole_series?)|"
-              f"respond(event_id,response,proposed_date?,proposed_time?)|list(date_from?,date_to?); kind: "
-              f"{'/'.join(_CALENDAR_KINDS)}; date=YYYY-MM-DD, time=HH:MM; recurrence=none/daily_weekday/weekly; "
-              "reschedule/cancel hit one occurrence unless whole_series=true; response=accepted/declined/"
+              "notes?,meeting_id?)|reschedule(event_id,new_date?,new_time?,reason?)|cancel(event_id,reason?,"
+              f"whole_series?)|respond(event_id,response,proposed_date?,proposed_time?)|list(date_from?,date_to?); "
+              f"kind: {'/'.join(_CALENDAR_KINDS)}; date=YYYY-MM-DD, time=HH:MM; recurrence=none/daily_weekday/"
+              "weekly; reschedule/cancel hit one occurrence unless whole_series=true; response=accepted/declined/"
               "proposed_alternative.",
         "properties": {
             "operation": {"enum": ["create", "reschedule", "cancel", "respond", "list"]},
             "event_id": _s(60), "title": _s(200), "kind": {"enum": list(_CALENDAR_KINDS)},
+            "meeting_id": _s(80),
             "scheduled_date": _s(10), "start_time": _s(5),
             "duration_minutes": {"type": "integer", "minimum": _CALENDAR_MIN_MINUTES, "maximum": _CALENDAR_MAX_MINUTES},
             "attendees": {"type": "array", "items": _s(40), "maxItems": _CALENDAR_MAX_ATTENDEES},

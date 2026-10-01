@@ -94,6 +94,60 @@ class CreateEventTests(unittest.TestCase):
         self.assertTrue(self.store.has_touched_today("01-king"))
 
 
+class MeetingIdLinkTests(unittest.TestCase):
+    # P84 (operator feedback: "Kalender der Agents muessen sich bei
+    # gemeinsamen Terminen [...] decken und [...] alle Teilnehmer [...]
+    # aufgefuehrt werden") - meeting_id is the exact link that replaces the
+    # old, too-loose same-day/same-kind matching that let every resident
+    # create their own unlinked copy of the same standup/jourfixe.
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="village-calendar-"))
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.store = CalendarStore(self.tmp / "coordination.sqlite3")
+
+    def test_get_event_by_meeting_id_returns_none_when_absent(self):
+        self.assertIsNone(self.store.get_event_by_meeting_id("meeting_jour_fixe_2026093021"))
+
+    def test_create_event_links_meeting_id(self):
+        event = self.store.create_event("01-king", "Jour Fixe", "jourfixe", "2026-09-30", "09:00", 30,
+                                        attendees=["02-explorer"], meeting_id="meeting_jour_fixe_2026093021")
+        self.assertEqual(event["meeting_id"], "meeting_jour_fixe_2026093021")
+        found = self.store.get_event_by_meeting_id("meeting_jour_fixe_2026093021")
+        self.assertEqual(found["id"], event["id"])
+
+    def test_second_create_with_same_meeting_id_is_idempotent(self):
+        # Several residents' hints can fire for the same real meeting round
+        # in the same cycle - whoever lands first wins; every later call,
+        # even with a different organizer/attendees/time, must return that
+        # same event rather than creating a competing second one.
+        first = self.store.create_event("01-king", "Jour Fixe", "jourfixe", "2026-09-30", "09:00", 30,
+                                        attendees=["02-explorer"], meeting_id="meeting_jour_fixe_2026093021")
+        second = self.store.create_event("03-librarian", "Different title", "jourfixe", "2026-09-30", "14:00", 30,
+                                         attendees=["04-artisan"], meeting_id="meeting_jour_fixe_2026093021")
+        self.assertEqual(first["id"], second["id"])
+        self.assertEqual(second["organizer"], "01-king")  # unchanged - the real, first-landed event
+        with self.store._conn() as c:
+            count = c.execute("SELECT COUNT(*) FROM calendar_events WHERE meeting_id=?",
+                              ("meeting_jour_fixe_2026093021",)).fetchone()[0]
+        self.assertEqual(count, 1)
+
+    def test_recurring_series_only_tags_the_first_occurrence(self):
+        # A recurring standup series materializes many future dates in one
+        # call, but only today's occurrence mirrors a real, currently-open
+        # meeting round - future dates' real meeting ids do not exist yet.
+        event = self.store.create_event("01-king", "Standup", "standup", "2026-09-28", "08:00", 15,
+                                        recurrence="daily_weekday", meeting_id="meeting_daily_standup_2026092808")
+        with self.store._conn() as c:
+            rows = c.execute("SELECT scheduled_date, meeting_id FROM calendar_events WHERE series_id=? "
+                             "ORDER BY scheduled_date", (event["series_id"],)).fetchall()
+        self.assertEqual(rows[0]["meeting_id"], "meeting_daily_standup_2026092808")
+        self.assertTrue(all(r["meeting_id"] is None for r in rows[1:]))
+
+    def test_unrelated_events_keep_a_null_meeting_id(self):
+        event = self.store.create_event("01-king", "Focus block", "focus", "2026-09-28", "09:00", 60)
+        self.assertIsNone(event["meeting_id"])
+
+
 class RecurrenceTests(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix="village-calendar-"))

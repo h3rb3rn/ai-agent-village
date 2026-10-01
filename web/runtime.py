@@ -713,26 +713,50 @@ class Resident:
         genuine recurring entry. jour_fixe has NO fixed time at all - it
         reopens irregularly (observed 40 min to 6h apart) whenever the
         previous round closes outside the 08:00 UTC hour, so it only ever
-        gets today's one-off occurrence, never a recurring series."""
+        gets today's one-off occurrence, never a recurring series.
+
+        P84 (operator feedback: "Kalender der Agents muessen sich bei
+        gemeinsamen Terminen [...] decken und in den Termindetails muessen
+        alle Teilnehmer [...] aufgefuehrt werden"): the old version below
+        told every resident to create their OWN entry, same-day/same-kind
+        matching only - live result was up to 9 unlinked rows at 9
+        different times for the one real round. Now keyed on the real
+        meeting's own id (meeting_id, see village/calendar.py's P84
+        comment): the first resident whose create_event() call lands wins
+        and becomes organizer with every peer invited; everyone else is
+        pointed at responding to that exact shared event instead of
+        creating a competing one."""
         meeting = next(iter(self.meetings.active()), None)
         if not meeting:
             return ''
         cal_kind = 'standup' if meeting.get('kind') == 'daily_standup' else 'jourfixe'
-        if any(e['kind'] == cal_kind for e in self.calendar.list_for_agent(self.id, today_str, today_str)):
-            return ''
+        mid = meeting['id']
+        shared = self.calendar.get_event_by_meeting_id(mid)
+        if shared:
+            mine = next((a for a in shared['attendees'] if a['agent_id'] == self.id), None)
+            if not mine or mine['response'] != 'pending':
+                return ''
+            return (
+                f"The shared {cal_kind} calendar entry for the open meeting {mid} already exists "
+                f"({shared['id']}, organized by {shared['organizer']}) and is waiting on your response: "
+                f"calendar_operation respond event_id='{shared['id']}', response='accepted'."
+            )
         meeting_time = str(meeting.get('scheduled_for') or '')[11:16] or '08:00'
+        peers_literal = json.dumps(self.peer_ids(), ensure_ascii=False)
         if cal_kind == 'standup':
             return (
-                f"The daily standup is open right now (real slot ~{meeting_time} UTC, most days) but "
-                "missing from your calendar. Add it once as a recurring entry: calendar_operation "
-                f"create kind='standup', scheduled_date='{today_str}', start_time='{meeting_time}', "
-                "duration_minutes=15, recurrence='daily_weekday' - it repeats itself from then on."
+                f"The daily standup (meeting {mid}) is open right now (real slot ~{meeting_time} UTC, "
+                "most days) but has no shared calendar entry yet. Create the ONE shared entry everyone "
+                f"else will be invited to (not just your own copy): calendar_operation create "
+                f"kind='standup', meeting_id='{mid}', attendees={peers_literal}, scheduled_date='{today_str}', "
+                f"start_time='{meeting_time}', duration_minutes=15, recurrence='daily_weekday'."
             )
         return (
-            f"A jour fixe is open right now at {meeting_time} UTC but missing from your calendar. It "
-            "has no fixed daily time (reopens whenever the previous round closes) - add just today's "
-            f"occurrence: calendar_operation create kind='jourfixe', scheduled_date='{today_str}', "
-            f"start_time='{meeting_time}', duration_minutes=30, recurrence='none'."
+            f"A jour fixe (meeting {mid}) is open right now at {meeting_time} UTC but has no shared "
+            "calendar entry yet. It has no fixed daily time (reopens whenever the previous round "
+            f"closes) - create the ONE shared entry for today, with every peer invited: "
+            f"calendar_operation create kind='jourfixe', meeting_id='{mid}', attendees={peers_literal}, "
+            f"scheduled_date='{today_str}', start_time='{meeting_time}', duration_minutes=30, recurrence='none'."
         )
 
     def finetune_daily_note(self):
@@ -2162,7 +2186,8 @@ class Resident:
                         result = self.calendar.create_event(
                             self.id, args.get('title'), args.get('kind'), args.get('scheduled_date'),
                             args.get('start_time'), args.get('duration_minutes'), args.get('attendees') or [],
-                            args.get('recurrence') or 'none', args.get('notes', ''))
+                            args.get('recurrence') or 'none', args.get('notes', ''),
+                            meeting_id=args.get('meeting_id') or None)
                     except (ValueError, TypeError) as exc:
                         self.feedback(name, str(exc), False)
                     else:

@@ -1033,9 +1033,38 @@ class RuntimeTests(unittest.TestCase):
         self.assertIn("recurrence='none'", hint)
 
     def test_calendar_meeting_sync_hint_absent_once_already_mirrored(self):
+        # P84: the shared entry must be linked via meeting_id - organizing
+        # it (auto-accepted) satisfies this agent, no further hint needed.
         self.agent.meetings.schedule('daily_standup', 'agenda', '2026-09-30T08:04:09+00:00', meeting_id='m1')
         self.agent.calendar.create_event('01-a', 'Standup', 'standup', '2026-09-30', '08:04', 15,
-                                         recurrence='daily_weekday')
+                                         recurrence='daily_weekday', meeting_id='m1')
+        self.assertEqual(self.agent.calendar_meeting_sync_hint('2026-09-30'), '')
+
+    def test_calendar_meeting_sync_hint_create_suggestion_includes_meeting_id_and_peers(self):
+        # P84 (operator feedback: "Kalender der Agents muessen sich [...]
+        # decken [...] alle Teilnehmer [...] aufgefuehrt werden") - the
+        # create suggestion must carry meeting_id and every peer as
+        # attendees, not just a same-day/same-kind check with no link.
+        self.agent.meetings.schedule('jour_fixe', 'agenda', '2026-09-30T14:37:00+00:00', meeting_id='m1')
+        with patch.object(self.agent, 'peer_ids', return_value=['01-b', '01-c']):
+            hint = self.agent.calendar_meeting_sync_hint('2026-09-30')
+        self.assertIn("meeting_id='m1'", hint)
+        self.assertIn('01-b', hint)
+        self.assertIn('01-c', hint)
+
+    def test_calendar_meeting_sync_hint_points_a_pending_invitee_at_respond(self):
+        self.agent.meetings.schedule('jour_fixe', 'agenda', '2026-09-30T14:37:00+00:00', meeting_id='m1')
+        event = self.agent.calendar.create_event('01-b', 'Jour Fixe', 'jourfixe', '2026-09-30', '14:37', 30,
+                                                  attendees=['01-a'], meeting_id='m1')
+        hint = self.agent.calendar_meeting_sync_hint('2026-09-30')
+        self.assertIn('calendar_operation respond', hint)
+        self.assertIn(event['id'], hint)
+
+    def test_calendar_meeting_sync_hint_absent_for_an_already_accepted_invitee(self):
+        self.agent.meetings.schedule('jour_fixe', 'agenda', '2026-09-30T14:37:00+00:00', meeting_id='m1')
+        event = self.agent.calendar.create_event('01-b', 'Jour Fixe', 'jourfixe', '2026-09-30', '14:37', 30,
+                                                  attendees=['01-a'], meeting_id='m1')
+        self.agent.calendar.respond(event['id'], '01-a', 'accepted')
         self.assertEqual(self.agent.calendar_meeting_sync_hint('2026-09-30'), '')
 
     def test_calendar_pending_week_gaps_finds_the_first_open_workday(self):

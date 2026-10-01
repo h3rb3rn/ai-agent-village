@@ -127,6 +127,24 @@ class CalendarStore:
                 duration_minutes INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'planned',
                 recurrence TEXT, series_id TEXT, notes TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL, updated_at TEXT NOT NULL)""")
+            # P84 (operator feedback, 2026-10-01): "Kalender der Agents muessen
+            # sich bei gemeinsamen Terminen wie StandUp oder Jourfixes decken
+            # [...] alle Teilnehmer am gleichen Termin aufgefuehrt werden."
+            # Live finding: calendar_meeting_sync_hint() (P79) told every
+            # resident to create their OWN separate standup/jourfixe entry,
+            # each organizer-only with no shared attendees - 9 unlinked,
+            # differently-timed rows for what should be one shared meeting.
+            # meeting_id ties a calendar occurrence to the real, specific
+            # meetings.py round it mirrors, so "does a shared entry for THIS
+            # round already exist" is an exact lookup instead of fuzzy
+            # same-day-same-kind matching (which already proved too loose -
+            # several same-day near-duplicates were observed live even
+            # before this fix). NULL for every other kind/occurrence.
+            existing_event_cols = {row[1] for row in c.execute("PRAGMA table_info(calendar_events)").fetchall()}
+            if "meeting_id" not in existing_event_cols:
+                c.execute("ALTER TABLE calendar_events ADD COLUMN meeting_id TEXT")
+            c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_calendar_events_meeting_id "
+                     "ON calendar_events(meeting_id) WHERE meeting_id IS NOT NULL")
             c.execute("""CREATE TABLE IF NOT EXISTS calendar_attendees(
                 event_id TEXT NOT NULL REFERENCES calendar_events(id) ON DELETE CASCADE,
                 agent_id TEXT NOT NULL, response TEXT NOT NULL DEFAULT 'pending',
@@ -159,7 +177,19 @@ class CalendarStore:
 
     def create_event(self, organizer: str, title: str, kind: str, scheduled_date: str, start_time: str,
                      duration_minutes: int, attendees: Optional[List[str]] = None,
-                     recurrence: str = "none", notes: str = "", event_id: Optional[str] = None) -> Dict[str, Any]:
+                     recurrence: str = "none", notes: str = "", event_id: Optional[str] = None,
+                     meeting_id: Optional[str] = None) -> Dict[str, Any]:
+        # P84: idempotent on meeting_id, same principle as gazette's
+        # open_edition() - several residents' hints can fire for the same
+        # real meeting round in the same cycle; whichever create_event()
+        # call lands first wins, every later one (even a different
+        # organizer/time/attendee list) just returns that same event rather
+        # than raising or creating a second, competing row.
+        meeting_id = (str(meeting_id).strip() or None) if meeting_id else None
+        if meeting_id:
+            existing = self.get_event_by_meeting_id(meeting_id)
+            if existing:
+                return existing
         title = str(title or "").strip()[:200]
         if not title:
             raise ValueError("calendar event requires a non-empty title")
@@ -195,12 +225,17 @@ class CalendarStore:
         with self._conn() as c:
             for occ_date in occurrence_dates:
                 eid = event_id if (event_id and len(occurrence_dates) == 1) else f"cal_{uuid.uuid4().hex[:12]}"
+                # P84: meeting_id only ever tags the real, requested
+                # occurrence - a recurring series' auto-materialized future
+                # dates mirror no actual meeting round yet, so they must
+                # stay NULL (and thus exempt from the unique index above).
+                occ_meeting_id = meeting_id if occ_date == scheduled_date else None
                 c.execute(
                     "INSERT INTO calendar_events(id,organizer,title,kind,scheduled_date,start_time,"
-                    "duration_minutes,status,recurrence,series_id,notes,created_at,updated_at) "
-                    "VALUES(?,?,?,?,?,?,?,'planned',?,?,?,?,?)",
+                    "duration_minutes,status,recurrence,series_id,notes,meeting_id,created_at,updated_at) "
+                    "VALUES(?,?,?,?,?,?,?,'planned',?,?,?,?,?,?)",
                     (eid, organizer, title, kind, occ_date, start_time, duration_minutes,
-                     recurrence if recurrence != "none" else None, series_id, notes, ts, ts),
+                     recurrence if recurrence != "none" else None, series_id, notes, occ_meeting_id, ts, ts),
                 )
                 c.execute(
                     "INSERT OR IGNORE INTO calendar_attendees(event_id,agent_id,response,updated_at) VALUES(?,?,?,?)",
@@ -233,6 +268,17 @@ class CalendarStore:
                 )
             ]
             return result
+
+    def get_event_by_meeting_id(self, meeting_id: str) -> Optional[Dict[str, Any]]:
+        """The one shared calendar occurrence already mirroring this real
+        meetings.py round, if any (P84) - the exact-match counterpart to
+        the fuzzy same-day-same-kind check that used to let every resident
+        create their own unlinked copy of the same standup/jourfixe."""
+        with self._conn() as c:
+            row = c.execute(
+                "SELECT id FROM calendar_events WHERE meeting_id=?", (meeting_id,)
+            ).fetchone()
+            return self.get_event(row["id"]) if row else None
 
     def list_for_agent(self, agent: str, date_from: Optional[str] = None,
                        date_to: Optional[str] = None) -> List[Dict[str, Any]]:
