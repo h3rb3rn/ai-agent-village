@@ -127,6 +127,8 @@ def compact_context(ctx: Dict[str, Any]) -> Dict[str, Any]:
         out["finetune_daily_note"] = _clip(ctx["finetune_daily_note"], 400)
     if ctx.get("memory_status"):
         out["memory_status"] = _clip(ctx["memory_status"], 200)
+    if ctx.get("resident_profile_note"):
+        out["resident_profile_note"] = _clip(ctx["resident_profile_note"], 500)
     return out
 
 

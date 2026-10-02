@@ -1218,6 +1218,20 @@ class Resident:
         finetune_note = self.finetune_daily_note()
         if finetune_note:
             context['finetune_daily_note'] = finetune_note
+        # P91 (operator directive): trigger unauthored residents to author their profile and 250x250 art
+        if hasattr(self, 'residents'):
+            try:
+                has_profile = bool(self.residents.get_profile(self.id))
+            except Exception:
+                has_profile = False
+            if not has_profile:
+                context['resident_profile_note'] = (
+                    "Your Observatory resident profile and 250x250 ASCII art self-portrait are not yet authored. "
+                    "Please author your profile via profile_operation(operation='update', profession=..., calling=..., "
+                    "personal_info=..., preferences=[...], hobbies=[...], goals=[...], wishes=[...], art_symbol=..., "
+                    "avatar_icon=..., ascii_art_file=... or ascii_art=...). You can create a 250x250 text file (B&W or color) "
+                    "in your home directory and point ascii_art_file to it."
+                )
         if own_project and own_project.get('blockers'):
             context['task_blocker_guidance'] = (
                 f"Your active task {own_project['id']} has blockers: {own_project['blockers']}. "
@@ -2587,6 +2601,7 @@ class Resident:
                                 wishes=args.get('wishes'),
                                 art_symbol=args.get('art_symbol'),
                                 accent_color=args.get('accent_color'),
+                                avatar_icon=args.get('avatar_icon'),
                                 ascii_art=art_content,
                             )
                         except ValueError as exc:

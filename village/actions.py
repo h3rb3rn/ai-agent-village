@@ -221,7 +221,7 @@ ACTION_SPECS: Dict[str, Dict[str, Any]] = {
             "notes": _s(500), "note": _s(400)},
         "required": ["operation"]},
     "profile_operation": {
-        "doc": "operation=view(agent_id?)|update(profession?,calling?,personal_info?,art_symbol?,accent_color?,ascii_art?,ascii_art_file?) -> manage resident profile and 250x250 ASCII art",
+        "doc": "operation=view(agent_id?)|update(profession?,calling?,personal_info?,art_symbol?,accent_color?,avatar_icon?,ascii_art?,ascii_art_file?) -> manage resident profile and 250x250 ASCII art",
         "properties": {
             "operation": {"enum": ["view", "update"]},
             "agent_id": _s(40),
@@ -234,6 +234,7 @@ ACTION_SPECS: Dict[str, Dict[str, Any]] = {
             "wishes": {"type": "array", "items": _s(150), "maxItems": 10},
             "art_symbol": _s(60),
             "accent_color": _s(20),
+            "avatar_icon": _s(10),
             "ascii_art": _s(70000),
             "ascii_art_file": _s(300),
         },
