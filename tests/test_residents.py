@@ -93,8 +93,8 @@ class ResidentCatalogTests(unittest.TestCase):
         self.assertFalse(king["has_profile"])
         self.assertEqual(king["profession"], "")
         self.assertEqual(king["calling"], "")
-        self.assertEqual(king["dna"]["model"], "qwen3.6:35b")
-        self.assertEqual(king["dna"]["context_size"], 98304)
+        self.assertEqual(king["dna"]["model"], "qwen3.8:27b")
+        self.assertEqual(king["dna"]["context_size"], 131072)
 
 
 class AsciiArtDimensionTests(unittest.TestCase):

@@ -104,11 +104,11 @@ RESIDENTS_DATA: List[ResidentProfile] = [
         name="King",
         role="king",
         dna=CognitiveDNA(
-            model="qwen3.6:35b",
-            context_size=98304,
+            model="qwen3.8:27b",
+            context_size=131072,
             model_quant="Q4_K_M",
             kv_cache_quant="q4_0",
-            model_size="35.5B Parameters (~22.6 GiB)",
+            model_size="27.3B Parameters (~17.7 GiB)",
         ),
     ),
     ResidentProfile(
