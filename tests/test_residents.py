@@ -100,7 +100,7 @@ class ResidentCatalogTests(unittest.TestCase):
         self.assertEqual(king["profession"], "")
         self.assertEqual(king["calling"], "")
         self.assertEqual(king["dna"]["model"], "qwen3.6:35b")
-        self.assertEqual(king["dna"]["context_size"], 190000)
+        self.assertEqual(king["dna"]["context_size"], 131072)
         self.assertEqual(king["dna"]["batch_size"], 64)
         self.assertEqual(king["dna"]["num_predict"], 8192)
         self.assertEqual(king["dna"]["think_level"], "medium")
@@ -281,7 +281,7 @@ class ResidentStoreTests(unittest.TestCase):
         # Verify that infer_cognitive_dna returns full Ollama DNA settings
         dna = infer_cognitive_dna("01-king")
         self.assertEqual(dna.model, "qwen3.6:35b")
-        self.assertEqual(dna.context_size, 190000)
+        self.assertEqual(dna.context_size, 131072)
         self.assertEqual(dna.batch_size, 64)
         self.assertEqual(dna.num_predict, 8192)
         self.assertEqual(dna.think_level, "medium")

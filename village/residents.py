@@ -109,9 +109,11 @@ RESIDENTS_DATA: List[ResidentProfile] = [
         id="01-king",
         name="King",
         role="king",
+        # Reduced context size from 190k (190000) to 132k tier (131072) per operator request
+        # to prevent GPU memory pressure / CUDA errors and reduce prompt evaluation latency on 4x Tesla M60.
         dna=CognitiveDNA(
             model="qwen3.6:35b",
-            context_size=190000,
+            context_size=131072,
             model_quant="Q4_K_M",
             kv_cache_quant="q4_0",
             model_size="35.5B Parameters (~22.6 GiB)",
