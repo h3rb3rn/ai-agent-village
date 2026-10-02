@@ -2739,6 +2739,7 @@ class Resident:
                 keep_alive=self.env.get('OLLAMA_KEEP_ALIVE', '10m'),
                 api_token=api_token,
                 response_format=response_format,
+                num_batch=int(self.env['OLLAMA_NUM_BATCH']) if 'OLLAMA_NUM_BATCH' in self.env else None,
             )
         try:
             with urllib.request.urlopen(request, timeout=int(self.env.get('VILLAGE_OLLAMA_TIMEOUT_SECONDS', '3600'))) as response:

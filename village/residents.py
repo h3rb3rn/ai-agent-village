@@ -29,6 +29,12 @@ class CognitiveDNA:
     model_quant: str
     kv_cache_quant: str
     model_size: str
+    batch_size: int = 512
+    num_predict: int = 8192
+    think_level: str = "off"
+    keep_alive: str = "24h"
+    ollama_url: str = ""
+    temperature: float = 0.35
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -104,11 +110,17 @@ RESIDENTS_DATA: List[ResidentProfile] = [
         name="King",
         role="king",
         dna=CognitiveDNA(
-            model="hf.co/unsloth/gpt-oss-20b-GGUF:Q4_K_M",
-            context_size=131072,
+            model="qwen3.6:35b",
+            context_size=190000,
             model_quant="Q4_K_M",
             kv_cache_quant="q4_0",
-            model_size="20.9B Parameters (~10.8 GiB)",
+            model_size="35.5B Parameters (~22.6 GiB)",
+            batch_size=64,
+            num_predict=8192,
+            think_level="medium",
+            keep_alive="24h",
+            ollama_url="http://192.168.155.222:11434",
+            temperature=0.35,
         ),
     ),
     ResidentProfile(
@@ -116,11 +128,17 @@ RESIDENTS_DATA: List[ResidentProfile] = [
         name="Explorer",
         role="explorer",
         dna=CognitiveDNA(
-            model="dolphin3:8b",
-            context_size=131072,
+            model="qwen3.5:4b",
+            context_size=262144,
             model_quant="Q4_K_M",
             kv_cache_quant="q4_0",
-            model_size="8.0B Parameters (~4.9 GiB)",
+            model_size="4.0B Parameters (~2.8 GiB)",
+            batch_size=512,
+            num_predict=8192,
+            think_level="medium",
+            keep_alive="24h",
+            ollama_url="http://192.168.155.222:11435",
+            temperature=0.35,
         ),
     ),
     ResidentProfile(
@@ -128,11 +146,17 @@ RESIDENTS_DATA: List[ResidentProfile] = [
         name="Librarian",
         role="librarian",
         dna=CognitiveDNA(
-            model="llama3.2:3b",
+            model="granite4.2:3b",
             context_size=131072,
             model_quant="Q4_K_M",
             kv_cache_quant="q4_0",
-            model_size="3.2B Parameters (~2.0 GiB)",
+            model_size="3.2B Parameters (~2.2 GiB)",
+            batch_size=512,
+            num_predict=4096,
+            think_level="low",
+            keep_alive="24h",
+            ollama_url="http://192.168.155.222:11436",
+            temperature=0.35,
         ),
     ),
     ResidentProfile(
@@ -140,11 +164,17 @@ RESIDENTS_DATA: List[ResidentProfile] = [
         name="Artisan",
         role="artisan",
         dna=CognitiveDNA(
-            model="qwen2.5-coder:7b",
+            model="granite4.2:3b",
             context_size=131072,
             model_quant="Q4_K_M",
             kv_cache_quant="q4_0",
-            model_size="7.6B Parameters (~4.7 GiB)",
+            model_size="3.2B Parameters (~2.2 GiB)",
+            batch_size=512,
+            num_predict=4096,
+            think_level="off",
+            keep_alive="24h",
+            ollama_url="http://192.168.155.222:11437",
+            temperature=0.35,
         ),
     ),
     ResidentProfile(
@@ -152,11 +182,17 @@ RESIDENTS_DATA: List[ResidentProfile] = [
         name="Interpreter",
         role="interpreter",
         dna=CognitiveDNA(
-            model="gemma2:9b",
-            context_size=8192,
+            model="gemma3:4b",
+            context_size=131072,
             model_quant="Q4_K_M",
             kv_cache_quant="q4_0",
-            model_size="9.2B Parameters (~5.4 GiB)",
+            model_size="4.0B Parameters (~3.3 GiB)",
+            batch_size=512,
+            num_predict=8192,
+            think_level="off",
+            keep_alive="24h",
+            ollama_url="http://192.168.155.222:11438",
+            temperature=0.35,
         ),
     ),
     ResidentProfile(
@@ -164,11 +200,17 @@ RESIDENTS_DATA: List[ResidentProfile] = [
         name="Operator",
         role="operator",
         dna=CognitiveDNA(
-            model="mistral:7b",
-            context_size=32768,
+            model="nemotron-3-nano:4b",
+            context_size=262144,
             model_quant="Q4_K_M",
             kv_cache_quant="q4_0",
-            model_size="7.2B Parameters (~4.4 GiB)",
+            model_size="4.0B Parameters (~2.8 GiB)",
+            batch_size=512,
+            num_predict=12288,
+            think_level="high",
+            keep_alive="24h",
+            ollama_url="http://192.168.155.222:11439",
+            temperature=0.35,
         ),
     ),
     ResidentProfile(
@@ -176,11 +218,17 @@ RESIDENTS_DATA: List[ResidentProfile] = [
         name="Methodologist",
         role="methodologist",
         dna=CognitiveDNA(
-            model="phi4-mini:3.8b",
-            context_size=131072,
+            model="huggingface.co/empero-ai/Qwen3.8-4B-Distill-GGUF:latest",
+            context_size=262144,
             model_quant="Q4_K_M",
             kv_cache_quant="q4_0",
-            model_size="3.8B Parameters (~2.5 GiB)",
+            model_size="4.0B Parameters (~2.8 GiB)",
+            batch_size=512,
+            num_predict=8192,
+            think_level="medium",
+            keep_alive="24h",
+            ollama_url="http://192.168.155.222:11440",
+            temperature=0.35,
         ),
     ),
     ResidentProfile(
@@ -188,11 +236,17 @@ RESIDENTS_DATA: List[ResidentProfile] = [
         name="Logician",
         role="logician",
         dna=CognitiveDNA(
-            model="deepseek-r1:8b",
-            context_size=131072,
+            model="hf.co/XHToken/Spark-X2.5-4B-GGUF:Q4_K_M",
+            context_size=262144,
             model_quant="Q4_K_M",
             kv_cache_quant="q4_0",
-            model_size="8.0B Parameters (~4.9 GiB)",
+            model_size="4.0B Parameters (~2.6 GiB)",
+            batch_size=512,
+            num_predict=32768,
+            think_level="medium",
+            keep_alive="24h",
+            ollama_url="http://192.168.155.222:11441",
+            temperature=0.35,
         ),
     ),
     ResidentProfile(
@@ -200,11 +254,17 @@ RESIDENTS_DATA: List[ResidentProfile] = [
         name="Chronicler",
         role="chronicler",
         dna=CognitiveDNA(
-            model="hermes3:8b",
+            model="hf.co/webAI-Official/TwIL-LM3-Pro:Q4_K_M",
             context_size=131072,
             model_quant="Q4_K_M",
             kv_cache_quant="q4_0",
-            model_size="8.0B Parameters (~4.9 GiB)",
+            model_size="3.0B Parameters (~2.2 GiB)",
+            batch_size=512,
+            num_predict=4096,
+            think_level="off",
+            keep_alive="24h",
+            ollama_url="http://192.168.155.222:11442",
+            temperature=0.35,
         ),
     ),
 ]
@@ -250,6 +310,12 @@ def infer_cognitive_dna(agent_id: str) -> CognitiveDNA:
     env_file = Path(f"/etc/ai-village/agents/{target_id}.env")
     model = None
     num_ctx = None
+    batch_size = None
+    num_predict = None
+    think_level = None
+    keep_alive = None
+    ollama_url = None
+    temperature = None
     if env_file.is_file():
         try:
             for line in env_file.read_text(encoding="utf-8").splitlines():
@@ -257,6 +323,18 @@ def infer_cognitive_dna(agent_id: str) -> CognitiveDNA:
                     model = line.split("=", 1)[1].strip()
                 elif line.startswith("OLLAMA_NUM_CTX="):
                     num_ctx = int(line.split("=", 1)[1].strip())
+                elif line.startswith("OLLAMA_NUM_BATCH="):
+                    batch_size = int(line.split("=", 1)[1].strip())
+                elif line.startswith("OLLAMA_NUM_PREDICT="):
+                    num_predict = int(line.split("=", 1)[1].strip())
+                elif line.startswith("OLLAMA_THINK_LEVEL="):
+                    think_level = line.split("=", 1)[1].strip()
+                elif line.startswith("OLLAMA_KEEP_ALIVE="):
+                    keep_alive = line.split("=", 1)[1].strip()
+                elif line.startswith("OLLAMA_URL="):
+                    ollama_url = line.split("=", 1)[1].strip()
+                elif line.startswith("OLLAMA_TEMPERATURE="):
+                    temperature = float(line.split("=", 1)[1].strip())
         except Exception:
             pass
 
@@ -267,6 +345,12 @@ def infer_cognitive_dna(agent_id: str) -> CognitiveDNA:
         model_quant="Q4_K_M",
         kv_cache_quant="q4_0",
         model_size=fallback.dna.model_size if fallback else "4.0B Parameters",
+        batch_size=batch_size if batch_size is not None else (fallback.dna.batch_size if fallback else (64 if target_id == "01-king" else 512)),
+        num_predict=num_predict if num_predict is not None else (fallback.dna.num_predict if fallback else 8192),
+        think_level=think_level or (fallback.dna.think_level if fallback else "off"),
+        keep_alive=keep_alive or (fallback.dna.keep_alive if fallback else "24h"),
+        ollama_url=ollama_url or (fallback.dna.ollama_url if fallback else ""),
+        temperature=temperature if temperature is not None else (fallback.dna.temperature if fallback else 0.35),
     )
 
 class ResidentStore:

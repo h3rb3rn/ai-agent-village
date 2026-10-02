@@ -60,6 +60,7 @@ def build_ollama_request(
     temperature: float = 0.35,
     api_token: Optional[str] = None,
     response_format: Optional[Dict[str, Any]] = None,
+    num_batch: Optional[int] = None,
 ) -> urllib.request.Request:
     """Build an HTTP Request targeting an Ollama native /api/chat endpoint.
 
@@ -74,6 +75,7 @@ def build_ollama_request(
         temperature: Sampling temperature.
         api_token: Optional Bearer authentication token.
         response_format: Optional JSON schema sent as Ollama ``format`` (structured output).
+        num_batch: Optional batch size token count for prompt evaluation.
 
     Returns:
         urllib.request.Request: Fully configured request object.
@@ -82,15 +84,19 @@ def build_ollama_request(
     if not endpoint.endswith("/api/chat"):
         endpoint = f"{endpoint}/api/chat"
 
+    opts: Dict[str, Any] = {
+        "num_ctx": int(num_ctx),
+        "num_predict": int(num_predict),
+        "temperature": float(temperature),
+    }
+    if num_batch is not None:
+        opts["num_batch"] = int(num_batch)
+
     payload: Dict[str, Any] = {
         "model": model,
         "stream": False,
         "keep_alive": keep_alive or "10m",
-        "options": {
-            "num_ctx": int(num_ctx),
-            "num_predict": int(num_predict),
-            "temperature": float(temperature),
-        },
+        "options": opts,
         "messages": messages,
     }
     if think_level and think_level != "off":

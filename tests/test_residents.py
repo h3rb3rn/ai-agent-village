@@ -26,6 +26,7 @@ from village.residents import (
     ResidentStore,
     get_resident,
     get_resident_art,
+    infer_cognitive_dna,
     list_residents,
     validate_ascii_art,
 )
@@ -85,6 +86,11 @@ class ResidentCatalogTests(unittest.TestCase):
                 self.assertTrue(dna.model_quant)
                 self.assertTrue(dna.kv_cache_quant)
                 self.assertTrue(dna.model_size)
+                self.assertGreater(dna.batch_size, 0)
+                self.assertGreater(dna.num_predict, 0)
+                self.assertTrue(dna.think_level)
+                self.assertTrue(dna.keep_alive)
+                self.assertTrue(dna.ollama_url)
 
     def test_to_dict_localization(self):
         # Verify that unauthored residents serialize with empty bios and intact DNA
@@ -93,8 +99,13 @@ class ResidentCatalogTests(unittest.TestCase):
         self.assertFalse(king["has_profile"])
         self.assertEqual(king["profession"], "")
         self.assertEqual(king["calling"], "")
-        self.assertEqual(king["dna"]["model"], "hf.co/unsloth/gpt-oss-20b-GGUF:Q4_K_M")
-        self.assertEqual(king["dna"]["context_size"], 131072)
+        self.assertEqual(king["dna"]["model"], "qwen3.6:35b")
+        self.assertEqual(king["dna"]["context_size"], 190000)
+        self.assertEqual(king["dna"]["batch_size"], 64)
+        self.assertEqual(king["dna"]["num_predict"], 8192)
+        self.assertEqual(king["dna"]["think_level"], "medium")
+        self.assertEqual(king["dna"]["keep_alive"], "24h")
+        self.assertEqual(king["dna"]["ollama_url"], "http://192.168.155.222:11434")
 
 
 class AsciiArtDimensionTests(unittest.TestCase):
@@ -266,6 +277,19 @@ class ResidentStoreTests(unittest.TestCase):
         self.assertEqual(len(plain.splitlines()), 250)
         self.assertEqual(len(plain.splitlines()[0]), 250)
 
+    def test_infer_cognitive_dna_all_settings(self):
+        # Verify that infer_cognitive_dna returns full Ollama DNA settings
+        dna = infer_cognitive_dna("01-king")
+        self.assertEqual(dna.model, "qwen3.6:35b")
+        self.assertEqual(dna.context_size, 190000)
+        self.assertEqual(dna.batch_size, 64)
+        self.assertEqual(dna.num_predict, 8192)
+        self.assertEqual(dna.think_level, "medium")
+        self.assertEqual(dna.keep_alive, "24h")
+        self.assertEqual(dna.ollama_url, "http://192.168.155.222:11434")
+        self.assertEqual(dna.temperature, 0.35)
+
 
 if __name__ == "__main__":
     unittest.main()
+
