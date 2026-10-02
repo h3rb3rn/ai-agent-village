@@ -28,6 +28,40 @@ from typing import Any, Dict, List, Optional
 def now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
+# P92 (operator-confirmed fix after a live incident, 2026-10-02): King
+# closed edition 2026-10-02 voluntarily at 02:45 UTC - 5 of 9 assigned
+# residents had not contributed anything yet, 2 submissions were still
+# unreviewed, and nothing in close_edition() ever checked the publish
+# deadline at all (only the ADVISORY gate in web/runtime.py's
+# gazette_closable_editions() does, and only ever nudges TOWARD closing
+# after the deadline - never prevents an early one). Mirrors web/
+# runtime.py's identical helper/constant; duplicated here (not imported)
+# so this module keeps no dependency on the web/ orchestration layer.
+GAZETTE_PUBLISH_DEADLINE_HOUR_UTC = 15
+
+
+def gazette_deadline_passed(hour_utc: int) -> bool:
+    """True from that UTC hour until midnight, every day."""
+    return datetime.now(timezone.utc).hour >= hour_utc
+
+
+def edition_ready_to_close_early(edition: Dict[str, Any]) -> bool:
+    """True only if EVERY assigned resident has a non-rejected contribution
+    for their assigned kind AND nothing on the edition is still pending
+    review - the one legitimate reason to close before the publish
+    deadline (a fully wrapped-up day), as opposed to King simply deciding
+    to on a whim. An edition that was never assigned at all can never
+    qualify (nothing to have "finished")."""
+    assignments = edition.get("assignments") or {}
+    if not assignments:
+        return False
+    done = {(c["agent"], c["kind"]) for c in edition.get("contributions", []) if c["review_status"] != "rejected"}
+    if not all((agent, kind) in done for agent, kind in assignments.items()):
+        return False
+    if any(c["review_status"] == "pending" for c in edition.get("contributions", [])):
+        return False
+    return True
+
 def today() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
@@ -789,12 +823,29 @@ class GazetteStore:
     def close_edition(self, edition_id: str, closed_by: str) -> Dict[str, Any]:
         """King's compile trigger. Idempotent: compiling an already-compiled
         edition returns it unchanged (compiled_at/compiled_html must not
-        drift or re-archive) rather than re-rendering."""
+        drift or re-archive) rather than re-rendering.
+
+        P92 (live incident, 2026-10-02): before the publish deadline, this
+        now actually refuses unless edition_ready_to_close_early() holds -
+        closing used to be entirely unrestricted, letting King end a day's
+        edition minutes after opening it with most residents never having
+        had a chance to contribute (see that function's own comment)."""
         edition = self.get_edition(edition_id)
         if not edition:
             raise ValueError(f"unknown gazette edition: {edition_id}")
         if edition["status"] == "compiled":
             return edition
+        if not gazette_deadline_passed(GAZETTE_PUBLISH_DEADLINE_HOUR_UTC) and not edition_ready_to_close_early(edition):
+            assignments = edition.get("assignments") or {}
+            done = {(c["agent"], c["kind"]) for c in edition["contributions"] if c["review_status"] != "rejected"}
+            missing = [agent for agent, kind in assignments.items() if (agent, kind) not in done]
+            pending = sum(1 for c in edition["contributions"] if c["review_status"] == "pending")
+            reason = (f"not yet assigned" if not assignments
+                     else f"{len(missing)} assigned resident(s) have not contributed yet: {missing}" if missing
+                     else f"{pending} contribution(s) still await review")
+            raise ValueError(f"gazette edition {edition_id} cannot close before "
+                             f"{GAZETTE_PUBLISH_DEADLINE_HOUR_UTC}:00 UTC unless every assigned resident has "
+                             f"contributed and nothing is pending review ({reason})")
         compiled_html = self.compile_edition(edition_id)
         with self._conn() as c:
             c.execute(

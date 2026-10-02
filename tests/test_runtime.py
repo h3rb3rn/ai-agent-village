@@ -362,7 +362,8 @@ class RuntimeTests(unittest.TestCase):
             past_deadline = json.loads(king.snapshot())
         self.assertIn('gazette_daily_note', past_deadline)
         self.assertIn('operation=close', past_deadline['gazette_daily_note'])
-        king.gazette.close_edition(edition_id, '01-king')
+        with patch('village.gazette.gazette_deadline_passed', return_value=True):
+            king.gazette.close_edition(edition_id, '01-king')
         with patch.object(king, 'memory', return_value={'items': []}):
             all_clear = json.loads(king.snapshot())
         self.assertNotIn('gazette_daily_note', all_clear)
@@ -473,7 +474,8 @@ class RuntimeTests(unittest.TestCase):
         king.execute({'tool_call': {'name': 'gazette_operation', 'arguments': {
             'operation': 'review', 'agent': '01-a', 'kind': 'mood', 'decision': 'approve'}}})
         self.assertTrue(king.state['last_result']['ok'])
-        king.execute({'tool_call': {'name': 'gazette_operation', 'arguments': {'operation': 'close'}}})
+        with patch('village.gazette.gazette_deadline_passed', return_value=True):
+            king.execute({'tool_call': {'name': 'gazette_operation', 'arguments': {'operation': 'close'}}})
         self.assertTrue(king.state['last_result']['ok'])
         archive_path = self.root / 'gazette' / 'archive' / edition_id / 'index.html'
         self.assertTrue(archive_path.exists())
@@ -700,7 +702,8 @@ class RuntimeTests(unittest.TestCase):
                 "VALUES(?,?,?,?,?,?,?,'pending')",
                 (edition['id'], '01-a', 'wishes', 'Stranded wish', 'Submitted just after close.', 'x', 'x'))
             c.commit()
-        king.gazette.close_edition(edition['id'], '01-king')
+        with patch('village.gazette.gazette_deadline_passed', return_value=True):
+            king.gazette.close_edition(edition['id'], '01-king')
         self.assertEqual(king.gazette_pending_reviews(), [])  # invisible while stranded
         king.gazette.open_edition('01-king', ['01-a'], edition_id='2026-09-29')
         pending = king.gazette_pending_reviews()
@@ -741,7 +744,8 @@ class RuntimeTests(unittest.TestCase):
         king.gazette.review_contribution(edition['id'], '01-a', 'mood', REVIEWER_AGENT, 'approve')
         for i in range(GAZETTE_CLOSE_CEILING + 5):
             king.execute({'tool_call': {'name': 'execute_bash', 'arguments': {'command': f'printf ok{i}'}}})
-        king.execute({'tool_call': {'name': 'gazette_operation', 'arguments': {'operation': 'close', 'edition_id': edition['id']}}})
+        with patch('village.gazette.gazette_deadline_passed', return_value=True):
+            king.execute({'tool_call': {'name': 'gazette_operation', 'arguments': {'operation': 'close', 'edition_id': edition['id']}}})
         self.assertTrue(king.state['last_result']['ok'])
 
     def test_gazette_review_pressure_keeps_advancing_while_meeting_gated(self):

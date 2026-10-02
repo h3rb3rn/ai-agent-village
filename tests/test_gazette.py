@@ -8,6 +8,7 @@ import shutil
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from village.gazette import (CONTRIBUTION_KINDS, GAME_POOL, HEADLINE_MAX_CHARS, MAX_COLUMN_CHARS,
                              MAX_CONTRIBUTION_CHARS, REVIEWER_AGENT, GazetteStore)
@@ -50,7 +51,8 @@ class OpenEditionTests(unittest.TestCase):
         self.store.submit_contribution("2026-09-27", "02-explorer", "game_result", "Guess", "x", solution="A")
         self.store.submit_contribution("2026-09-27", "03-librarian", "game_result", "Guess", "x", solution="B")
         self.store.declare_game_winner("2026-09-27", "01-king", "02-explorer", "A was closest")
-        self.store.close_edition("2026-09-27", "01-king")
+        with patch("village.gazette.gazette_deadline_passed", return_value=True):
+            self.store.close_edition("2026-09-27", "01-king")
         new_edition = self.store.open_edition("01-king", PEERS, edition_id="2026-09-28", rng=random.Random(1))
         self.assertEqual(new_edition["game_quizmaster"], "02-explorer")
 
@@ -60,7 +62,8 @@ class OpenEditionTests(unittest.TestCase):
         self.store.submit_contribution("2026-09-27", "02-explorer", "game_result", "Guess", "x", solution="A")
         self.store.submit_contribution("2026-09-27", "03-librarian", "game_result", "Guess", "x", solution="B")
         self.store.declare_game_winner("2026-09-27", "01-king", "unentschieden", "too close to call")
-        self.store.close_edition("2026-09-27", "01-king")
+        with patch("village.gazette.gazette_deadline_passed", return_value=True):
+            self.store.close_edition("2026-09-27", "01-king")
         new_edition = self.store.open_edition("01-king", PEERS, edition_id="2026-09-28", rng=random.Random(1))
         self.assertEqual(new_edition["game_quizmaster"], "01-king")
 
@@ -99,7 +102,8 @@ class OpenEditionTests(unittest.TestCase):
         # retroactively recompiling the already-published one.
         self.store.open_edition("01-king", PEERS, edition_id="2026-09-28", rng=random.Random(1))
         self.store.submit_contribution("2026-09-28", "01-king", "wishes", "A late wish", "Submitted just after close.")
-        self.store.close_edition("2026-09-28", "01-king")
+        with patch("village.gazette.gazette_deadline_passed", return_value=True):
+            self.store.close_edition("2026-09-28", "01-king")
         # Stranded: 2026-09-28 is now compiled, the pending row is invisible
         # to gazette_pending_reviews() (tested in test_runtime.py) forever
         # unless carried forward.
@@ -117,10 +121,12 @@ class OpenEditionTests(unittest.TestCase):
         # open() inside one transaction. Must keep only the more recent one.
         self.store.open_edition("01-king", PEERS, edition_id="2026-09-27", rng=random.Random(1))
         self.store.submit_contribution("2026-09-27", "01-king", "wishes", "Old wish", "Older stranded content.")
-        self.store.close_edition("2026-09-27", "01-king")
+        with patch("village.gazette.gazette_deadline_passed", return_value=True):
+            self.store.close_edition("2026-09-27", "01-king")
         self.store.open_edition("01-king", PEERS, edition_id="2026-09-28", rng=random.Random(1))
         self.store.submit_contribution("2026-09-28", "01-king", "wishes", "New wish", "Newer stranded content.")
-        self.store.close_edition("2026-09-28", "01-king")
+        with patch("village.gazette.gazette_deadline_passed", return_value=True):
+            self.store.close_edition("2026-09-28", "01-king")
         new_edition = self.store.open_edition("01-king", PEERS, edition_id="2026-09-29", rng=random.Random(1))
         matches = [c for c in new_edition["contributions"] if c["agent"] == "01-king" and c["kind"] == "wishes"]
         self.assertEqual(len(matches), 1)
@@ -248,7 +254,8 @@ class SubmitContributionTests(unittest.TestCase):
         # gazette_pending_reviews() never looks at compiled editions again.
         self.store.submit_contribution("2026-09-28", "02-explorer", "mood", "Update: see full text.", "Feeling good.")
         self.store.review_contribution("2026-09-28", "02-explorer", "mood", "01-king", "approve")
-        self.store.close_edition("2026-09-28", "01-king")
+        with patch("village.gazette.gazette_deadline_passed", return_value=True):
+            self.store.close_edition("2026-09-28", "01-king")
         with self.assertRaises(ValueError):
             self.store.submit_contribution("2026-09-28", "03-librarian", "wishes", "Update: see full text.", "Too late.")
 
@@ -309,7 +316,8 @@ class SetGameTaskTests(unittest.TestCase):
         self.assertEqual(result["game_task"], "Refined question")
 
     def test_cannot_set_task_on_a_compiled_edition(self):
-        self.store.close_edition("2026-09-28", "01-king")
+        with patch("village.gazette.gazette_deadline_passed", return_value=True):
+            self.store.close_edition("2026-09-28", "01-king")
         with self.assertRaises(ValueError):
             self.store.set_game_task("2026-09-28", "01-king", "Too late")
 
@@ -497,7 +505,8 @@ class CompileEditionTests(unittest.TestCase):
         self.store.submit_contribution("2026-09-26", "02-explorer", "game_result", "Guess", "x", solution="A")
         self.store.submit_contribution("2026-09-26", "03-librarian", "game_result", "Guess", "x", solution="B")
         self.store.declare_game_winner("2026-09-26", "01-king", "02-explorer", "closest")
-        self.store.close_edition("2026-09-26", "01-king")
+        with patch("village.gazette.gazette_deadline_passed", return_value=True):
+            self.store.close_edition("2026-09-26", "01-king")
         self.store.open_edition("01-king", PEERS, edition_id="2026-09-27", rng=random.Random(1))
         rendered = self.store.compile_edition("2026-09-27")
         self.assertIn("Posed by", rendered)
@@ -610,7 +619,8 @@ class DeclareGameWinnerTests(unittest.TestCase):
         self.submit_two_guesses()
         self.store.review_contribution("2026-09-28", "02-explorer", "game_result", "01-king", "approve")
         self.store.review_contribution("2026-09-28", "03-librarian", "game_result", "01-king", "approve")
-        self.store.close_edition("2026-09-28", "01-king")
+        with patch("village.gazette.gazette_deadline_passed", return_value=True):
+            self.store.close_edition("2026-09-28", "01-king")
         with self.assertRaises(ValueError):
             self.store.declare_game_winner("2026-09-28", "01-king", "02-explorer")
 
@@ -635,6 +645,14 @@ class CloseEditionTests(unittest.TestCase):
         self.store.open_edition("01-king", PEERS, edition_id="2026-09-28", rng=random.Random(1))
         self.store.submit_contribution("2026-09-28", "02-explorer", "mood", "Update: see full text." , "Feeling good.")
         self.store.review_contribution("2026-09-28", "02-explorer", "mood", REVIEWER_AGENT, "approve")
+        # P92: this class is about close_edition()'s own return-value/
+        # idempotency behaviour, not about the (separately tested, see
+        # EarlyCloseRestrictionTests below) publish-deadline restriction -
+        # patched true by default so existing assertions do not need to
+        # also satisfy edition_ready_to_close_early().
+        self.deadline_patch = patch("village.gazette.gazette_deadline_passed", return_value=True)
+        self.deadline_patch.start()
+        self.addCleanup(self.deadline_patch.stop)
 
     def test_unknown_edition_is_rejected(self):
         with self.assertRaises(ValueError):
@@ -651,6 +669,72 @@ class CloseEditionTests(unittest.TestCase):
         second = self.store.close_edition("2026-09-28", "01-king")
         self.assertEqual(first["compiled_at"], second["compiled_at"])
         self.assertNotIn("compiled_html", second)  # never re-archived
+
+
+class EarlyCloseRestrictionTests(unittest.TestCase):
+    """P92 (live incident, 2026-10-02): King closed an edition at 02:45 UTC
+    with 5 of 9 assigned residents never having contributed - close_edition()
+    never checked the publish deadline at all. Now it refuses before
+    15:00 UTC unless the edition is genuinely, fully wrapped up."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="village-gazette-"))
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.store = GazetteStore(self.tmp / "coordination.sqlite3")
+        self.peers = ["02-explorer", "03-librarian"]
+        self.edition = self.store.open_edition("01-king", self.peers, edition_id="2026-09-28", rng=random.Random(1))
+
+    def test_refuses_before_deadline_when_never_assigned(self):
+        with patch("village.gazette.gazette_deadline_passed", return_value=False):
+            with self.assertRaises(ValueError) as ctx:
+                self.store.close_edition("2026-09-28", "01-king")
+        self.assertIn("15:00 UTC", str(ctx.exception))
+
+    def test_refuses_before_deadline_when_an_assigned_resident_has_not_contributed(self):
+        self.store.assign_kinds("2026-09-28", "01-king", self.peers, rng=random.Random(1))
+        with patch("village.gazette.gazette_deadline_passed", return_value=False):
+            with self.assertRaises(ValueError) as ctx:
+                self.store.close_edition("2026-09-28", "01-king")
+        self.assertIn("have not contributed yet", str(ctx.exception))
+
+    def test_refuses_before_deadline_while_a_review_is_pending(self):
+        assignments = self.store.assign_kinds("2026-09-28", "01-king", self.peers, rng=random.Random(1))
+        for agent, kind in assignments.items():
+            self.store.submit_contribution("2026-09-28", agent, kind, "Update", "Content.")
+        self.store.review_contribution("2026-09-28", "01-king", assignments["01-king"], "01-king", "approve")
+        # the other assigned residents' submissions are still pending.
+        with patch("village.gazette.gazette_deadline_passed", return_value=False):
+            with self.assertRaises(ValueError) as ctx:
+                self.store.close_edition("2026-09-28", "01-king")
+        self.assertIn("still await review", str(ctx.exception))
+
+    def test_allows_early_close_once_everyone_assigned_has_contributed_and_nothing_pending(self):
+        assignments = self.store.assign_kinds("2026-09-28", "01-king", self.peers, rng=random.Random(1))
+        for agent, kind in assignments.items():
+            self.store.submit_contribution("2026-09-28", agent, kind, "Update", "Content.")
+            self.store.review_contribution("2026-09-28", agent, kind, "01-king", "approve")
+        with patch("village.gazette.gazette_deadline_passed", return_value=False):
+            result = self.store.close_edition("2026-09-28", "01-king")
+        self.assertEqual(result["status"], "compiled")
+
+    def test_always_allowed_once_the_publish_deadline_has_passed_regardless_of_participation(self):
+        # P81's own long-standing rule ("taeglich um 15 Uhr erscheint die
+        # Gazette") is unchanged - this restriction only ever narrows the
+        # window BEFORE the deadline, never widens it afterwards.
+        with patch("village.gazette.gazette_deadline_passed", return_value=True):
+            result = self.store.close_edition("2026-09-28", "01-king")
+        self.assertEqual(result["status"], "compiled")
+
+    def test_a_rejected_contribution_does_not_count_as_done(self):
+        assignments = self.store.assign_kinds("2026-09-28", "01-king", self.peers, rng=random.Random(1))
+        for agent, kind in assignments.items():
+            self.store.submit_contribution("2026-09-28", agent, kind, "Update", "Content.")
+        self.store.review_contribution("2026-09-28", "01-king", assignments["01-king"], "01-king", "reject", "needs rework")
+        self.store.review_contribution("2026-09-28", "02-explorer", assignments["02-explorer"], "01-king", "approve")
+        with patch("village.gazette.gazette_deadline_passed", return_value=False):
+            with self.assertRaises(ValueError) as ctx:
+                self.store.close_edition("2026-09-28", "01-king")
+        self.assertIn("have not contributed yet", str(ctx.exception))
 
 
 if __name__ == "__main__":

@@ -11,6 +11,7 @@ import shutil
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from village.gazette import GazetteStore
 from village.gazette_pdf import build_pdf, edition_sections, render_edition_pdf
@@ -78,6 +79,12 @@ class EditionSectionsTests(unittest.TestCase):
         self.store.submit_contribution("2026-09-28", "03-librarian", "wishes", "Update: see full text." , "Rejected wish text.")
         self.store.review_contribution("2026-09-28", "02-explorer", "mood", "01-king", "approve")
         self.store.review_contribution("2026-09-28", "03-librarian", "wishes", "01-king", "reject", "off-topic")
+        # P92: this class is about PDF rendering, not about the (separately
+        # tested, see tests/test_gazette.py's EarlyCloseRestrictionTests)
+        # publish-deadline restriction on close_edition() itself.
+        self.deadline_patch = patch("village.gazette.gazette_deadline_passed", return_value=True)
+        self.deadline_patch.start()
+        self.addCleanup(self.deadline_patch.stop)
 
     def test_only_approved_content_reaches_the_pdf(self):
         result = self.store.close_edition("2026-09-28", "01-king")

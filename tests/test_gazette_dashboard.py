@@ -11,6 +11,7 @@ import tempfile
 import threading
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 os.environ.setdefault("VILLAGE_ROOT", "/tmp/ai-village-gazette-dashboard")
 sys.path.insert(0, os.path.abspath("web"))
@@ -46,7 +47,8 @@ class GazetteDashboardTests(unittest.TestCase):
         store.submit_contribution(edition["id"], "03-librarian", "wishes", "Update: see full text." , "More books please.")
         store.review_contribution(edition["id"], "02-explorer", "mood", "01-king", "approve")
         store.review_contribution(edition["id"], "03-librarian", "wishes", "01-king", "reject", "off-topic")
-        compiled = store.close_edition(edition["id"], "01-king")
+        with patch("village.gazette.gazette_deadline_passed", return_value=True):
+            compiled = store.close_edition(edition["id"], "01-king")
         archive_dir = webui.GAZETTE_ARCHIVE / edition["id"]
         archive_dir.mkdir(parents=True, exist_ok=True)
         (archive_dir / "index.html").write_text(compiled["compiled_html"], encoding="utf-8")
@@ -173,7 +175,8 @@ class GazetteGameStatsTests(unittest.TestCase):
         for agent in peers:
             self.store.submit_contribution(edition_id, agent, "game_result", "Guess", "x", solution="x")
         self.store.declare_game_winner(edition_id, "01-king", winner, "because")
-        self.store.close_edition(edition_id, "01-king")
+        with patch("village.gazette.gazette_deadline_passed", return_value=True):
+            self.store.close_edition(edition_id, "01-king")
 
     def test_empty_store_has_no_wins_and_no_quizmaster(self):
         stats = webui.gazette_game_stats()
@@ -191,7 +194,8 @@ class GazetteGameStatsTests(unittest.TestCase):
         for agent in ("02-explorer", "03-librarian"):
             self.store.submit_contribution("2026-09-26", agent, "game_result", "Guess", "x", solution="x")
         self.store.declare_game_winner("2026-09-26", "01-king", "unentschieden", "tied")
-        self.store.close_edition("2026-09-26", "01-king")
+        with patch("village.gazette.gazette_deadline_passed", return_value=True):
+            self.store.close_edition("2026-09-26", "01-king")
         self.assertEqual(webui.gazette_game_stats()["wins"], {})
 
     def test_quizmaster_reflects_the_currently_open_edition(self):
