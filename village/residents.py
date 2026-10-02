@@ -109,15 +109,15 @@ RESIDENTS_DATA: List[ResidentProfile] = [
         id="01-king",
         name="King",
         role="king",
-        # Reduced context size from 190k (190000) to 132k tier (131072) per operator request
-        # to prevent GPU memory pressure / CUDA errors and reduce prompt evaluation latency on 4x Tesla M60.
+        # Configured context size at 132k tier (131072) and increased batch_size to 256 per operator request
+        # to accelerate prompt processing on 4x Tesla M60 while staying well within the available VRAM headroom.
         dna=CognitiveDNA(
             model="qwen3.6:35b",
             context_size=131072,
             model_quant="Q4_K_M",
             kv_cache_quant="q4_0",
             model_size="35.5B Parameters (~22.6 GiB)",
-            batch_size=64,
+            batch_size=256,
             num_predict=8192,
             think_level="medium",
             keep_alive="24h",
@@ -347,7 +347,7 @@ def infer_cognitive_dna(agent_id: str) -> CognitiveDNA:
         model_quant="Q4_K_M",
         kv_cache_quant="q4_0",
         model_size=fallback.dna.model_size if fallback else "4.0B Parameters",
-        batch_size=batch_size if batch_size is not None else (fallback.dna.batch_size if fallback else (64 if target_id == "01-king" else 512)),
+        batch_size=batch_size if batch_size is not None else (fallback.dna.batch_size if fallback else (256 if target_id == "01-king" else 512)),
         num_predict=num_predict if num_predict is not None else (fallback.dna.num_predict if fallback else 8192),
         think_level=think_level or (fallback.dna.think_level if fallback else "off"),
         keep_alive=keep_alive or (fallback.dna.keep_alive if fallback else "24h"),
