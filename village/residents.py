@@ -109,11 +109,12 @@ RESIDENTS_DATA: List[ResidentProfile] = [
         id="01-king",
         name="King",
         role="king",
-        # Context size at 132k tier (131072), batch_size at 128 per operator request
+        # Context size at 256k tier (262144) per operator request 2026-10-06 (was 131072),
+        # batch_size at 128 per operator request
         # (256 was tested but 128 is the stable operating point for 4x Tesla M60).
         dna=CognitiveDNA(
             model="qwen3.6:35b",
-            context_size=131072,
+            context_size=262144,
             model_quant="Q4_K_M",
             kv_cache_quant="q4_0",
             model_size="35.5B Parameters (~22.6 GiB)",
