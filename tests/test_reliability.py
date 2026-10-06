@@ -1045,3 +1045,12 @@ class LoopBreakerTests(unittest.TestCase):
         # decision still counts exactly as before.
         self.reject('{"name":"broken')
         self.assertEqual(self.agent.state.get('invalid_streak', 0), 1)
+
+    def test_empty_rejected_output_never_feeds_the_repeated_fingerprint_tracker(self):
+        # P94 (live incident 2026-10-06, 01-king): 'output budget exhausted' leaves
+        # an empty preview; every empty text hashes identically, so unrelated
+        # empty outputs must not add up to "the same content repeated 3 times".
+        for _ in range(rt.LOOP_BREAKER_REPEAT + 2):
+            self.reject('')
+        self.assertEqual(self.agent.state.get('recent_rejected_fingerprints', []), [])
+        self.assertFalse(self.agent._loop_breaker_active())

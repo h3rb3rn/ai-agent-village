@@ -1953,8 +1953,17 @@ class Resident:
             # bounded recent window, independent of the streak.
             window = [r for r in self.state.get('recent_rejected_fingerprints', [])
                      if time.time() - r['at'] < REPEATED_REJECTION_WINDOW_SECONDS]
-            repeat_count = sum(1 for r in window if r['fp'] == fp) + 1
-            window.append({'fp': fp, 'at': time.time()})
+            # P94 (live incident 2026-10-06, 01-king): an empty rejected text (e.g.
+            # 'output budget exhausted', the model spent its whole budget thinking)
+            # always hashes to the same fingerprint, so three unrelated empty outputs
+            # in six hours looked like "the same content three times" and held the
+            # loop-breaker menu (no memory_search/profile_operation/board_message)
+            # active for hours. Nothing was repeated, so empty text is never tracked.
+            if str(preview).strip():
+                repeat_count = sum(1 for r in window if r['fp'] == fp) + 1
+                window.append({'fp': fp, 'at': time.time()})
+            else:
+                repeat_count = 1
             self.state['recent_rejected_fingerprints'] = window[-40:]
             if repeat_count >= REPEATED_REJECTION_NUDGE_AT:
                 guidance += (f' You have attempted this exact same rejected content {repeat_count} '
