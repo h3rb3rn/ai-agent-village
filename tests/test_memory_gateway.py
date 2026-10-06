@@ -355,3 +355,38 @@ class MemoryStatsRouteTests(MemoryGatewayTests):
         self.assertEqual(status, 200, body)
         self.assertEqual(body["total"], 3)
         self.assertEqual(body["by_scope"], {"private": 2, "shared": 1})
+
+    def test_schema_migration_runs_once_not_per_request(self):
+        """P93: reads must not re-run the schema migration (it writes and takes the WAL lock)."""
+        calls = []
+        original = gateway.migrate_memories_schema
+
+        def counting(conn):
+            calls.append(1)
+            return original(conn)
+
+        gateway.migrate_memories_schema = counting
+        try:
+            self.call("POST", "/v1/memories", {"content": "x", "scope": "shared"}, token="token-a")
+            for _ in range(4):
+                status, _ = self.call("GET", "/v1/stats", token=None)
+                self.assertEqual(status, 200)
+        finally:
+            gateway.migrate_memories_schema = original
+        self.assertEqual(len(calls), 1)
+
+    def test_handler_error_does_not_leave_write_lock_held(self):
+        """P93: an exception between BEGIN IMMEDIATE and commit must release the write lock."""
+        status, item = self.call("POST", "/v1/memories", {"content": "keep", "scope": "private"}, token="token-a")
+        self.assertEqual(status, 201)
+        try:
+            # float("abc") raises ValueError after BEGIN IMMEDIATE; the connection used to leak
+            self.call("PATCH", f"/v1/memories/{item['id']}", {"confidence": "abc"}, token="token-a")
+        except Exception:
+            pass  # the dropped connection is expected; only the lock matters
+        probe = sqlite3.connect(str(gateway.DB), timeout=0.5)
+        try:
+            probe.execute("BEGIN IMMEDIATE")
+            probe.rollback()
+        finally:
+            probe.close()
