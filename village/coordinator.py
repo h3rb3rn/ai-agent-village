@@ -11,6 +11,7 @@ import fcntl
 import hashlib
 import json
 import os
+import re
 import shutil
 import sqlite3
 import sys
@@ -63,6 +64,47 @@ def normalize_depends_on(raw: Any, own_id: Optional[str] = None) -> List[str]:
         if len(seen) >= MAX_DEPENDS_ON:
             break
     return seen
+
+
+# P96 (operator, 2026-10-08): duplicate projects. Agents kept proposing the same
+# topic under new wording (e.g. "Disk usage monitor script for /mnt/hdd1" vs.
+# "Create disk monitoring script ..."), and the exact-title check never caught it.
+# Titles are compared by their topic words: generic action words are dropped,
+# simple suffixes stripped, and two titles count as the same project when their
+# topic sets overlap by at least SIMILAR_TITLE_THRESHOLD (Jaccard).
+ARCHIVED_STATUSES = ("complete", "abandoned")
+SIMILAR_TITLE_THRESHOLD = 0.5
+_GENERIC_TITLE_WORDS = frozenset({
+    "a", "an", "and", "the", "of", "for", "to", "in", "on", "with", "via", "from", "by",
+    "task", "tool", "script", "create", "implement", "build", "prototype", "finalize",
+    "verify", "test", "set", "up", "define", "identify", "specific", "file", "run",
+    "make", "write", "setup", "add", "new", "basic", "simple",
+})
+
+
+def topic_words(title: str) -> frozenset:
+    """Topic words of a project title, used for duplicate detection (P96)."""
+    words = set()
+    for raw in re.findall(r"[a-z0-9]+", str(title).lower()):
+        word = raw
+        if len(word) > 4 and word.endswith("ing"):
+            word = word[:-3]
+        elif len(word) > 3 and word.endswith("s"):
+            word = word[:-1]
+        if word and word not in _GENERIC_TITLE_WORDS:
+            words.add(word)
+    return frozenset(words)
+
+
+def is_same_topic(title_a: str, title_b: str) -> bool:
+    """True when two titles describe the same project (P96)."""
+    a, b = topic_words(title_a), topic_words(title_b)
+    if len(a) < 2 or len(b) < 2:
+        return False
+    # identifiers such as /mnt/hdd1 vs /mnt/hdd2 or task numbers decide the project
+    if any(any(ch.isdigit() for ch in word) for word in a ^ b):
+        return False
+    return len(a & b) / len(a | b) >= SIMILAR_TITLE_THRESHOLD
 
 
 class CoordinationStore:
@@ -497,18 +539,22 @@ class CoordinationStore:
                 if not title or not criterion:
                     raise ValueError("create requires title and success_criterion")
 
-                # Check existing non-complete tasks with identical title (case-insensitive)
+                # P96: archived projects (complete or abandoned) never block a new one
+                # and never count against the open-project limit.
+                archived = ",".join("?" for _ in ARCHIVED_STATUSES)
+                # Identical title (case-insensitive) or the same topic under other wording
                 cursor = conn.execute(
-                    "SELECT id FROM tasks WHERE LOWER(title) = LOWER(?) AND status != 'complete'",
-                    (title,),
+                    f"SELECT id, title FROM tasks WHERE status NOT IN ({archived})",
+                    ARCHIVED_STATUSES,
                 )
-                existing = cursor.fetchone()
-                if existing:
-                    conn.rollback()
-                    return self.get_task(existing[0])  # type: ignore
+                for row in cursor.fetchall():
+                    if row[1].lower() == title.lower() or is_same_topic(title, row[1]):
+                        conn.rollback()
+                        return self.get_task(row[0])  # type: ignore
 
                 # Check max open project limit (64)
-                cursor = conn.execute("SELECT COUNT(*) FROM tasks WHERE status != 'complete'")
+                cursor = conn.execute(
+                    f"SELECT COUNT(*) FROM tasks WHERE status NOT IN ({archived})", ARCHIVED_STATUSES)
                 count = cursor.fetchone()[0]
                 if count >= 64:
                     raise ValueError("64 open projects already exist; join or finish one")
