@@ -508,6 +508,17 @@ class GazetteStore:
             c.commit()
         return self.get_edition(edition_id)  # type: ignore
 
+    def ensure_edition_for_day(self, king_agent: str, peers: List[str], day: str) -> Optional[Dict[str, Any]]:
+        """P98 (operator decision 2026-10-09, option 2): open the day's edition in code.
+
+        The King used to be asked to open it (advisory only); the hint was ignored for
+        days, so no edition appeared after 2026-10-02. Opening is idempotent: returns the
+        new edition, or None when the day already has one.
+        """
+        if self.get_edition(day) is not None:
+            return None
+        return self.open_edition(king_agent, peers, edition_id=day)
+
     def get_edition(self, edition_id: str) -> Optional[Dict[str, Any]]:
         with self._conn() as c:
             row = c.execute("SELECT * FROM gazette_editions WHERE id=?", (edition_id,)).fetchone()

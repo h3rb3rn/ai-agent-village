@@ -2693,6 +2693,16 @@ class Resident:
             self.event('cycle_skipped_paused', f'mode={mode}; reason={meta.get("reason", "paused")}', True)
             return
 
+        # P98: the King's daily edition is opened by the runtime, not by a hint the King
+        # has to act on. Idempotent; anything already open is left alone.
+        if self.id == '01-king':
+            try:
+                opened = self.gazette.ensure_edition_for_day(self.id, self.peer_ids(), gazette_today())
+                if opened:
+                    self.event('gazette_opened', json.dumps(opened, ensure_ascii=False)[:1000])
+            except Exception as exc:  # noqa: BLE001 - a gazette failure must not stop the King's cycle
+                self.event('gazette_open_failed', str(exc)[:300])
+
         snapshot = self.snapshot()
         identity = Path(self.env['AGENT_IDENTITY_PROMPT']).read_text()
         compact = self.policy.prompt_profile == 'compact'

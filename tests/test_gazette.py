@@ -35,6 +35,15 @@ class OpenEditionTests(unittest.TestCase):
         self.assertEqual(edition["status"], "open")
         self.assertEqual(edition["opened_by"], "01-king")
 
+    def test_day_edition_is_opened_once_by_the_runtime(self):
+        # P98: no edition appeared for a week because opening was only advised to the King.
+        first = self.store.ensure_edition_for_day("01-king", PEERS, "2026-10-09")
+        self.assertIsNotNone(first)
+        self.assertEqual(first["id"], "2026-10-09")
+        self.assertEqual(first["status"], "open")
+        self.assertIsNone(self.store.ensure_edition_for_day("01-king", PEERS, "2026-10-09"))
+        self.assertEqual(len(self.store.list_editions(limit=10)), 1)
+
     def test_king_may_choose_the_game_name_and_task_explicitly(self):
         # P90 (operator: "der Redakteur entscheidet welches Spiel gespielt
         # wird") - King's own explicit choice overrides the random pool.
