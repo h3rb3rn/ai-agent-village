@@ -1583,7 +1583,7 @@ class Resident:
         # gate on the very next cycle instead of waiting through another
         # GAZETTE_REVIEW_CEILING cycles from zero.
         meeting_block = None
-        if name not in ('meeting_operation', 'gazette_operation', 'idle'):
+        if name not in ('meeting_operation', 'gazette_operation', 'profile_operation', 'idle'):
             pending = next((m for m in self.meetings.active() if not self.meetings.has_report(m['id'], self.id)), None)
             if pending:
                 mid = pending['id']
@@ -1616,7 +1616,7 @@ class Resident:
         # depends on (see gazette_pending_assignment()'s own comment for the
         # live incident this closes).
         assign_block = None
-        if self.id == '01-king' and name not in ('meeting_operation', 'gazette_operation', 'idle'):
+        if self.id == '01-king' and name not in ('meeting_operation', 'gazette_operation', 'profile_operation', 'idle'):
             pending_assign = self.gazette_pending_assignment()
             if not pending_assign:
                 self.state['gazette_assign_pressure'] = 0
@@ -1643,7 +1643,7 @@ class Resident:
         # so it is checked (and its pressure resets/advances) before the
         # review/close gates below, which only ever concern King/reviewer.
         contribute_block = None
-        if name not in ('meeting_operation', 'gazette_operation', 'idle'):
+        if name not in ('meeting_operation', 'gazette_operation', 'profile_operation', 'idle'):
             pending_own = self.gazette_pending_own_contribution()
             if not pending_own:
                 self.state['gazette_contribute_pressure'] = 0
@@ -1683,7 +1683,7 @@ class Resident:
         # gate message includes a ready-to-submit example from the start
         # (P58 already proved naming fields in prose is not enough).
         gazette_block = None
-        if self.id == GAZETTE_REVIEWER and name not in ('meeting_operation', 'gazette_operation', 'idle'):
+        if self.id == GAZETTE_REVIEWER and name not in ('meeting_operation', 'gazette_operation', 'profile_operation', 'idle'):
             pending_reviews = self.gazette_pending_reviews()
             if not pending_reviews:
                 self.state['gazette_review_pressure'] = 0
@@ -1705,7 +1705,7 @@ class Resident:
         # a fully-reviewed edition still needs King's own close to ever be
         # compiled/archived (see gazette_closable_editions()).
         close_block = None
-        if self.id == '01-king' and name not in ('meeting_operation', 'gazette_operation', 'idle'):
+        if self.id == '01-king' and name not in ('meeting_operation', 'gazette_operation', 'profile_operation', 'idle'):
             closable = self.gazette_closable_editions()
             if not closable:
                 self.state['gazette_close_pressure'] = 0
@@ -1732,7 +1732,7 @@ class Resident:
         # have voluntarily played (P90: game_participants(), not a fixed
         # drawn pair).
         game_winner_block = None
-        if self.id == '01-king' and name not in ('meeting_operation', 'gazette_operation', 'idle'):
+        if self.id == '01-king' and name not in ('meeting_operation', 'gazette_operation', 'profile_operation', 'idle'):
             pending_winner = self.gazette_pending_game_winner()
             if not pending_winner:
                 self.state['gazette_game_winner_pressure'] = 0
@@ -1760,7 +1760,7 @@ class Resident:
         # already returns False outright on Sat/Sun - weekends stay the
         # agent's free choice, never gated).
         calendar_plan_block = None
-        if name not in ('meeting_operation', 'gazette_operation', 'calendar_operation', 'idle'):
+        if name not in ('meeting_operation', 'gazette_operation', 'calendar_operation', 'profile_operation', 'idle'):
             if not self.calendar_pending_daily_plan():
                 self.state['calendar_plan_pressure'] = 0
             else:
@@ -1781,7 +1781,7 @@ class Resident:
         # calendar_plan_block above (which only ever required a daily
         # touch) - its own pressure counter, same proven ceiling pattern.
         calendar_week_plan_block = None
-        if name not in ('meeting_operation', 'gazette_operation', 'calendar_operation', 'idle'):
+        if name not in ('meeting_operation', 'gazette_operation', 'calendar_operation', 'profile_operation', 'idle'):
             pending_week = self.calendar_pending_week_gaps()
             if not pending_week:
                 self.state['calendar_week_plan_pressure'] = 0
@@ -1806,7 +1806,7 @@ class Resident:
         # verfassen") - own counter, checked every day including weekends
         # (see calendar_pending_gazette_writing_slot()'s own comment).
         gazette_writing_block = None
-        if name not in ('meeting_operation', 'gazette_operation', 'calendar_operation', 'idle'):
+        if name not in ('meeting_operation', 'gazette_operation', 'calendar_operation', 'profile_operation', 'idle'):
             if not self.calendar_pending_gazette_writing_slot():
                 self.state['gazette_writing_slot_pressure'] = 0
             else:

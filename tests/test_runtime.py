@@ -187,6 +187,18 @@ class RuntimeTests(unittest.TestCase):
                       achieved='x', evidence='y', next_step='z', blockers='')
         self.assertTrue(self.agent.state['last_result']['ok'])
 
+    def test_profile_operation_is_never_gated_by_an_open_meeting(self):
+        # P95 (live finding 2026-10-08): no agent ever wrote its resident profile
+        # although the runtime asks every cycle - profile_operation was not on
+        # the hard gates' exemption lists, so it was rejected like any other
+        # solo action once a meeting (or calendar plan) stayed open.
+        self.agent.meetings.schedule('jour_fixe', 'status update', '2026-09-24T10:00:00Z', meeting_id='m1')
+        for i in range(MEETING_REPORT_CEILING + 2):
+            self.execute('execute_bash', command=f'printf ok{i}')
+        self.assertFalse(self.agent.state['last_result']['ok'])  # the gate is active
+        self.execute('profile_operation', operation='update', profession='tester')
+        self.assertTrue(self.agent.state['last_result']['ok'], self.agent.state['last_result'])
+
     def test_meeting_nudge_stops_once_the_report_is_submitted(self):
         self.agent.meetings.schedule('jour_fixe', 'status update', '2026-09-24T10:00:00Z', meeting_id='m1')
         self.execute('meeting_operation', operation='report', meeting_id='m1',
