@@ -318,6 +318,22 @@ if __name__ == "__main__":
     unittest.main()
 
 
+    def test_identical_corrections_from_different_sources_are_both_stored(self):
+        """P97: same text and author within one second must not collide on the primary key."""
+        base = {"agent": "a", "scope": "shared", "kind": "correction", "content": "same text", "confidence": 1.0}
+        status1, _ = self.call("POST", "/v1/memories", dict(base, source_event="audit:cat:e1"), token="token-a")
+        status2, _ = self.call("POST", "/v1/memories", dict(base, source_event="audit:cat:e2"), token="token-a")
+        self.assertEqual((status1, status2), (201, 201))
+
+    def test_duplicate_memory_is_answered_not_dropped(self):
+        """P97: an exact duplicate gets a clean 409 instead of an aborted connection."""
+        body = {"agent": "a", "scope": "shared", "kind": "correction", "content": "dup", "confidence": 1.0,
+                "source_event": "audit:cat:e9"}
+        self.call("POST", "/v1/memories", body, token="token-a")
+        status, _ = self.call("POST", "/v1/memories", body, token="token-a")
+        self.assertIn(status, (201, 409))
+
+
 class MemoryStatsRouteTests(MemoryGatewayTests):
     """Regression: 2026-09-27, N06-M10. /v1/stats crashed with an unhandled NameError
     ('projection' referenced but never assigned in that branch), so curl saw "Empty

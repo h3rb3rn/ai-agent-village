@@ -634,7 +634,11 @@ class Handler(BaseHTTPRequestHandler):
                     return self.send_json(429, {"error": "agent memory write quota exceeded"})
 
                 created = now()
-                ident = hashlib.sha256(f"{agent}\0{created}\0{content}".encode()).hexdigest()[:24]
+                # P97: the source event is part of the identity. Several corrections with the
+                # same text (written by the same author within one second, e.g. for different
+                # residents) used to collide on the primary key and dropped the connection.
+                source_event = str(value.get("source_event", ""))[:200]
+                ident = hashlib.sha256(f"{agent}\0{created}\0{content}\0{source_event}".encode()).hexdigest()[:24]
                 metadata_str = json.dumps(value.get("metadata", {}), ensure_ascii=False) if isinstance(value.get("metadata"), dict) else "{}"
 
                 item = {
@@ -671,6 +675,11 @@ class Handler(BaseHTTPRequestHandler):
                 row = conn.execute("SELECT * FROM memories WHERE id = ?", (ident,)).fetchone()
                 conn.close()
                 return self.send_json(201, format_memory_row(row))
+            except sqlite3.IntegrityError:
+                # P97: an identical memory already exists - answer, never drop the connection
+                conn.rollback()
+                conn.close()
+                return self.send_json(409, {"error": "duplicate memory"})
             except sqlite3.OperationalError as exc:
                 return self.send_json(500, {"error": f"Database error: {exc}"})
 

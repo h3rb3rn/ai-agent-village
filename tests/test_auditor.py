@@ -336,5 +336,34 @@ class FailureTallyTests(unittest.TestCase):
         self.assertEqual(len(self.store.tally_for_agent("03-librarian", limit=3)), 3)
 
 
+class DeliveryFailureTests(unittest.TestCase):
+    """P97 (live incident 2026-10-08): a failed shared write ended the auditor process."""
+
+    def _finding(self, event_id):
+        from village.auditor import AuditFinding
+        return AuditFinding(category="format_violation", agent="09-chronicler", source_event_id=event_id,
+                            problem="Your response was rejected.", solution="Output only the JSON action.")
+
+    def test_failed_shared_write_is_reported_as_undelivered_and_never_raises(self):
+        def broken_writer(payload):
+            raise ConnectionError("Remote end closed connection without response")
+        delivered = deliver(self._finding("e1"), "shared", coordination_store=MagicMock(),
+                            memory_writer=broken_writer)
+        self.assertFalse(delivered)
+
+    def test_successful_shared_write_is_reported_as_delivered(self):
+        writes = []
+        delivered = deliver(self._finding("e2"), "shared", coordination_store=MagicMock(),
+                            memory_writer=lambda payload: writes.append(payload) or {})
+        self.assertTrue(delivered)
+        self.assertEqual(writes[0]["source_event"], "audit:format_violation:e2")
+
+    def test_private_delivery_is_always_delivered(self):
+        store = MagicMock()
+        self.assertTrue(deliver(self._finding("e3"), "private", coordination_store=store,
+                                memory_writer=lambda payload: None))
+        store.post_inbox_message.assert_called_once()
+
+
 if __name__ == "__main__":
     unittest.main()
