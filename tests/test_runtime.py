@@ -101,6 +101,7 @@ class RuntimeTests(unittest.TestCase):
         self.assertFalse(self.agent.guard('execute_bash', {'command': 'ls'}))
         self.assertTrue(self.agent.guard('profile_operation', {'operation': 'update'}))
         self.assertTrue(self.agent.guard('calendar_operation', {'operation': 'list'}))
+        self.assertFalse(self.agent.guard('board_message', {'recipient': 'ALL', 'message': 'hi'}))
 
     def test_profile_gate_is_released_once_a_profile_exists(self):
         self.agent.env['VILLAGE_PROFILE_GATE'] = '1'

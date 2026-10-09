@@ -143,6 +143,7 @@ Pro Paket Nachweis unter `docs/evidence/Pxx.md` anlegen, sobald tatsächlich dar
 | P106 | Profile: nur 1 von 9 Agents. Hinweis wurde nie umgesetzt. Fix: schaltbare Profil-Pflicht vor Arbeitsaktionen (`VILLAGE_PROFILE_GATE=1`, Standard aus), Tests grün ohne Änderung der Fixtures | Betreiberauftrag Überwachung und Behebung | LOCAL_VERIFIED | [docs/evidence/P106.md](evidence/P106.md) |
 | P107 | Antworten an Auditor und Dorfrat wurden abgelehnt, weil diese Systemabsender nicht als Empfänger galten. Fix: sie sind gültige Empfänger. Test grün, Suite 1179 OK | Betreiberauftrag Überwachung und Behebung | LOCAL_VERIFIED | [docs/evidence/P107.md](evidence/P107.md) |
 | P108 | Profile der Librarian und Methodologist wurden abgelehnt, weil das ASCII-Porträt nicht 250 Zeilen hatte; damit gingen auch die Textfelder verloren. Fix: Textfelder werden gespeichert, das Porträt bleibt unverändert, Warnung im Ergebnis. Test grün | Betreiberauftrag Überwachung und Behebung | LOCAL_VERIFIED | [docs/evidence/P108.md](evidence/P108.md) |
+| P109 | Profil-Pflicht griff nur bei Arbeitsaktionen; blockierte Agents wichen auf Nachrichten und Meeting-Berichte aus und schrieben nie ein Profil (Messung 18:50 UTC). Fix: Pflicht gilt für alle Aktionen außer Profil, idle und den Pflicht-Abläufen (Meetings, Kalender, Gazette, Gedächtnis). Test grün, Suite 1180 OK | Betreiberauftrag Messung und Behebung | LOCAL_VERIFIED | [docs/evidence/P109.md](evidence/P109.md) |
 
 ## Fortschrittsbuch
 

@@ -219,8 +219,11 @@ REPEATED_REJECTION_WINDOW_SECONDS = 6 * 3600
 REPEATED_REJECTION_NUDGE_AT = 2
 
 
-# P106: actions that count as solo work for the profile gate (see Resident.guard)
-PROFILE_GATED_ACTIONS = frozenset({'execute_bash', 'start_job', 'task_operation', 'team_operation', 'research_request', 'artifact_operation'})
+# P106 (measured 2026-10-09 18:50 UTC): the first gate covered only solo work, and blocked agents
+# moved on to board messages and meeting reports instead of the one profile call. Everything except
+# the profile call, idle and the obligation actions (meetings, calendar, gazette, memory) is gated.
+PROFILE_GATE_EXEMPT = frozenset({'profile_operation', 'idle', 'meeting_operation', 'calendar_operation',
+                                 'gazette_operation', 'memory_search', 'memory_remember'})
 
 
 # P107 (live finding 2026-10-09): agents answered the auditor and the council, but these
@@ -1493,7 +1496,7 @@ class Resident:
         # solo work (commands, jobs, tasks, team and research actions) is refused after two
         # cycles until the profile exists. Profile, calendar, gazette and meeting actions are
         # never blocked by it. Off by default, so existing behaviour and tests are unchanged.
-        if self.env.get('VILLAGE_PROFILE_GATE') == '1' and name in PROFILE_GATED_ACTIONS:
+        if self.env.get('VILLAGE_PROFILE_GATE') == '1' and name not in PROFILE_GATE_EXEMPT:
             try:
                 has_profile = bool(self.residents.get_profile(self.id))
             except Exception:
