@@ -1506,7 +1506,7 @@ class Resident:
                 pressure = int(self.state.get('profile_required_pressure', 0)) + 1
                 self.state['profile_required_pressure'] = pressure
                 if pressure >= 2:
-                    self.feedback(name, 'Profile required before solo work: call profile_operation with '
+                    self.feedback(name, 'Profile required before other actions: call profile_operation with '
                                         'operation=update and profession, calling, personal_info, preferences, '
                                         'hobbies, goals, wishes.', False)
                     self.event('profile_required_gate', f'pressure={pressure}')
