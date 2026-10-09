@@ -219,6 +219,10 @@ REPEATED_REJECTION_WINDOW_SECONDS = 6 * 3600
 REPEATED_REJECTION_NUDGE_AT = 2
 
 
+# P106: actions that count as solo work for the profile gate (see Resident.guard)
+PROFILE_GATED_ACTIONS = frozenset({'execute_bash', 'start_job', 'task_operation', 'team_operation', 'research_request', 'artifact_operation'})
+
+
 def recipient_error(recipient, known_ids):
     """P104 (live finding 2026-10-09): name-style recipients ('methodologist') were refused
     with no hint of the valid IDs. The message now lists them."""
@@ -1479,6 +1483,27 @@ class Resident:
         return allowed or ['idle']
 
     def guard(self, name, args):
+        # P106 (operator 2026-10-09): residents without an authored profile were only hinted at,
+        # and the hint was never acted on (one of nine wrote one). With VILLAGE_PROFILE_GATE=1
+        # solo work (commands, jobs, tasks, team and research actions) is refused after two
+        # cycles until the profile exists. Profile, calendar, gazette and meeting actions are
+        # never blocked by it. Off by default, so existing behaviour and tests are unchanged.
+        if self.env.get('VILLAGE_PROFILE_GATE') == '1' and name in PROFILE_GATED_ACTIONS:
+            try:
+                has_profile = bool(self.residents.get_profile(self.id))
+            except Exception:
+                has_profile = True
+            if not has_profile:
+                pressure = int(self.state.get('profile_required_pressure', 0)) + 1
+                self.state['profile_required_pressure'] = pressure
+                if pressure >= 2:
+                    self.feedback(name, 'Profile required before solo work: call profile_operation with '
+                                        'operation=update and profession, calling, personal_info, preferences, '
+                                        'hobbies, goals, wishes.', False)
+                    self.event('profile_required_gate', f'pressure={pressure}')
+                    return False
+            else:
+                self.state['profile_required_pressure'] = 0
         if is_paused(self.pause_marker) and name in ('execute_bash', 'start_job'):
             self.feedback(name, 'Execution blocked: simulation is paused ("pausiert startet nichts").', False)
             return False

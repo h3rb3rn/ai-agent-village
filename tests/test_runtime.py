@@ -92,6 +92,29 @@ class RuntimeTests(unittest.TestCase):
         events=tail(self.root/'board/events.jsonl')
         self.assertTrue(any(e.get('event') == 'board_message' for e in events))
 
+    def test_profile_gate_refuses_solo_work_after_two_cycles_without_profile(self):
+        # P106: with the gate switched on, solo work waits for the profile; the profile call passes
+        self.agent.env['VILLAGE_PROFILE_GATE'] = '1'
+        self.agent.residents.get_profile = lambda agent_id: None
+        self.agent.state['profile_required_pressure'] = 0
+        self.assertTrue(self.agent.guard('execute_bash', {'command': 'ls'}))  # first cycle: passes
+        self.assertFalse(self.agent.guard('execute_bash', {'command': 'ls'}))
+        self.assertTrue(self.agent.guard('profile_operation', {'operation': 'update'}))
+        self.assertTrue(self.agent.guard('calendar_operation', {'operation': 'list'}))
+
+    def test_profile_gate_is_released_once_a_profile_exists(self):
+        self.agent.env['VILLAGE_PROFILE_GATE'] = '1'
+        self.agent.residents.get_profile = lambda agent_id: {'agent_id': agent_id}
+        self.agent.state['profile_required_pressure'] = 5
+        self.assertTrue(self.agent.guard('execute_bash', {'command': 'ls'}))
+        self.assertEqual(self.agent.state['profile_required_pressure'], 0)
+
+    def test_profile_gate_is_off_by_default(self):
+        self.agent.env.pop('VILLAGE_PROFILE_GATE', None)
+        self.agent.residents.get_profile = lambda agent_id: None
+        self.agent.state['profile_required_pressure'] = 9
+        self.assertTrue(self.agent.guard('execute_bash', {'command': 'ls'}))
+
     def test_recipient_error_lists_the_valid_peer_ids(self):
         # P104: name-style recipients were refused without telling the agent the valid IDs
         from runtime import recipient_error
