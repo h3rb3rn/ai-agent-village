@@ -93,3 +93,33 @@ def autofill_week(plan: Curriculum, today: date) -> List[date]:
         plan.add(day, topic, "village-default", today)
         planned.append(day)
     return planned
+
+
+# P115: examination. An answer to today's lesson is the proof that a resident took the lesson.
+# One answer per resident per day; the answer must say something (at least 40 characters).
+MIN_ANSWER_CHARS = 40
+
+
+def record_answer(plan: Curriculum, agent: str, day: date, answer: str) -> bool:
+    """Store one resident's answer to the day's lesson. Returns False if it already exists."""
+    text = " ".join(str(answer).split())
+    if plan.lesson(day) is None:
+        raise ValueError("there is no lesson for this day to answer")
+    if len(text) < MIN_ANSWER_CHARS:
+        raise ValueError(f"an answer needs at least {MIN_ANSWER_CHARS} characters")
+    with sqlite3.connect(plan.db_path, timeout=30) as c:
+        c.execute("""CREATE TABLE IF NOT EXISTS school_answers(
+            agent TEXT NOT NULL, lesson_day TEXT NOT NULL, answer TEXT NOT NULL,
+            answered_at TEXT NOT NULL, PRIMARY KEY(agent, lesson_day))""")
+        cur = c.execute("INSERT OR IGNORE INTO school_answers VALUES(?,?,?,?)",
+                        (agent, day.isoformat(), text[:2000], date.today().isoformat()))
+        c.commit()
+        return cur.rowcount == 1
+
+
+def answers_for(plan: Curriculum, day: date) -> List[str]:
+    with sqlite3.connect(plan.db_path, timeout=30) as c:
+        c.execute("""CREATE TABLE IF NOT EXISTS school_answers(
+            agent TEXT NOT NULL, lesson_day TEXT NOT NULL, answer TEXT NOT NULL,
+            answered_at TEXT NOT NULL, PRIMARY KEY(agent, lesson_day))""")
+        return [r[0] for r in c.execute("SELECT agent FROM school_answers WHERE lesson_day=?", (day.isoformat(),))]

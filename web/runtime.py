@@ -2651,16 +2651,23 @@ class Resident:
                     raise ValueError('finetune_operation requires operation propose, update_status, evaluate, '
                                     'request_swap, review_swap, release_gpu, or list')
             elif name == 'school_operation':
-                # P111 (operator 2026-10-09): King plans the school lessons, at most a week ahead.
+                # P111/P115: King plans the school lessons (at most a week ahead); any resident
+                # answers today's lesson (proof of learning, one answer per day).
                 from datetime import date as _date
-                from village.school import Curriculum
-                if self.id != '01-king':
-                    raise ValueError('only 01-king plans school lessons')
+                from village.school import Curriculum, record_answer
                 plan = Curriculum(self.board / 'school.sqlite3')
-                lesson_day = _date.fromisoformat(str(args.get('lesson_day', '')))
-                plan.add(lesson_day, str(args.get('topic', '')), self.id, _date.fromisoformat(gazette_today()))
-                self.event('school_planned', f"day={lesson_day.isoformat()}; topic={str(args.get('topic',''))[:120]}")
-                self.feedback(name, json.dumps({'planned': lesson_day.isoformat()}, ensure_ascii=False), True)
+                if args.get('operation') == 'answer':
+                    day = _date.fromisoformat(gazette_today())
+                    stored = record_answer(plan, self.id, day, str(args.get('answer', '')))
+                    self.event('school_answered', f'agent={self.id}; day={day.isoformat()}; stored={stored}')
+                    self.feedback(name, json.dumps({'answered': day.isoformat(), 'stored': stored}, ensure_ascii=False), True)
+                else:
+                    if self.id != '01-king':
+                        raise ValueError('only 01-king plans school lessons')
+                    lesson_day = _date.fromisoformat(str(args.get('lesson_day', '')))
+                    plan.add(lesson_day, str(args.get('topic', '')), self.id, _date.fromisoformat(gazette_today()))
+                    self.event('school_planned', f"day={lesson_day.isoformat()}; topic={str(args.get('topic',''))[:120]}")
+                    self.feedback(name, json.dumps({'planned': lesson_day.isoformat()}, ensure_ascii=False), True)
             elif name == 'profile_operation':
                 # P91 (operator directive): "Zudem sollen die Agents selbst die
                 # Seite anlegen und pflegen, nicht du" - agents author and maintain

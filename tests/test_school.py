@@ -93,3 +93,34 @@ class DefaultCurriculumTests(unittest.TestCase):
             plan.add(tomorrow, "teacher's own topic", "01-king", TODAY)
             autofill_week(plan, TODAY)
             self.assertEqual(plan.lesson(tomorrow)["topic"], "teacher's own topic")
+
+
+class LessonAnswerTests(unittest.TestCase):
+    """P115: a resident's answer to today's lesson is stored once per day and must say something."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.plan = Curriculum(Path(self.tmp.name) / "school.sqlite3")
+        self.day = date.fromordinal(TODAY.toordinal() + 1)
+        self.plan.add(self.day, "fractions", "01-king", TODAY)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_answer_is_stored_once_per_resident_and_day(self):
+        from village.school import answers_for, record_answer
+        text = "A fraction is a part of a whole, written as numerator over denominator."
+        self.assertTrue(record_answer(self.plan, "02-explorer", self.day, text))
+        self.assertFalse(record_answer(self.plan, "02-explorer", self.day, text))
+        self.assertEqual(answers_for(self.plan, self.day), ["02-explorer"])
+
+    def test_empty_or_short_answer_is_refused(self):
+        from village.school import record_answer
+        with self.assertRaises(ValueError):
+            record_answer(self.plan, "02-explorer", self.day, "ok")
+
+    def test_no_answer_without_a_lesson(self):
+        from village.school import record_answer
+        with self.assertRaises(ValueError):
+            record_answer(self.plan, "02-explorer", date.fromordinal(TODAY.toordinal() + 3),
+                          "A sufficiently long answer about a day without a lesson.")

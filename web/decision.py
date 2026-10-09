@@ -53,7 +53,6 @@ def _validate_action(name, args):
         'research_proposal': ('operation',), 'gazette_operation': ('operation',),
         'calendar_operation': ('operation',), 'finetune_operation': ('operation',),
         'profile_operation': ('operation',),
-        'school_operation': ('operation', 'lesson_day', 'topic'),
     }.get(name, ())
     if any(not isinstance(args.get(field), str) or not args[field].strip() for field in required):
         return 'missing action argument'
