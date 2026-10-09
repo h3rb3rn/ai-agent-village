@@ -115,6 +115,12 @@ class RuntimeTests(unittest.TestCase):
         self.agent.state['profile_required_pressure'] = 9
         self.assertTrue(self.agent.guard('execute_bash', {'command': 'ls'}))
 
+    def test_system_senders_are_valid_reply_targets(self):
+        # P107: agents reply to the auditor and the council; those must be accepted recipients
+        from runtime import SYSTEM_SENDERS
+        self.assertIn('village-auditor', SYSTEM_SENDERS)
+        self.assertIn('village-council', SYSTEM_SENDERS)
+
     def test_recipient_error_lists_the_valid_peer_ids(self):
         # P104: name-style recipients were refused without telling the agent the valid IDs
         from runtime import recipient_error

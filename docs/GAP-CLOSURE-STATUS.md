@@ -141,6 +141,7 @@ Pro Paket Nachweis unter `docs/evidence/Pxx.md` anlegen, sobald tatsächlich dar
 | P104 | Rund 230 Aktionsfehler am 9. Oktober: Berichte ohne offenes Meeting, Empfänger-Namen statt IDs, unbekannte Task-IDs. Fix: die Fehlermeldungen nennen die nächste sinnvolle Aktion (kein offenes Meeting, gültige IDs, offene Tasks). Drei neue Tests, Gegenprobe rot, Suite 1161 OK. Nicht auf dem Host installiert | Betreiberauftrag "Ja" | LOCAL_VERIFIED | [docs/evidence/P104.md](evidence/P104.md) |
 | P105 | Schule: Lehrplan ist immer sieben Tage im Voraus festgelegt (Betreiberregel). Modul `village/school.py` mit Lücken-Prüfung, sechs Tests. Zustellung und Prüfung folgen in P106/P107 | Betreiberauftrag Schule (Paket 1 von 3) | LOCAL_VERIFIED | [docs/evidence/P105.md](evidence/P105.md) |
 | P106 | Profile: nur 1 von 9 Agents. Hinweis wurde nie umgesetzt. Fix: schaltbare Profil-Pflicht vor Arbeitsaktionen (`VILLAGE_PROFILE_GATE=1`, Standard aus), Tests grün ohne Änderung der Fixtures | Betreiberauftrag Überwachung und Behebung | LOCAL_VERIFIED | [docs/evidence/P106.md](evidence/P106.md) |
+| P107 | Antworten an Auditor und Dorfrat wurden abgelehnt, weil diese Systemabsender nicht als Empfänger galten. Fix: sie sind gültige Empfänger. Test grün, Suite 1179 OK | Betreiberauftrag Überwachung und Behebung | LOCAL_VERIFIED | [docs/evidence/P107.md](evidence/P107.md) |
 
 ## Fortschrittsbuch
 

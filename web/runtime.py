@@ -223,6 +223,11 @@ REPEATED_REJECTION_NUDGE_AT = 2
 PROFILE_GATED_ACTIONS = frozenset({'execute_bash', 'start_job', 'task_operation', 'team_operation', 'research_request', 'artifact_operation'})
 
 
+# P107 (live finding 2026-10-09): agents answered the auditor and the council, but these
+# system senders were not valid recipients, so replies to them were refused.
+SYSTEM_SENDERS = frozenset({'village-auditor', 'village-council'})
+
+
 def recipient_error(recipient, known_ids):
     """P104 (live finding 2026-10-09): name-style recipients ('methodologist') were refused
     with no hint of the valid IDs. The message now lists them."""
@@ -2113,7 +2118,7 @@ class Resident:
                     self.feedback(name, f'Cancelled job {job_id}. Status: {status}', True)
             elif name == 'board_message':
                 recipient = args.get('recipient','ALL')
-                known = {x['id'] for x in read_json(Path('/etc/ai-village/runtime-peers.json'),[])}
+                known = {x['id'] for x in read_json(Path('/etc/ai-village/runtime-peers.json'),[])} | SYSTEM_SENDERS
                 if recipient != 'ALL' and recipient not in known:
                     raise ValueError(recipient_error(recipient, known))
                 reply_to = args.get('reply_to', '')
