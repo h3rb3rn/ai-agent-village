@@ -70,3 +70,26 @@ def planning_reminder(plan: Curriculum, today: date) -> Optional[str]:
     days = ", ".join(d.isoformat() for d in gaps)
     return (f"School curriculum: the next {HORIZON_DAYS} days must be planned ahead. "
             f"Still open: {days}. Plan them with the school plan, one lesson per day.")
+
+
+# P113 (default curriculum, chosen by the runtime when the teacher has not planned a day):
+# lessons about how work in this village succeeds, taken from its own recorded failure modes.
+DEFAULT_TOPICS = (
+    "Evidence: a claim counts only with a verifiable check (a test, a log line, a measured value).",
+    "Time budgets: a long answer is cut by the output limit; keep reasoning short and act.",
+    "Claiming work: claim a task before you work on it, and record what you did in last_finding.",
+    "Meetings: report a meeting once while it is open; a closed meeting needs no report.",
+    "Messages: send one message per question, to an exact agent ID, and do not repeat it.",
+    "Errors: read the reason an action was refused and change exactly the field it names.",
+    "Gazette: contribute before the deadline; a stale contribution is not news.",
+)
+
+
+def autofill_week(plan: Curriculum, today: date) -> List[date]:
+    """P113: plan every open day of the next week from DEFAULT_TOPICS. Returns the days it planned."""
+    planned = []
+    for day in plan.gaps(today):
+        topic = DEFAULT_TOPICS[day.toordinal() % len(DEFAULT_TOPICS)]
+        plan.add(day, topic, "village-default", today)
+        planned.append(day)
+    return planned

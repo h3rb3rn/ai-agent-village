@@ -2788,6 +2788,9 @@ class Resident:
                 from village.school import Curriculum, daily_announcement, planning_reminder
                 plan = Curriculum(self.board / 'school.sqlite3')
                 today = _date.fromisoformat(gazette_today())
+                # P113: open days are filled from the default curriculum, so the week is never empty
+                from village.school import autofill_week
+                autofill_week(plan, today)
                 if self.state.get('school_announced_day') != today.isoformat():
                     text = daily_announcement(plan, today)
                     if text:

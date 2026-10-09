@@ -71,3 +71,25 @@ class SchoolDeliveryTests(unittest.TestCase):
         for offset in range(1, HORIZON_DAYS + 1):
             self.plan.add(date.fromordinal(TODAY.toordinal() + offset), f"topic {offset}", "01-king", TODAY)
         self.assertIsNone(planning_reminder(self.plan, TODAY))
+
+
+class DefaultCurriculumTests(unittest.TestCase):
+    """P113: open days are filled from the default topics, so the week is never empty."""
+
+    def test_autofill_plans_every_open_day_of_the_week(self):
+        from village.school import autofill_week, DEFAULT_TOPICS
+        with tempfile.TemporaryDirectory() as d:
+            plan = Curriculum(Path(d) / "school.sqlite3")
+            planned = autofill_week(plan, TODAY)
+            self.assertEqual(len(planned), HORIZON_DAYS)
+            self.assertEqual(plan.gaps(TODAY), [])
+            self.assertIn(plan.lesson(planned[0])["topic"], DEFAULT_TOPICS)
+
+    def test_autofill_does_not_overwrite_a_lesson_the_teacher_planned(self):
+        from village.school import autofill_week
+        with tempfile.TemporaryDirectory() as d:
+            plan = Curriculum(Path(d) / "school.sqlite3")
+            tomorrow = date.fromordinal(TODAY.toordinal() + 1)
+            plan.add(tomorrow, "teacher's own topic", "01-king", TODAY)
+            autofill_week(plan, TODAY)
+            self.assertEqual(plan.lesson(tomorrow)["topic"], "teacher's own topic")
