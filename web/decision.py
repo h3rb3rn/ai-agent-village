@@ -58,7 +58,9 @@ def _validate_action(name, args):
     if name == 'research_request' and args.get('source') not in ('wikipedia', 'github', 'dockerhub', 'huggingface'):
         return 'unsupported research source'
     if name == 'meeting_operation' and args.get('operation') not in ('report', 'close'):
-        return 'unknown meeting operation'
+        # P112 (live finding 2026-10-09, Methodologist): agents tried operation=create. Only report and
+        # close exist; the scheduler opens meetings. The reason now says so.
+        return 'unknown meeting operation: only report or close exist; meetings are opened by the scheduler, never created by an agent'
     if name == 'team_operation' and args.get('operation') not in ('create', 'join', 'leave', 'create_subtask', 'claim_subtask', 'complete_subtask', 'propose_role', 'vote_role'):
         return 'unknown team operation'
     if name == 'artifact_operation' and args.get('operation') not in ('register', 'claim_success', 'verify', 'adopt', 'inspect'):

@@ -133,6 +133,17 @@ class RuntimeTests(unittest.TestCase):
         self.assertFalse(self.agent.state['last_result']['ok'])
         self.assertIn('only 01-king', self.agent.state['last_result']['result'])
 
+    def test_school_gate_blocks_the_king_while_days_are_open(self):
+        # P112: with the school gate on, the King's other actions are refused after two cycles
+        # while the next seven days are not planned; school_operation stays open.
+        self.agent.env['VILLAGE_SCHOOL_GATE'] = '1'
+        self.agent.id = '01-king'
+        self.agent.state['school_gate_pressure'] = 0
+        self.assertTrue(self.agent.guard('execute_bash', {'command': 'ls'}))
+        self.assertFalse(self.agent.guard('execute_bash', {'command': 'ls'}))
+        self.assertTrue(self.agent.guard('school_operation', {'operation': 'plan'}))
+        self.agent.id = '01-a'
+
     def test_recipient_error_lists_the_valid_peer_ids(self):
         # P104: name-style recipients were refused without telling the agent the valid IDs
         from runtime import recipient_error

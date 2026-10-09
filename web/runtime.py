@@ -219,6 +219,8 @@ REPEATED_REJECTION_WINDOW_SECONDS = 6 * 3600
 REPEATED_REJECTION_NUDGE_AT = 2
 
 
+# P112: actions the King may take while the school plan has open days (see Resident.guard)
+SCHOOL_GATE_EXEMPT = frozenset({'school_operation', 'profile_operation', 'idle', 'meeting_operation', 'calendar_operation', 'gazette_operation'})
 # P106 (measured 2026-10-09 18:50 UTC): the first gate covered only solo work, and blocked agents
 # moved on to board messages and meeting reports instead of the one profile call. Everything except
 # the profile call, idle and the obligation actions (meetings, calendar, gazette) is gated. Memory
@@ -1497,6 +1499,27 @@ class Resident:
         # solo work (commands, jobs, tasks, team and research actions) is refused after two
         # cycles until the profile exists. Profile, calendar, gazette and meeting actions are
         # never blocked by it. Off by default, so existing behaviour and tests are unchanged.
+        # P112 (operator 2026-10-09: the curriculum is always planned a week ahead): with
+        # VILLAGE_SCHOOL_GATE=1 the King's other actions are refused after two cycles while any of
+        # the next seven days has no lesson. He can always plan (school_operation) and do the
+        # obligations; nothing else is blocked. Off by default.
+        if self.id == '01-king' and self.env.get('VILLAGE_SCHOOL_GATE') == '1' and name not in SCHOOL_GATE_EXEMPT:
+            try:
+                from datetime import date as _date
+                from village.school import Curriculum
+                gaps = Curriculum(self.board / 'school.sqlite3').gaps(_date.fromisoformat(gazette_today()))
+            except Exception:
+                gaps = []
+            if gaps:
+                pressure = int(self.state.get('school_gate_pressure', 0)) + 1
+                self.state['school_gate_pressure'] = pressure
+                if pressure >= 2:
+                    self.feedback(name, 'School curriculum has open days: call school_operation (operation=plan, '
+                                        'lesson_day, topic) for the next open day first.', False)
+                    self.event('school_gate', f'pressure={pressure}; open={len(gaps)}')
+                    return False
+            else:
+                self.state['school_gate_pressure'] = 0
         if self.env.get('VILLAGE_PROFILE_GATE') == '1' and name not in PROFILE_GATE_EXEMPT:
             try:
                 has_profile = bool(self.residents.get_profile(self.id))
