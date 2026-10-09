@@ -139,6 +139,7 @@ Pro Paket Nachweis unter `docs/evidence/Pxx.md` anlegen, sobald tatsächlich dar
 | P102 | Stündliche Jour Fixes: am 8. Oktober sechs Runden, eine davon 211 Mal berichtet. Fix: eine Jour-Fixe-Runde pro UTC-Tag (`round_id`), Standup behält die Stunde. Drei neue Tests, am alten Scheduler rot. Nicht auf dem Host installiert | Betreiberauftrag "ja, für alle drei" (Paket 4 von 5) | LOCAL_VERIFIED | [docs/evidence/P102.md](evidence/P102.md) |
 | P103 | Messgrößen für Redundanz und Effizienz: Kennzahlen (wiederholte Berichte, Direktnachrichten je Paar, blockierte Doppel, Jour-Fixe-Runden, Budget-Anteil) aus dem Ereignislog, nur lesend. Fünf neue Tests und Auswertungsskript. Nicht auf dem Host installiert | Betreiberauftrag "ja, für alle drei" (Paket 5 von 5) | LOCAL_VERIFIED | [docs/evidence/P103.md](evidence/P103.md) |
 | P104 | Rund 230 Aktionsfehler am 9. Oktober: Berichte ohne offenes Meeting, Empfänger-Namen statt IDs, unbekannte Task-IDs. Fix: die Fehlermeldungen nennen die nächste sinnvolle Aktion (kein offenes Meeting, gültige IDs, offene Tasks). Drei neue Tests, Gegenprobe rot, Suite 1161 OK. Nicht auf dem Host installiert | Betreiberauftrag "Ja" | LOCAL_VERIFIED | [docs/evidence/P104.md](evidence/P104.md) |
+| P105 | Schule: Lehrplan ist immer sieben Tage im Voraus festgelegt (Betreiberregel). Modul `village/school.py` mit Lücken-Prüfung, sechs Tests. Zustellung und Prüfung folgen in P106/P107 | Betreiberauftrag Schule (Paket 1 von 3) | LOCAL_VERIFIED | [docs/evidence/P105.md](evidence/P105.md) |
 
 ## Fortschrittsbuch
 
