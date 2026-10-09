@@ -46,3 +46,28 @@ class CurriculumTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SchoolDeliveryTests(unittest.TestCase):
+    """P106: the planned lesson of the day is announced; the teacher is reminded of gaps."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.plan = Curriculum(Path(self.tmp.name) / "school.sqlite3")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_planned_lesson_is_announced_for_its_day(self):
+        from village.school import daily_announcement
+        self.plan.add(date.fromordinal(TODAY.toordinal() + 1), "fractions", "01-king", TODAY)
+        text = daily_announcement(self.plan, date.fromordinal(TODAY.toordinal() + 1))
+        self.assertIn("fractions", text)
+        self.assertIsNone(daily_announcement(self.plan, TODAY))
+
+    def test_reminder_names_the_unplanned_days_and_clears_when_the_week_is_full(self):
+        from village.school import planning_reminder
+        self.assertIn("Still open", planning_reminder(self.plan, TODAY))
+        for offset in range(1, HORIZON_DAYS + 1):
+            self.plan.add(date.fromordinal(TODAY.toordinal() + offset), f"topic {offset}", "01-king", TODAY)
+        self.assertIsNone(planning_reminder(self.plan, TODAY))

@@ -50,3 +50,23 @@ class Curriculum:
             if self.lesson(day) is None:
                 missing.append(day)
         return missing
+
+
+def daily_announcement(plan: Curriculum, today: date) -> Optional[str]:
+    """P106: the lesson of the day, as the text the teacher posts to everyone (None if none planned)."""
+    lesson = plan.lesson(today)
+    if lesson is None:
+        return None
+    return (f"School, {today.isoformat()}: {lesson['topic']} (teacher {lesson['teacher']}). "
+            "Work through the topic in your 2-hour school block and answer the examination question "
+            "when the teacher asks for it.")
+
+
+def planning_reminder(plan: Curriculum, today: date) -> Optional[str]:
+    """P106: the teacher is reminded while any day of the next week is still unplanned."""
+    gaps = plan.gaps(today)
+    if not gaps:
+        return None
+    days = ", ".join(d.isoformat() for d in gaps)
+    return (f"School curriculum: the next {HORIZON_DAYS} days must be planned ahead. "
+            f"Still open: {days}. Plan them with the school plan, one lesson per day.")

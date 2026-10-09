@@ -2746,6 +2746,28 @@ class Resident:
             self.event('cycle_skipped_paused', f'mode={mode}; reason={meta.get("reason", "paused")}', True)
             return
 
+        # P106 (operator 2026-10-09): school. The King posts the planned lesson of the day to all
+        # residents once per day, and is reminded while the next seven days are not planned.
+        if self.id == '01-king' and hasattr(self.tasks, 'store'):
+            try:
+                from datetime import date as _date
+                from village.school import Curriculum, daily_announcement, planning_reminder
+                plan = Curriculum(self.board / 'school.sqlite3')
+                today = _date.fromisoformat(gazette_today())
+                if self.state.get('school_announced_day') != today.isoformat():
+                    text = daily_announcement(plan, today)
+                    if text:
+                        self.tasks.store.post_inbox_message(source='board', sender=self.id, content=text)
+                        self.state['school_announced_day'] = today.isoformat()
+                if self.state.get('school_reminded_day') != today.isoformat():
+                    reminder = planning_reminder(plan, today)
+                    if reminder:
+                        self.tasks.store.post_inbox_message(source='direct', sender='village-council',
+                                                            recipient=self.id, content=reminder)
+                        self.state['school_reminded_day'] = today.isoformat()
+            except Exception as exc:  # noqa: BLE001 - school must never stop the King's cycle
+                self.event('school_failed', str(exc)[:300])
+
         # P98: the King's daily edition is opened by the runtime, not by a hint the King
         # has to act on. Idempotent; anything already open is left alone.
         if self.id == '01-king':
