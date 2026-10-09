@@ -469,12 +469,18 @@ class ResidentStore:
 
         art = existing.get("ascii_art", "")
         art_plain = existing.get("ascii_art_plain", "")
+        art_warning = None
         if ascii_art is not None:
             valid, plain, err = validate_ascii_art(ascii_art)
-            if not valid:
-                raise ValueError(f"Invalid ASCII art: {err}")
-            art = ascii_art
-            art_plain = plain
+            if valid:
+                art = ascii_art
+                art_plain = plain
+            else:
+                # P108 (live finding 2026-10-09): a wrong-size portrait (7 or 9 lines instead of
+                # 250) refused the whole profile, so the profession and the lists were lost too.
+                # The text fields are saved; the portrait keeps its previous value and the
+                # agent is told what to fix.
+                art_warning = err
 
         with sqlite3.connect(self.db_path, timeout=30) as conn:
             conn.execute("""
@@ -515,7 +521,10 @@ class ResidentStore:
         except OSError:
             pass
 
-        return self.get_profile(target_id) or {}
+        result = self.get_profile(target_id) or {}
+        if art_warning:
+            result = dict(result, art_warning=art_warning)
+        return result
 
 def get_resident(agent_id: str, lang: str = "en", include_art: bool = True, store: Optional[ResidentStore] = None) -> Optional[Dict[str, Any]]:
     """Retrieve an individual resident's profile by identifier (e.g. '01-king').

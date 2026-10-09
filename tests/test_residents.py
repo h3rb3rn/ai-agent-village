@@ -111,6 +111,18 @@ class ResidentCatalogTests(unittest.TestCase):
 class AsciiArtDimensionTests(unittest.TestCase):
     """Verifies that 250x250 ASCII art validation strictly enforces dimensions and UTF-8 characters."""
 
+    def test_wrong_size_portrait_does_not_block_the_text_fields(self):
+        # P108 (live finding 2026-10-09): agents sent 7 to 9 lines; the profile must still be saved
+        import tempfile
+        from pathlib import Path
+        from village.residents import ResidentStore
+        with tempfile.TemporaryDirectory() as d:
+            store = ResidentStore(Path(d) / "coordination.sqlite3")
+            result = store.update_profile(agent_id="03-librarian", profession="librarian",
+                                          calling="steward", ascii_art="only\nseven\nlines\n")
+            self.assertEqual(result.get("profession"), "librarian")
+            self.assertIn("250", result.get("art_warning", ""))
+
     def test_validate_ascii_art_exact_250x250(self):
         # A valid 250x250 plain matrix must pass validation
         valid_matrix = "\n".join(["." * 250 for _ in range(250)])
