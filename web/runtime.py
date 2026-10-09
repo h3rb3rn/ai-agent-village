@@ -1498,6 +1498,15 @@ class Resident:
                     self.feedback(name, f'Conversation budget with {recipient} reached ({len(stamps)} messages this hour). Do independent work, run a check, or record a memory instead.', False)
                     self.event('dm_budget_reached', f'peer={recipient}', True)
                     return False
+                # P100 (live finding 2026-10-08/09): the same message text went to the same
+                # peer again and again (e.g. librarian -> methodologist, identical 240-char
+                # text, same reply_to). Identical text to one peer within 6 hours is refused.
+                digest = hashlib.sha256(' '.join(str(args.get('message', '')).split()).lower().encode('utf-8')).hexdigest()
+                sent = self.state.setdefault('dm_digests', {}).get(recipient, [])
+                if any(d == digest and t > time.time() - 6 * 3600 for d, t in sent):
+                    self.feedback(name, f'You already sent this exact message to {recipient} recently. Send something new or do not repeat it.', False)
+                    self.event('dm_duplicate_blocked', f'peer={recipient}', True)
+                    return False
 
         # P21.6: cooperation is advisory first, then bounded enforcement after
         # three misses. This prevents small models from deadlocking while still
@@ -2090,6 +2099,9 @@ class Resident:
                 if recipient != 'ALL':
                     log = self.state.setdefault('dm_log', {})
                     log[recipient] = [t for t in log.get(recipient, []) if t > time.time() - 3600] + [time.time()]
+                    digest = hashlib.sha256(' '.join(str(args.get('message', '')).split()).lower().encode('utf-8')).hexdigest()
+                    digests = self.state.setdefault('dm_digests', {})
+                    digests[recipient] = [(d, t) for d, t in digests.get(recipient, []) if t > time.time() - 6 * 3600] + [(digest, time.time())]
                     if recipient == self.pair_partner():
                         self.state['pair_index'] = int(self.state.get('pair_index', 0)) + 1
                 feedback_text = 'Message posted. A reply is not guaranteed; continue independent work.'

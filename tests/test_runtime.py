@@ -5,6 +5,7 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 import sys
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'web'))
@@ -90,6 +91,23 @@ class RuntimeTests(unittest.TestCase):
         self.agent.execute(decision({'message':{'content':'I inspected the habitat and found no reusable artifact yet.'}}))
         events=tail(self.root/'board/events.jsonl')
         self.assertTrue(any(e.get('event') == 'board_message' for e in events))
+
+    def test_identical_direct_message_to_the_same_peer_is_refused(self):
+        # P100 (live finding 2026-10-08/09): the same text was sent to the same peer again
+        # and again. The guard refuses it while the earlier text is recorded (6 h window).
+        import hashlib
+        args = {'recipient': '02-b', 'message': 'Could you check the  disk   monitor?'}
+        digest = hashlib.sha256(' '.join(args['message'].split()).lower().encode('utf-8')).hexdigest()
+        self.agent.state['dm_digests'] = {'02-b': [[digest, time.time()]]}
+        self.assertFalse(self.agent.guard('board_message', args))
+        self.assertIn('already sent this exact message', self.agent.state['last_result']['result'])
+
+    def test_a_different_direct_message_to_the_same_peer_passes(self):
+        # P100: only identical text is refused, a new message to the same peer is fine
+        import hashlib
+        digest = hashlib.sha256('old text'.encode('utf-8')).hexdigest()
+        self.agent.state['dm_digests'] = {'02-b': [[digest, time.time()]]}
+        self.assertTrue(self.agent.guard('board_message', {'recipient': '02-b', 'message': 'new text'}))
 
     def test_consult_checkpoint_rejects_broadcast(self):
         self.agent.current_collaboration_checkpoint = CooperationCheckpoint(
