@@ -27,6 +27,10 @@ NAME_ALIASES = {'board_operation': 'board_message', 'message_operation': 'board_
 def _normalize_action(name, args):
     """Normalize documented legacy aliases without interpreting free prose."""
     normalized = dict(args)
+    # P114 (live finding 2026-10-09, Chronicler): a meeting report with meeting_id and achieved but no
+    # operation field was refused as 'missing action argument'. The fields make the intent unambiguous.
+    if name == 'meeting_operation' and not normalized.get('operation') and 'achieved' in normalized and normalized.get('meeting_id'):
+        normalized['operation'] = 'report'
     if name in ('meeting_operation', 'artifact_operation', 'team_operation', 'research_proposal', 'gazette_operation', 'calendar_operation', 'finetune_operation', 'profile_operation') and not normalized.get('operation'):
         if normalized.get('action'):
             normalized['operation'] = normalized['action']
