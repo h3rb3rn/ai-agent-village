@@ -102,6 +102,7 @@ class RuntimeTests(unittest.TestCase):
         self.assertTrue(self.agent.guard('profile_operation', {'operation': 'update'}))
         self.assertTrue(self.agent.guard('calendar_operation', {'operation': 'list'}))
         self.assertFalse(self.agent.guard('board_message', {'recipient': 'ALL', 'message': 'hi'}))
+        self.assertFalse(self.agent.guard('memory_remember', {'content': 'x'}))
 
     def test_profile_gate_is_released_once_a_profile_exists(self):
         self.agent.env['VILLAGE_PROFILE_GATE'] = '1'

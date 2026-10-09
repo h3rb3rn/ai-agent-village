@@ -221,9 +221,10 @@ REPEATED_REJECTION_NUDGE_AT = 2
 
 # P106 (measured 2026-10-09 18:50 UTC): the first gate covered only solo work, and blocked agents
 # moved on to board messages and meeting reports instead of the one profile call. Everything except
-# the profile call, idle and the obligation actions (meetings, calendar, gazette, memory) is gated.
+# the profile call, idle and the obligation actions (meetings, calendar, gazette) is gated. Memory
+# actions are gated too: the King used them to avoid the profile (measured 19:00 UTC).
 PROFILE_GATE_EXEMPT = frozenset({'profile_operation', 'idle', 'meeting_operation', 'calendar_operation',
-                                 'gazette_operation', 'memory_search', 'memory_remember'})
+                                 'gazette_operation'})
 
 
 # P107 (live finding 2026-10-09): agents answered the auditor and the council, but these
