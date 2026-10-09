@@ -50,9 +50,15 @@ class MeetingStore:
         # P99 (live finding 2026-10-09): reports were accepted for closed meetings and
         # overwritten on every repeat - one jour fixe collected 211 identical reports.
         # A meeting takes one report per resident, and only while it is open.
+        # P104 (live finding 2026-10-09): agents kept trying to report when no meeting was
+        # open at all. The message now says so, and tells them to stop.
         meeting = self.get(meeting_id)
-        if not meeting: raise ValueError('meeting not found')
-        if meeting['status'] != 'open': raise ValueError('meeting is already closed; no report is needed')
+        if not meeting or meeting['status'] != 'open':
+            if not self.active():
+                raise ValueError('no meeting is open right now; do not report, continue with other work')
+            if not meeting:
+                raise ValueError('meeting not found; open meetings: ' + ', '.join(m['id'] for m in self.active()))
+            raise ValueError('meeting is already closed; no report is needed')
         with sqlite3.connect(self.db_path, timeout=30) as c:
             if c.execute("SELECT 1 FROM meeting_reports WHERE meeting_id=? AND agent_id=?",
                          (meeting_id, agent_id)).fetchone():

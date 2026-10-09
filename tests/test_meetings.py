@@ -45,3 +45,17 @@ class MeetingTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 s.report('m1', '02-explorer', achieved='again')
             self.assertTrue(s.report('m1', '03-librarian', achieved='other')['saved'])
+
+
+class MeetingErrorMessageTests(unittest.TestCase):
+    """P104: the error says whether a report is needed at all."""
+
+    def test_report_without_any_open_meeting_tells_the_agent_to_stop(self):
+        with tempfile.TemporaryDirectory() as d:
+            s = MeetingStore(Path(d)/'m.sqlite3')
+            s.schedule('jour_fixe', 'agenda', 'now', 'c', 'm1')
+            s.close('m1')
+            with self.assertRaises(ValueError) as ctx:
+                s.report('m1', '02-explorer', achieved='late')
+            self.assertIn('no meeting is open', str(ctx.exception))
+            self.assertIn('do not report', str(ctx.exception))

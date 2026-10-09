@@ -92,6 +92,13 @@ class RuntimeTests(unittest.TestCase):
         events=tail(self.root/'board/events.jsonl')
         self.assertTrue(any(e.get('event') == 'board_message' for e in events))
 
+    def test_recipient_error_lists_the_valid_peer_ids(self):
+        # P104: name-style recipients were refused without telling the agent the valid IDs
+        from runtime import recipient_error
+        msg = recipient_error('methodologist', ['07-methodologist', '01-king'])
+        self.assertIn('01-king', msg)
+        self.assertIn('07-methodologist', msg)
+
     def test_identical_direct_message_to_the_same_peer_is_refused(self):
         # P100 (live finding 2026-10-08/09): the same text was sent to the same peer again
         # and again. The guard refuses it while the earlier text is recorded (6 h window).

@@ -219,6 +219,13 @@ REPEATED_REJECTION_WINDOW_SECONDS = 6 * 3600
 REPEATED_REJECTION_NUDGE_AT = 2
 
 
+def recipient_error(recipient, known_ids):
+    """P104 (live finding 2026-10-09): name-style recipients ('methodologist') were refused
+    with no hint of the valid IDs. The message now lists them."""
+    return (f"recipient '{recipient}' is not a known agent; use ALL or one of the exact IDs: "
+            + ", ".join(sorted(known_ids)))
+
+
 def invalid_decision_guidance(reason, preview):
     """Concrete, reason-specific correction instead of one generic phrase
     for every cause - proven repeatedly this session (P58/P60/P63) that a
@@ -2083,7 +2090,7 @@ class Resident:
                 recipient = args.get('recipient','ALL')
                 known = {x['id'] for x in read_json(Path('/etc/ai-village/runtime-peers.json'),[])}
                 if recipient != 'ALL' and recipient not in known:
-                    raise ValueError('recipient must be ALL or exact agent ID from peers')
+                    raise ValueError(recipient_error(recipient, known))
                 reply_to = args.get('reply_to', '')
                 if reply_to == 'discussion_target':
                     reply_to = self.state.get('discussion_target_id') or ''

@@ -609,7 +609,12 @@ class CoordinationStore:
             cursor = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,))
             row = cursor.fetchone()
             if not row:
-                raise ValueError("unknown task_id")
+                # P104 (live finding 2026-10-09): agents kept sending IDs of merged or abandoned tasks.
+                # The error now lists the open tasks so the next attempt can use a real one.
+                open_rows = conn.execute(
+                    "SELECT id, title FROM tasks WHERE status IN ('open','active') ORDER BY updated_at DESC LIMIT 10").fetchall()
+                listing = "; ".join(f"{r[0]} ({r[1][:60]})" for r in open_rows) or "none"
+                raise ValueError(f"unknown task_id; open tasks: {listing}")
 
             curr_owner = row["owner"]
             lease_until = row["lease_until"]

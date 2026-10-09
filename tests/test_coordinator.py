@@ -262,6 +262,15 @@ class TestCoordinationStore(unittest.TestCase):
                                             "new_because": "The mount is now monitored by the existing cron job, so this adds alerting only."})
         self.assertNotEqual(again["id"], old["id"])
 
+    def test_unknown_task_id_lists_the_open_tasks(self) -> None:
+        # P104 (live finding 2026-10-09): agents sent IDs of merged or abandoned tasks
+        task = self.store.operate("01-a", {"action": "create", "title": "Habitat inventory script",
+                                           "success_criterion": "a real check"})
+        with self.assertRaises(ValueError) as ctx:
+            self.store.operate("01-a", {"action": "claim", "task_id": "deadbeef0000"})
+        self.assertIn(task["id"], str(ctx.exception))
+        self.assertIn("Habitat inventory script", str(ctx.exception))
+
     def test_file_permissions_restrictive(self) -> None:
         """Verify that coordination.sqlite3 has restrictive permissions (0660)."""
         mode = self.db_path.stat().st_mode & 0o777
