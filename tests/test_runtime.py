@@ -123,6 +123,16 @@ class RuntimeTests(unittest.TestCase):
         self.assertIn('village-auditor', SYSTEM_SENDERS)
         self.assertIn('village-council', SYSTEM_SENDERS)
 
+    def test_school_operation_is_known_and_only_the_king_may_plan(self):
+        # P111: lessons are planned by the King; any other resident is refused
+        from village.actions import ACTION_SPECS
+        from web.decision import SUPPORTED_ACTIONS
+        self.assertIn('school_operation', ACTION_SPECS)
+        self.assertIn('school_operation', SUPPORTED_ACTIONS)
+        self.execute('school_operation', operation='plan', lesson_day='2026-10-12', topic='fractions')
+        self.assertFalse(self.agent.state['last_result']['ok'])
+        self.assertIn('only 01-king', self.agent.state['last_result']['result'])
+
     def test_recipient_error_lists_the_valid_peer_ids(self):
         # P104: name-style recipients were refused without telling the agent the valid IDs
         from runtime import recipient_error

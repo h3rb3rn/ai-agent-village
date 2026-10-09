@@ -224,7 +224,7 @@ REPEATED_REJECTION_NUDGE_AT = 2
 # the profile call, idle and the obligation actions (meetings, calendar, gazette) is gated. Memory
 # actions are gated too: the King used them to avoid the profile (measured 19:00 UTC).
 PROFILE_GATE_EXEMPT = frozenset({'profile_operation', 'idle', 'meeting_operation', 'calendar_operation',
-                                 'gazette_operation'})
+                                 'gazette_operation', 'school_operation'})
 
 
 # P107 (live finding 2026-10-09): agents answered the auditor and the council, but these
@@ -2627,6 +2627,17 @@ class Resident:
                 else:
                     raise ValueError('finetune_operation requires operation propose, update_status, evaluate, '
                                     'request_swap, review_swap, release_gpu, or list')
+            elif name == 'school_operation':
+                # P111 (operator 2026-10-09): King plans the school lessons, at most a week ahead.
+                from datetime import date as _date
+                from village.school import Curriculum
+                if self.id != '01-king':
+                    raise ValueError('only 01-king plans school lessons')
+                plan = Curriculum(self.board / 'school.sqlite3')
+                lesson_day = _date.fromisoformat(str(args.get('lesson_day', '')))
+                plan.add(lesson_day, str(args.get('topic', '')), self.id, _date.fromisoformat(gazette_today()))
+                self.event('school_planned', f"day={lesson_day.isoformat()}; topic={str(args.get('topic',''))[:120]}")
+                self.feedback(name, json.dumps({'planned': lesson_day.isoformat()}, ensure_ascii=False), True)
             elif name == 'profile_operation':
                 # P91 (operator directive): "Zudem sollen die Agents selbst die
                 # Seite anlegen und pflegen, nicht du" - agents author and maintain

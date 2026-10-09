@@ -240,6 +240,8 @@ ACTION_SPECS: Dict[str, Dict[str, Any]] = {
             "ascii_art_file": _s(300),
         },
         "required": ["operation"]},
+    "school_operation": {"doc": "operation=plan(lesson_day=YYYY-MM-DD, topic) -> plan one school lesson, only King, 1 to 7 days ahead; the curriculum must always cover the next 7 days", "properties": {"operation": {"enum": ["plan"]}, "lesson_day": _s(10), "topic": _s(200)},
+        "required": ["operation", "lesson_day", "topic"]},
     "idle": {"doc": "no arguments -> deliberate rest", "properties": {}, "required": []},
 }
 

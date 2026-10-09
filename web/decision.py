@@ -12,7 +12,7 @@ SUPPORTED_ACTIONS = frozenset({
     'board_message', 'task_operation', 'team_operation', 'artifact_operation',
     'memory_remember', 'memory_search', 'research_request', 'meeting_operation',
     'calc_operation', 'research_proposal', 'gazette_operation', 'calendar_operation',
-    'finetune_operation', 'profile_operation', 'idle',
+    'finetune_operation', 'profile_operation', 'school_operation', 'idle',
 })
 
 
@@ -49,6 +49,7 @@ def _validate_action(name, args):
         'research_proposal': ('operation',), 'gazette_operation': ('operation',),
         'calendar_operation': ('operation',), 'finetune_operation': ('operation',),
         'profile_operation': ('operation',),
+        'school_operation': ('operation', 'lesson_day', 'topic'),
     }.get(name, ())
     if any(not isinstance(args.get(field), str) or not args[field].strip() for field in required):
         return 'missing action argument'
