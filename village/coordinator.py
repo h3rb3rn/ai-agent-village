@@ -551,6 +551,18 @@ class CoordinationStore:
                     if row[1].lower() == title.lower() or is_same_topic(title, row[1]):
                         conn.rollback()
                         return self.get_task(row[0])  # type: ignore
+                # P101 (live finding 2026-10-08/09): the same topic kept coming back after it
+                # had been abandoned. A new project on an abandoned topic needs a stated reason.
+                cursor = conn.execute("SELECT id, title FROM tasks WHERE status = 'abandoned'")
+                for row in cursor.fetchall():
+                    if row[1].lower() == title.lower() or is_same_topic(title, row[1]):
+                        reason = str(args.get("new_because") or "").strip()
+                        if len(reason) < 40:
+                            conn.rollback()
+                            raise ValueError(
+                                f"this topic was abandoned as project {row[0]} ('{row[1]}'). "
+                                "Only create it again with new_because=<at least 40 characters: what is different now>")
+                        break
 
                 # Check max open project limit (64)
                 cursor = conn.execute(
