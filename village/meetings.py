@@ -47,11 +47,17 @@ class MeetingStore:
             return c.execute("SELECT 1 FROM meeting_reports WHERE meeting_id=? AND agent_id=?", (meeting_id, agent_id)).fetchone() is not None
 
     def report(self, meeting_id, agent_id, achieved='', evidence='', next_step='', blockers=''):
-        if not self.get(meeting_id): raise ValueError('meeting not found')
+        # P99 (live finding 2026-10-09): reports were accepted for closed meetings and
+        # overwritten on every repeat - one jour fixe collected 211 identical reports.
+        # A meeting takes one report per resident, and only while it is open.
+        meeting = self.get(meeting_id)
+        if not meeting: raise ValueError('meeting not found')
+        if meeting['status'] != 'open': raise ValueError('meeting is already closed; no report is needed')
         with sqlite3.connect(self.db_path, timeout=30) as c:
-            c.execute("""INSERT INTO meeting_reports VALUES(?,?,?,?,?,?,?)
-                ON CONFLICT(meeting_id,agent_id) DO UPDATE SET achieved=excluded.achieved,
-                evidence=excluded.evidence,next_step=excluded.next_step,blockers=excluded.blockers,created_at=excluded.created_at""",
+            if c.execute("SELECT 1 FROM meeting_reports WHERE meeting_id=? AND agent_id=?",
+                         (meeting_id, agent_id)).fetchone():
+                raise ValueError('report already submitted for this meeting')
+            c.execute("""INSERT INTO meeting_reports VALUES(?,?,?,?,?,?,?)""",
                 (meeting_id,agent_id,str(achieved)[:2000],str(evidence)[:2000],str(next_step)[:1000],str(blockers)[:1000],now()))
             c.commit()
         return {'meeting_id':meeting_id,'agent_id':agent_id,'saved':True}
