@@ -347,6 +347,29 @@ def compact_memory_hits(result) -> dict:
                 count=len(hits), items=hits)
 
 
+# P134: "Rootless containers: ready" alone never led anyone to use the lab
+# (0 container runs, M10 at 0 % for two weeks), while other lines read as
+# "no downloads". Name what is allowed and the exact first commands.
+def lab_guidance(desc) -> str:
+    containers = desc.get('containers') or {}
+    gpu = desc.get('gpu') or {}
+    if containers.get('rootless_supported'):
+        text = (" Container lab: build your own images (podman build) and pull public images pinned by "
+                "digest - read the digest with `skopeo inspect docker://docker.io/library/python:3.12-slim`, "
+                "then `podman pull docker.io/library/python@sha256:<digest>`. Never use --privileged.")
+    else:
+        text = (" Container lab: podman is not executable for you yet - ask King to request the "
+                "'containers' capability for you via village-authority.")
+    devices = gpu.get('devices') or []
+    if devices:
+        maxwell = any('M10' in d or 'M60' in d for d in devices)
+        text += (f" Local GPUs free for your experiments, training or serving: {len(devices)}x "
+                 f"{devices[0].split(' (UUID')[0].split(': ', 1)[-1]}"
+                 + (" (Maxwell, CUDA compute capability 5.0 - pick CUDA builds that still support sm_50)" if maxwell else "")
+                 + ". In a container: podman run --device nvidia.com/gpu=all ...")
+    return text
+
+
 def now():
     return datetime.now(timezone.utc).isoformat()
 
@@ -2907,7 +2930,7 @@ class Resident:
                 f"Rootless containers: {'ready' if desc['containers']['rootless_supported'] else 'not ready yet'}. "
                 f"GPU compute: {'ready' if desc['gpu']['gpu_compute_ready'] else 'not ready yet'}. "
                 f"Request more capability via: {desc['authority']['request_channel']}."
-            )
+            ) + lab_guidance(desc)
         except Exception as exc:
             summary = f"Habitat capabilities unknown this cycle ({type(exc).__name__}: {exc})."
         self.state['capabilities_summary'] = summary

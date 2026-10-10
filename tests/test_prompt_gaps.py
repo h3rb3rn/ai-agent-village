@@ -68,7 +68,9 @@ class PromptBudgetTests(unittest.TestCase):
         # documentation) - deliberate, tested capability additions, not drift.
         # 14200->14450 for P125 (notes_operation/memory_get: the resident's own
         # between-turn memory and on-demand knowledge-base detail).
-        self.assertLess(len(FULL), 14450)
+        # 14450->14650 for P134 (container lab and M10 use made explicit -
+        # unused for two weeks while the prompt read as "no downloads").
+        self.assertLess(len(FULL), 14650)
 
 
 if __name__ == "__main__":
