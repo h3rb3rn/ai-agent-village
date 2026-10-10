@@ -6,6 +6,7 @@ This module holds only the plan and its checks; delivery and examination come la
 """
 from __future__ import annotations
 
+import re
 import sqlite3
 from datetime import date, timedelta
 from pathlib import Path
@@ -110,9 +111,10 @@ def record_answer(plan: Curriculum, agent: str, day: date, answer: str) -> bool:
     with sqlite3.connect(plan.db_path, timeout=30) as c:
         c.execute("""CREATE TABLE IF NOT EXISTS school_answers(
             agent TEXT NOT NULL, lesson_day TEXT NOT NULL, answer TEXT NOT NULL,
-            answered_at TEXT NOT NULL, PRIMARY KEY(agent, lesson_day))""")
-        cur = c.execute("INSERT OR IGNORE INTO school_answers VALUES(?,?,?,?)",
-                        (agent, day.isoformat(), text[:2000], date.today().isoformat()))
+            answered_at TEXT NOT NULL, verdict TEXT NOT NULL DEFAULT '', PRIMARY KEY(agent, lesson_day))""")
+        verdict = "pass" if grade_answer(plan.lesson(day)["topic"], text) else "fail"
+        cur = c.execute("INSERT OR IGNORE INTO school_answers VALUES(?,?,?,?,?)",
+                        (agent, day.isoformat(), text[:2000], date.today().isoformat(), verdict))
         c.commit()
         return cur.rowcount == 1
 
@@ -121,5 +123,23 @@ def answers_for(plan: Curriculum, day: date) -> List[str]:
     with sqlite3.connect(plan.db_path, timeout=30) as c:
         c.execute("""CREATE TABLE IF NOT EXISTS school_answers(
             agent TEXT NOT NULL, lesson_day TEXT NOT NULL, answer TEXT NOT NULL,
-            answered_at TEXT NOT NULL, PRIMARY KEY(agent, lesson_day))""")
+            answered_at TEXT NOT NULL, verdict TEXT NOT NULL DEFAULT '', PRIMARY KEY(agent, lesson_day))""")
         return [r[0] for r in c.execute("SELECT agent FROM school_answers WHERE lesson_day=?", (day.isoformat(),))]
+
+
+# P116: grading. Default rule, chosen by the runtime: an answer passes when it uses at least two of
+# the key words of the day's lesson. Coarse on purpose; it is recorded per answer and can be replaced.
+_STOP_WORDS = frozenset({"about", "before", "after", "which", "their", "there", "these", "those", "would",
+                         "should", "could", "every", "other", "while", "where", "again", "still", "ready",
+                         "when", "that", "with", "from", "into", "only", "than", "then", "they", "this"})
+
+
+def key_words(topic: str) -> frozenset:
+    return frozenset(w for w in re.findall(r"[a-z]{5,}", topic.lower()) if w not in _STOP_WORDS)
+
+
+def grade_answer(topic: str, answer: str) -> bool:
+    """True when the answer uses at least two key words of the lesson."""
+    keys = key_words(topic)
+    words = set(re.findall(r"[a-z]{5,}", answer.lower()))
+    return len(keys & words) >= 2

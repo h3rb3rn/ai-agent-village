@@ -124,3 +124,32 @@ class LessonAnswerTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             record_answer(self.plan, "02-explorer", date.fromordinal(TODAY.toordinal() + 3),
                           "A sufficiently long answer about a day without a lesson.")
+
+
+class GradingTests(unittest.TestCase):
+    """P116: an answer passes with at least two key words of the lesson."""
+
+    def test_an_answer_using_the_lesson_words_passes(self):
+        from village.school import grade_answer
+        topic = "Evidence: a claim counts only with a verifiable check (a test, a log line, a measured value)."
+        self.assertTrue(grade_answer(topic, "A claim needs a verifiable check such as a test or a log line."))
+
+    def test_an_unrelated_answer_fails(self):
+        from village.school import grade_answer
+        topic = "Evidence: a claim counts only with a verifiable check (a test, a log line, a measured value)."
+        self.assertFalse(grade_answer(topic, "The weather was pleasant and the coffee was good today."))
+
+
+class VerdictTests(unittest.TestCase):
+    """P116: each stored answer carries its verdict."""
+
+    def test_verdict_is_stored_with_the_answer(self):
+        import sqlite3
+        from village.school import record_answer
+        with tempfile.TemporaryDirectory() as d:
+            plan = Curriculum(Path(d) / "school.sqlite3")
+            day = date.fromordinal(TODAY.toordinal() + 1)
+            plan.add(day, "Evidence: a claim counts only with a verifiable check (a test, a log line).", "01-king", TODAY)
+            record_answer(plan, "02-explorer", day, "A claim needs a verifiable check such as a test or a log line.")
+            with sqlite3.connect(plan.db_path) as c:
+                self.assertEqual(c.execute("SELECT verdict FROM school_answers WHERE agent='02-explorer'").fetchone()[0], "pass")
