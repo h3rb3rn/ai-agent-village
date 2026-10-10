@@ -144,6 +144,21 @@ class RuntimeTests(unittest.TestCase):
         self.assertTrue(self.agent.guard('school_operation', {'operation': 'plan'}))
         self.agent.id = '01-a'
 
+    def test_repeated_identical_refusals_withhold_only_that_action(self):
+        # P123: four identical refusals of one action within 30 minutes withhold that action only
+        import time as _time
+        reason = 'report already submitted for this meeting'
+        self.agent.state['refusal_times'] = {f'meeting_operation|{reason}': [_time.time()] * 4}
+        self.assertFalse(self.agent.guard('meeting_operation', {'operation': 'report', 'meeting_id': 'm1'}))
+        self.assertTrue(self.agent.guard('execute_bash', {'command': 'ls'}))
+        self.assertTrue(self.agent.guard('idle', {}))
+
+    def test_three_refusals_are_not_yet_enough(self):
+        import time as _time
+        reason = 'report already submitted for this meeting'
+        self.agent.state['refusal_times'] = {f'meeting_operation|{reason}': [_time.time()] * 3}
+        self.assertTrue(self.agent.guard('meeting_operation', {'operation': 'report', 'meeting_id': 'm1'}))
+
     def test_recipient_error_lists_the_valid_peer_ids(self):
         # P104: name-style recipients were refused without telling the agent the valid IDs
         from runtime import recipient_error

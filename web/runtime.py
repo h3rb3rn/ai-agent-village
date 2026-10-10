@@ -234,6 +234,11 @@ PROFILE_GATE_EXEMPT = frozenset({'profile_operation', 'idle', 'meeting_operation
 SYSTEM_SENDERS = frozenset({'village-auditor', 'village-council'})
 
 
+# P123: identical refusals of one action are withheld after this many, within this window (seconds)
+REFUSAL_LIMIT = 4
+REFUSAL_WINDOW_SECONDS = 1800
+
+
 def recipient_error(recipient, known_ids):
     """P104 (live finding 2026-10-09): name-style recipients ('methodologist') were refused
     with no hint of the valid IDs. The message now lists them."""
@@ -1505,6 +1510,17 @@ class Resident:
         return allowed or ['idle']
 
     def guard(self, name, args):
+        # P123: after REFUSAL_LIMIT identical refusals of the same action within REFUSAL_WINDOW_SECONDS,
+        # that action is withheld for the rest of the window, and the agent is told to choose another.
+        if name != 'idle':
+            for key, times in self.state.get('refusal_times', {}).items():
+                action = key.split('|', 1)[0]
+                recent = [t for t in times if time.time() - t < REFUSAL_WINDOW_SECONDS]
+                if action == name and len(recent) >= REFUSAL_LIMIT:
+                    self.feedback(name, f'This action was refused {len(recent)} times in the last 30 minutes with the same '
+                                        f'reason ({key.split("|", 1)[1]}). Do not send it again; choose a different action.', False)
+                    self.event('refusal_withheld', f'action={name}; count={len(recent)}')
+                    return False
         # P106 (operator 2026-10-09): residents without an authored profile were only hinted at,
         # and the hint was never acted on (one of nine wrote one). With VILLAGE_PROFILE_GATE=1
         # solo work (commands, jobs, tasks, team and research actions) is refused after two
@@ -2731,6 +2747,11 @@ class Resident:
         except (OSError, ValueError, sqlite3.Error) as exc:
             self.feedback(name,f'{type(exc).__name__}: {exc}',False)
             self.event('action_error',f'action={name}; error={exc}')
+            # P123 (live finding 2026-10-10): the same refused action was sent again and again
+            # ('report already submitted', 72 times in two hours). Repeated identical refusals are counted.
+            refusals = self.state.setdefault('refusal_times', {})
+            key = f'{name}|{str(exc)[:80]}'
+            refusals[key] = [t for t in refusals.get(key, []) if time.time() - t < REFUSAL_WINDOW_SECONDS] + [time.time()]
 
     def capability_summary(self, ttl_seconds: float = 1800.0) -> str:
         """Cached, human-readable summary of what this agent can actually do in
