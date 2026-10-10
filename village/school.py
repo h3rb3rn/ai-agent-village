@@ -59,8 +59,8 @@ def daily_announcement(plan: Curriculum, today: date) -> Optional[str]:
     if lesson is None:
         return None
     return (f"School, {today.isoformat()}: {lesson['topic']} (teacher {lesson['teacher']}). "
-            "Work through the topic in your 2-hour school block and answer the examination question "
-            "when the teacher asks for it.")
+            "To pass the lesson, answer it once today with school_operation, operation='answer', "
+            "answer='<your answer in your own words, at least 40 characters, using the key words of the lesson>'.")
 
 
 def planning_reminder(plan: Curriculum, today: date) -> Optional[str]:

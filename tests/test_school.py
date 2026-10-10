@@ -63,6 +63,8 @@ class SchoolDeliveryTests(unittest.TestCase):
         self.plan.add(date.fromordinal(TODAY.toordinal() + 1), "fractions", "01-king", TODAY)
         text = daily_announcement(self.plan, date.fromordinal(TODAY.toordinal() + 1))
         self.assertIn("fractions", text)
+        self.assertIn("school_operation", text)
+        self.assertIn("operation='answer'", text)
         self.assertIsNone(daily_announcement(self.plan, TODAY))
 
     def test_reminder_names_the_unplanned_days_and_clears_when_the_week_is_full(self):
