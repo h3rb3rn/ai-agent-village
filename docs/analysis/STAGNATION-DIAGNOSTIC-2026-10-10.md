@@ -153,3 +153,30 @@ geprüftem Wissen und Beispielen – und erst danach in den Gewichten (Fine-Tuni
 | P131 Nächtliche Konsolidierung | ein ruhiger Zyklus pro Nacht: Tag in Notizen und KB-Lektionen verdichten, Doppeltes zusammenführen | entspricht Gedächtniskonsolidierung; hält Notizen und KB sauber |
 | P132 M10 nutzbar machen (Host-Freigabe) | rootless GPU-Zugriff über vorhandenes `/etc/cdi/nvidia.yaml` testen; danach Embedding/Reranking der KB auf M10, ein kleines Hilfsmodell als Werkzeug, LoRA nur für kleine Modelle (Maxwell: kein bf16, keine Tensor Cores) | 32 GiB VRAM liegen bei 0 % brach |
 | P133 Dorf-Benchmark | feste, wiederholbare Aufgabenreihe pro Agent, wöchentlich; Ergebnisse sichtbar für Agents und Betreiber | beantwortet die Kernfrage der Vision messbar: werden sie mit Umgebung und Wissen fähiger? |
+
+## 7. Messung Ressourcen-Nutzung (2026-10-10, read-only)
+
+**Eigene Ollama-Lanes (N02-M60, je Agent 24/7):** belegt nur 10–38 % der Zeit
+(Fenster 3,8 h: Chronicler 10 %, Explorer 13 %, Operator 14 %, Artisan 15 %, Interpreter 25 %,
+Librarian 29 %, Logician 31 %, Methodologist 36 %, King 38 %). 62–90 % der eigenen
+Rechenzeit bleibt ungenutzt – Ursache: eine Inferenz pro Zyklus plus 120 s Pause.
+
+**M10 (N06-M10):** Hardware ist zugänglich (`/dev/nvidia*` 0666, alle Agents in `ai-village-gpu`,
+Treiber 535, Compute Capability 5.0, 4 × 8 GiB, 0 % genutzt), aber **es gibt keine Software**:
+kein CUDA-Toolkit, kein torch, kein numpy, kein llama.cpp/Ollama, kein cmake. Agents dürfen
+laut Prompt nichts ungeprüft herunterladen. Die Freigabe der M10 läuft damit ins Leere.
+Freier Speicher: 2 × 3,4 TB HDD, 440 GB SSD.
+
+### Konsequenzen für den Plan
+
+- **P127 (Mehrschritt-Zyklus) zuerst**: nutzt die brachliegende eigene Lane ohne Host-Änderung.
+  Ergänzung: Aktion `ask_self` – eine fokussierte Teilfrage mit frischem, kleinem Kontext an die
+  eigene Lane (Code-Review, Zusammenfassung, Gegenargument), Ergebnis im selben Zyklus.
+- **P132 konkret = Labor-Grundausstattung (Betreiber-Installation, gepinnt)**:
+  1. Ollama als gemeinsamer Labor-Dienst auf den M10 (unterstützt Compute 5.0), eigener Port,
+     kleine Modelle und Embedding-Modelle vorab gezogen – für Experimente, Vergleiche, Embeddings.
+  2. Gemeinsame, nur lesbare Python-Umgebung `/opt/village-lab/venv` mit gepinnten Paketen
+     (numpy, scikit-learn; torch nur in einer auf sm_50 verifizierten Version).
+  3. Lokales Wheelhouse für zusätzliche, geprüfte Pakete statt Internetzugriff der Agents.
+  4. Gemeinsames Datenverzeichnis auf `/mnt/hdd1` für Datensätze und Modelle.
+  5. GPU-Belegung (`finetune_gpu_reservations`, P90) und Labor-Fähigkeiten im Snapshot sichtbar.
