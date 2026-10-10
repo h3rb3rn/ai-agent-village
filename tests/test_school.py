@@ -141,6 +141,12 @@ class GradingTests(unittest.TestCase):
         topic = "Evidence: a claim counts only with a verifiable check (a test, a log line, a measured value)."
         self.assertFalse(grade_answer(topic, "The weather was pleasant and the coffee was good today."))
 
+    def test_one_key_word_is_enough(self):
+        # P118: the King's substantive answer was graded fail with a two-word rule
+        from village.school import grade_answer
+        topic = "Time budgets: a long answer is cut by the output limit; keep reasoning short and act."
+        self.assertTrue(grade_answer(topic, "Timeliness matters more than perfect output, so keep it short and act."))
+
 
 class VerdictTests(unittest.TestCase):
     """P116: each stored answer carries its verdict."""

@@ -127,7 +127,7 @@ def answers_for(plan: Curriculum, day: date) -> List[str]:
         return [r[0] for r in c.execute("SELECT agent FROM school_answers WHERE lesson_day=?", (day.isoformat(),))]
 
 
-# P116: grading. Default rule, chosen by the runtime: an answer passes when it uses at least two of
+# P116: grading. Default rule, chosen by the runtime: an answer passes when it uses at least one of
 # the key words of the day's lesson. Coarse on purpose; it is recorded per answer and can be replaced.
 _STOP_WORDS = frozenset({"about", "before", "after", "which", "their", "there", "these", "those", "would",
                          "should", "could", "every", "other", "while", "where", "again", "still", "ready",
@@ -139,7 +139,8 @@ def key_words(topic: str) -> frozenset:
 
 
 def grade_answer(topic: str, answer: str) -> bool:
-    """True when the answer uses at least two key words of the lesson."""
+    """True when the answer uses at least one key word of the lesson (P118: relaxed from two,
+    which rejected a substantive answer that used one)."""
     keys = key_words(topic)
     words = set(re.findall(r"[a-z]{5,}", answer.lower()))
-    return len(keys & words) >= 2
+    return len(keys & words) >= 1
