@@ -115,6 +115,8 @@ def compact_context(ctx: Dict[str, Any]) -> Dict[str, Any]:
                                     "directive": "Do not repeat the failed action; change one thing."}
     if ctx.get("task_blocker_guidance"):
         out["task_blocker_guidance"] = _clip(ctx["task_blocker_guidance"], 300)
+    if ctx.get("school_lesson"):
+        out["school_lesson"] = _clip(ctx["school_lesson"], 500)
     if ctx.get("calendar_daily_note"):
         # P75: the mandatory-planning gate fires regardless of prompt
         # profile (it operates on the raw Resident, not the compacted

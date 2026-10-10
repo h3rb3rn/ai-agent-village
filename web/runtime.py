@@ -1233,6 +1233,17 @@ class Resident:
         note = self.calendar_daily_note()
         if note:
             context['calendar_daily_note'] = note
+        # P117 (live finding 2026-10-10): the lesson was posted to the inbox, but no resident's
+        # replies mentioned it. Today's lesson now sits in every resident's context until answered.
+        try:
+            from datetime import date as _date
+            from village.school import Curriculum, daily_announcement
+            today_day = _date.fromisoformat(gazette_today())
+            lesson_text = daily_announcement(Curriculum(self.board / 'school.sqlite3'), today_day)
+            if lesson_text:
+                context['school_lesson'] = lesson_text
+        except Exception:
+            pass
         # P76 (operator directive): "Ein Primaeres Goal eines Jedes Agents
         # soll die eigene Verbesserung sein." Advisory only - see
         # finetune_daily_note()'s own docstring for why this one is
