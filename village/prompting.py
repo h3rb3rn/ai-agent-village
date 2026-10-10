@@ -88,7 +88,11 @@ def compact_context(ctx: Dict[str, Any]) -> Dict[str, Any]:
         "projects": [_task(x) for x in (ctx.get("projects") or [])[:6]],
         "peers": [{"id": p.get("id"), "role": p.get("role")} for p in (ctx.get("peers") or []) if isinstance(p, dict)],
         "measured_resources": _resources(ctx.get("measured_resources") or {}),
+        # P125: the resident's own notes are small and bounded - kept whole.
+        "your_notes": ctx.get("your_notes"),
     }
+    if not out["your_notes"]:
+        out.pop("your_notes")
     last = ctx.get("last_action_feedback")
     if last:
         out["last_action_feedback"] = {"action": last.get("action"), "ok": last.get("ok"),

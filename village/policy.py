@@ -19,6 +19,18 @@ DEFAULT_SHARED = Path("/usr/local/share/ai-village/runtime-policy.json")
 DEFAULT_LOCAL = Path("/etc/ai-village/runtime-policy.local.json")
 
 ACTION_FORMATS = ("text", "schema")
+# P126: every runtime obligation that can escalate from a hint to a hard block.
+# Only the names in an agent's ``hard_obligations`` ever block an action; all
+# others stay visible hints whose pressure is still measured. Default keeps
+# hard only what a shared product cannot exist without and that concerns a
+# single editor: reviewing and compiling the Gazette. Everything else was
+# found to consume the scarce actions residents need for their own work
+# (docs/analysis/STAGNATION-DIAGNOSTIC-2026-10-10.md). "all"/"none" accepted.
+OBLIGATIONS = (
+    "collaboration", "meeting_report", "gazette_assign", "gazette_contribute", "gazette_review",
+    "gazette_close", "gazette_game_winner", "calendar_plan", "calendar_week_plan", "gazette_writing_slot",
+)
+DEFAULT_HARD_OBLIGATIONS = ("gazette_review", "gazette_close")
 PROMPT_PROFILES = ("full", "compact")
 
 
@@ -34,6 +46,7 @@ class AgentPolicy:
     auto_memory: bool = False
     task_templates: bool = False
     knowledgebase_gate: str = "advisory"
+    hard_obligations: tuple = DEFAULT_HARD_OBLIGATIONS
 
 
 def _read(path: Optional[Path]) -> Dict[str, Any]:
@@ -54,6 +67,16 @@ def _merge(base: Dict[str, Any], over: Dict[str, Any]) -> Dict[str, Any]:
         agents[name] = {**agents.get(name, {}), **values}
     merged["agents"] = agents
     return merged
+
+
+def _hard_obligations(value: Any) -> tuple:
+    if value == "all":
+        return OBLIGATIONS
+    if value == "none":
+        return ()
+    if isinstance(value, list):
+        return tuple(x for x in OBLIGATIONS if x in value)
+    return DEFAULT_HARD_OBLIGATIONS
 
 
 def load_policy(shared: Optional[Path] = None, local: Optional[Path] = None,
@@ -87,4 +110,5 @@ def agent_policy(name: str, policy: Optional[Dict[str, Any]] = None) -> AgentPol
         auto_memory=bool(values.get("auto_memory", False)),
         task_templates=bool(values.get("task_templates", False)),
         knowledgebase_gate=(values.get("knowledgebase_gate") if values.get("knowledgebase_gate") in ("advisory", "mandatory") else "advisory"),
+        hard_obligations=_hard_obligations(values.get("hard_obligations")),
     )

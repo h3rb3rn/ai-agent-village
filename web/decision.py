@@ -10,7 +10,7 @@ import sys
 SUPPORTED_ACTIONS = frozenset({
     'execute_bash', 'start_job', 'job_status', 'cancel_job',
     'board_message', 'task_operation', 'team_operation', 'artifact_operation',
-    'memory_remember', 'memory_search', 'research_request', 'meeting_operation',
+    'memory_remember', 'memory_search', 'memory_get', 'notes_operation', 'research_request', 'meeting_operation',
     'calc_operation', 'research_proposal', 'gazette_operation', 'calendar_operation',
     'finetune_operation', 'profile_operation', 'school_operation', 'idle',
 })
@@ -31,7 +31,7 @@ def _normalize_action(name, args):
     # operation field was refused as 'missing action argument'. The fields make the intent unambiguous.
     if name == 'meeting_operation' and not normalized.get('operation') and 'achieved' in normalized and normalized.get('meeting_id'):
         normalized['operation'] = 'report'
-    if name in ('meeting_operation', 'artifact_operation', 'team_operation', 'research_proposal', 'gazette_operation', 'calendar_operation', 'finetune_operation', 'profile_operation') and not normalized.get('operation'):
+    if name in ('meeting_operation', 'artifact_operation', 'team_operation', 'research_proposal', 'gazette_operation', 'calendar_operation', 'finetune_operation', 'profile_operation', 'notes_operation') and not normalized.get('operation'):
         if normalized.get('action'):
             normalized['operation'] = normalized['action']
         elif name == 'team_operation' and all(normalized.get(k) for k in ('project', 'goal', 'role')):
@@ -52,7 +52,8 @@ def _validate_action(name, args):
         'artifact_operation': ('operation', 'artifact_id'), 'calc_operation': ('tool',),
         'research_proposal': ('operation',), 'gazette_operation': ('operation',),
         'calendar_operation': ('operation',), 'finetune_operation': ('operation',),
-        'profile_operation': ('operation',),
+        'profile_operation': ('operation',), 'notes_operation': ('operation',),
+        'memory_get': ('id',),
     }.get(name, ())
     if any(not isinstance(args.get(field), str) or not args[field].strip() for field in required):
         return 'missing action argument'
@@ -68,6 +69,8 @@ def _validate_action(name, args):
         return 'unknown team operation'
     if name == 'artifact_operation' and args.get('operation') not in ('register', 'claim_success', 'verify', 'adopt', 'inspect'):
         return 'unknown artifact operation'
+    if name == 'notes_operation' and args.get('operation') not in ('set', 'add', 'remove'):
+        return 'unknown notes operation'
     if name == 'profile_operation' and args.get('operation') not in ('view', 'update'):
         return 'unknown profile operation'
     return None

@@ -66,7 +66,9 @@ class PromptBudgetTests(unittest.TestCase):
         # documentation, ~225 chars), then 13950->14200 for P55
         # (gazette_operation review/close sub-operations, editorial gate
         # documentation) - deliberate, tested capability additions, not drift.
-        self.assertLess(len(FULL), 14200)
+        # 14200->14450 for P125 (notes_operation/memory_get: the resident's own
+        # between-turn memory and on-demand knowledge-base detail).
+        self.assertLess(len(FULL), 14450)
 
 
 if __name__ == "__main__":

@@ -17,6 +17,7 @@ import subprocess
 import time
 import traceback
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 import sys
@@ -32,6 +33,8 @@ if str(LIB_DIR) not in sys.path:
 
 from decision import decision, final_content
 from village.control import is_paused, read_pause_metadata
+from village.notes import (load_notes, save_notes, apply_operation as apply_notes_operation,
+                          retrieval_query as notes_retrieval_query, is_empty as notes_empty)
 from village.coordinator import CoordinationStore
 from village.inference import (
     build_ollama_request,
@@ -278,6 +281,72 @@ def invalid_decision_guidance(reason, preview):
     return 'Correct your envelope: {"name":"tool_name","arguments":{...}}.'
 
 
+# P124: limits that used to be fixed regardless of the resident's real context
+# window. A 262k-token resident was squeezed into a 24k-character snapshot
+# (~5% of its window, measured live 2026-10-10), and its knowledge-base hits
+# were the first thing dropped. The budget now scales with OLLAMA_NUM_CTX;
+# VILLAGE_CONTEXT_MAX_CHARS stays available as an explicit operator ceiling.
+CONTEXT_BUDGET_FLOOR_CHARS = 8000
+# Characters reserved per token of the window that is NOT available to the
+# snapshot (system prompt, identity, num_predict output) - conservative
+# chars/token estimate for JSON-heavy text.
+CONTEXT_CHARS_PER_TOKEN = 3
+CONTEXT_SYSTEM_RESERVE_TOKENS = 4096
+RETRIEVAL_LIMIT_DEFAULT = 8
+OWN_RECENT_RESULTS = 8
+# Stored action results keep both ends: structured JSON (memory/task/research
+# results) is ranked best-first at the head, command output reports errors at
+# the tail. The old [:6000] then [-2500:] pair silently kept only the middle.
+FEEDBACK_HEAD_CHARS = 4000
+FEEDBACK_TAIL_CHARS = 8000
+MEMORY_HIT_CHARS = 700
+
+
+def context_char_budget(env) -> int:
+    """Snapshot character budget derived from the resident's own context window.
+
+    Identical to the historical formula for small windows (so trimming
+    behaviour of small-context residents is unchanged), but without the old
+    fixed 24k ceiling. Never exceeds what is left of the window after the
+    system prompt and the configured output budget."""
+    num_ctx = int(env.get('OLLAMA_NUM_CTX', '8192'))
+    num_predict = int(env.get('OLLAMA_NUM_PREDICT', '768'))
+    budget = max(CONTEXT_BUDGET_FLOOR_CHARS, num_ctx * 2 - 10000)
+    room = (num_ctx - num_predict - CONTEXT_SYSTEM_RESERVE_TOKENS) * CONTEXT_CHARS_PER_TOKEN
+    if room > CONTEXT_BUDGET_FLOOR_CHARS:
+        budget = min(budget, room)
+    ceiling = env.get('VILLAGE_CONTEXT_MAX_CHARS')
+    if ceiling:
+        budget = max(CONTEXT_BUDGET_FLOOR_CHARS, min(budget, int(ceiling)))
+    return budget
+
+
+def clip_head_tail(text: str, head: int = FEEDBACK_HEAD_CHARS, tail: int = FEEDBACK_TAIL_CHARS) -> str:
+    """Bound a result while keeping its beginning and its end."""
+    if len(text) <= head + tail:
+        return text
+    omitted = len(text) - head - tail
+    return f'{text[:head]}\n...[{omitted} chars omitted]...\n{text[-tail:]}'
+
+
+def compact_memory_hits(result) -> dict:
+    """Readable memory_search feedback: every hit survives, each one clipped,
+    instead of a raw JSON dump whose best-ranked head was cut away."""
+    items = result.get('items', []) if isinstance(result, dict) else []
+    hits = []
+    for x in items:
+        if not isinstance(x, dict):
+            continue
+        content = str(x.get('content', ''))
+        if len(content) > MEMORY_HIT_CHARS:
+            content = content[:MEMORY_HIT_CHARS] + '...'
+        hits.append(dict(id=x.get('id'), agent=x.get('agent'), scope=x.get('scope'), kind=x.get('kind'),
+                         created_at=x.get('created_at'), score=x.get('score'), content=content))
+    return dict(query=result.get('query') if isinstance(result, dict) else None,
+                backend=result.get('backend') if isinstance(result, dict) else None,
+                count=len(hits), items=hits)
+
+
 def now():
     return datetime.now(timezone.utc).isoformat()
 
@@ -461,7 +530,7 @@ class Resident:
         fingerprint = hashlib.sha256(normalized_result.encode()).hexdigest()[:16]
         self.state['last_result'] = dict(
             timestamp=now(), action=action, ok=ok,
-            result=self.redact(str(result))[:6000],
+            result=clip_head_tail(self.redact(str(result))),
             result_fingerprint=fingerprint,
         )
         self.state['updated_at'] = now()
@@ -472,12 +541,14 @@ class Resident:
                 self.state['recent_actions'] = recent
         write_json(self.path, self.state)
 
-    def memory(self, endpoint, value):
+    def memory(self, endpoint, value=None):
+        """POST value to the memory gateway, or GET endpoint when value is None (P125)."""
         url = self.env.get('MEMORY_GATEWAY_URL', 'http://127.0.0.1:8090')
         token = self.env.get('MEMORY_AGENT_TOKEN', '')
         if not token:
             raise ValueError('Memory credential missing from service environment; this is configuration, not host memory pressure')
-        request = urllib.request.Request(url+endpoint, data=json.dumps(value).encode(),
+        data = None if value is None else json.dumps(value).encode()
+        request = urllib.request.Request(url+endpoint, data=data,
                   headers={'Authorization': 'Bearer '+token, 'Content-Type': 'application/json'})
         with urllib.request.urlopen(request, timeout=10) as response:
             return json.load(response)
@@ -739,6 +810,11 @@ class Resident:
         """Concrete, named gap (not just 'plan more') for snapshot(): the
         exact day and time range still uncovered, so the resident acts on
         real information instead of guessing what 'no gaps' even means."""
+        # P126: asking every resident each turn to fill 09:00-17:00 for the
+        # whole week is busywork, not development - shown only when the
+        # operator made full-week planning a hard obligation.
+        if not self.obligation_is_hard('calendar_week_plan'):
+            return ''
         pending = self.calendar_pending_week_gaps(today_str)
         if not pending:
             return ''
@@ -924,7 +1000,7 @@ class Resident:
         self.state['discussion_turn'] = turn + 1
         self.state['discussion_target_id'] = discussion_target.get('id') if discussion_target else None
         self.pending_cursor = max((event_time(x) for x in events), default=cutoff)
-        own = [x for x in events if x.get('agent') == self.id and x.get('event') in ('command_result', 'memory_result', 'task_result')][-3:]
+        own = [x for x in events if x.get('agent') == self.id and x.get('event') in ('command_result', 'memory_result', 'task_result')][-OWN_RECENT_RESULTS:]
         projects = read_json(self.tasks.path, [])
         # P09: Sync organic inbox to transactional coordinator store with deterministic IDs
         organic_file = self.board / 'organic-inbox.jsonl'
@@ -992,7 +1068,8 @@ class Resident:
             artifacts=recent_artifacts,
             untrusted_direct_messages=addressed[-12:], untrusted_peer_messages=chosen[:9],
             discussion_target=discussion_target,
-            collaboration_checkpoint=collaboration_checkpoint.to_record(),
+            collaboration_checkpoint=dict(collaboration_checkpoint.to_record(),
+                **({} if self.obligation_is_hard('collaboration') else {'enforcement': 'advisory'})),
             direct_ack_target=direct_ack_target,
             king_guidance=(self.id == '01-king'),
             projects=projects[-32:], recent_organic_messages_untrusted=organic[-3:],
@@ -1295,16 +1372,26 @@ class Resident:
                 "cycle, try a genuinely different, simpler approach to whatever you were "
                 f"attempting. {self.sparring_partner_hint()}"
             )
-        query = own_project['title'] if own_project else 'observation experiment evidence project'
+        # P125: the resident's own notes are always shown and steer retrieval.
+        notes = load_notes(self.home)
+        context['your_notes'] = notes
+        if notes_empty(notes):
+            context['notes_hint'] = ('Your notes are empty. They are your memory between turns: use notes_operation set '
+                                     'focus/next_step/next_query, and add short entries with the kb_id of knowledge-base '
+                                     'records you may need again; fetch full detail later with memory_get id=...')
+        fallback_query = own_project['title'] if own_project else 'observation experiment evidence project'
+        query = notes_retrieval_query(notes, fallback_query)
         try:
-            memories = self.memory('/v1/search', {'query': query, 'limit': 4})
+            retrieval_limit = int(self.env.get('VILLAGE_RETRIEVAL_LIMIT', RETRIEVAL_LIMIT_DEFAULT))
+            memories = self.memory('/v1/search', {'query': query, 'limit': retrieval_limit})
             context['retrieved_memory_untrusted'] = [dict(id=x['id'],agent=x['agent'],scope=x['scope'],
                 content=x['content'][:1000],source_event=x.get('source_event','')) for x in memories.get('items',[])]
         except (OSError, ValueError) as exc:
             context['memory_status'] = f'Retrieval unavailable: {exc}; private workspace remains available'
         # Approximate character budget, not a tokenizer: keep small-context residents
         # usable even when peers publish lengthy messages or the archive grows.
-        budget=max(8000,min(24000,int(self.env.get('OLLAMA_NUM_CTX','8192'))*2-10000))
+        # P124: scales with the real window (see context_char_budget()).
+        budget = context_char_budget(self.env)
         context['context_note']='Bounded excerpts; omitted detail remains on disk. This is not the entire history.'
         last_metrics = read_json(self.home / 'last-response.json', {}).get('metrics', {})
         context['token_budget'] = {
@@ -1322,9 +1409,9 @@ class Resident:
                 'error': str(last_res.get('result', ''))[:1000],
                 'directive': 'Previous action did not succeed. Formulate a revised hypothesis, verify prerequisites (paths, permissions, arguments), and execute a single reversible step. Do not repeat the failed action verbatim.',
             }
-        if context.get('last_action_feedback'):
-            context['last_action_feedback']=dict(context['last_action_feedback'])
-            context['last_action_feedback']['result']=context['last_action_feedback']['result'][-2500:]
+        # P124: last_action_feedback is already bounded head+tail by feedback();
+        # a second tail-only cut here used to discard the best-ranked memory
+        # hits and the start of every structured result.
         if self.policy.prompt_profile == 'compact':
             context = compact_context(context)
         # P48: trim least-actionable content first. 'projects' is a bulky,
@@ -1335,7 +1422,10 @@ class Resident:
         # messages were wiped out first. Those are now the most protected:
         # losing a few stale task rows is a much smaller loss than an agent
         # never seeing a message addressed directly to it.
-        for field in ('retrieved_memory_untrusted','untrusted_peer_messages','own_recent_results','projects',
+        # P124: knowledge-base hits used to be trimmed FIRST, so the community's
+        # own recorded experience was the first casualty of any squeeze. They
+        # now go after the re-derivable peer/project excerpts.
+        for field in ('untrusted_peer_messages','own_recent_results','projects','retrieved_memory_untrusted',
                       'recent_organic_messages_untrusted','untrusted_direct_messages',
                       'recent_meetings_closed_untrusted','recent_role_decisions_untrusted',
                       'calendar_today_untrusted'):
@@ -1349,7 +1439,9 @@ class Resident:
                 # one - backwards from this loop's own stated intent
                 # ("losing a few stale task rows"). Trim from the tail
                 # instead, only for this field.
-                if field == 'projects':
+                # P124: retrieved memories are ranked best-first by the
+                # gateway, so they are trimmed from the tail as well.
+                if field in ('projects', 'retrieved_memory_untrusted'):
                     context[field].pop()
                 else:
                     context[field].pop(0)
@@ -1432,6 +1524,11 @@ class Resident:
             return None
         return ids[int(self.state.get('pair_index', 0)) % len(ids)]
 
+    def obligation_is_hard(self, obligation):
+        """P126: only obligations listed in the policy's hard_obligations may
+        block an action; the rest stay hints (pressure still measured)."""
+        return obligation in self.policy.hard_obligations
+
     def effective_action_format(self):
         if self.state.get('schema_disabled_until', 0) > time.time():
             return 'text'
@@ -1460,8 +1557,15 @@ class Resident:
         set right then - not because the content was ever wrong. See
         _loop_breaker_allowed_actions() for the fix."""
         if self._loop_breaker_active():
-            return self._loop_breaker_allowed_actions()
-        return self.policy.allowed_actions
+            allowed = self._loop_breaker_allowed_actions()
+        else:
+            allowed = self.policy.allowed_actions
+        # P126: meeting_operation is only offered while a meeting is actually
+        # open - live, residents reported into closed meetings 33x in 4h,
+        # each a wasted action, because the tool was always on their list.
+        if 'meeting_operation' in allowed and not self.meetings.active():
+            allowed = [x for x in allowed if x != 'meeting_operation']
+        return allowed
 
     def _loop_breaker_active(self):
         """True exactly when effective_allowed_actions() would otherwise
@@ -1603,7 +1707,8 @@ class Resident:
         # three misses. This prevents small models from deadlocking while still
         # stopping an endless sequence of expensive solo actions.
         checkpoint = getattr(self, 'current_collaboration_checkpoint', None)
-        if checkpoint and checkpoint.stage == 'consult' and name == 'board_message' and checkpoint.peer_id:
+        if checkpoint and checkpoint.stage == 'consult' and name == 'board_message' and checkpoint.peer_id \
+                and self.obligation_is_hard('collaboration'):
             recipient = str(args.get('recipient', 'ALL'))
             if recipient != checkpoint.peer_id:
                 self.feedback(name, f'Named peer consultation required: address exactly {checkpoint.peer_id}, not {recipient}. Ask one concrete, reproducible question.', False)
@@ -1634,7 +1739,10 @@ class Resident:
         # post-reset, unrestricted list. Read the flag execute() captured
         # beforehand instead.
         loop_breaker_was_active = self.state.pop('_loop_breaker_was_active', False)
+        # P125: maintaining one's own notes or reading one record is knowledge
+        # upkeep, not solo work - it never builds collaboration pressure.
         if checkpoint and not (name == 'idle' and loop_breaker_was_active) \
+                and name not in ('notes_operation', 'memory_get') \
                 and not is_checkpoint_action(checkpoint, name) and checkpoint.required_action:
             pressure = int(self.state.get('collaboration_pressure', 0)) + 1
             self.state['collaboration_pressure'] = pressure
@@ -1643,9 +1751,9 @@ class Resident:
             # orient (search before acting) and record (share what you learned); consult keeps
             # its grace, since peer availability is a social, not a knowledge, precondition.
             threshold = 1 if checkpoint.hard else 3
-            if pressure >= COLLABORATION_PRESSURE_CEILING or (
+            if self.obligation_is_hard('collaboration') and (pressure >= COLLABORATION_PRESSURE_CEILING or (
                 pressure >= threshold and name in ('execute_bash', 'start_job', 'task_operation', 'team_operation')
-            ):
+            )):
                 self.feedback(name, f'Collaboration checkpoint required before more solo work: use {checkpoint.required_action}. {checkpoint.rationale}', False)
                 self.event('collaboration_gate', f'stage={checkpoint.stage}; required={checkpoint.required_action}; pressure={pressure}; mode={"mandatory" if checkpoint.hard else "advisory"}')
                 return False
@@ -1924,39 +2032,39 @@ class Resident:
                                              f"up once as a recurring entry: {example}",
                                              f"pressure={pressure}")
 
-        if meeting_block:
+        if meeting_block and self.obligation_is_hard('meeting_report'):
             self.feedback(name, meeting_block[0], False)
             self.event('meeting_gate', meeting_block[1])
             return False
-        if assign_block:
+        if assign_block and self.obligation_is_hard('gazette_assign'):
             self.feedback(name, assign_block[0], False)
             self.event('gazette_assign_gate', assign_block[1])
             return False
-        if contribute_block:
+        if contribute_block and self.obligation_is_hard('gazette_contribute'):
             self.feedback(name, contribute_block[0], False)
             self.event('gazette_contribute_gate', contribute_block[1])
             return False
-        if gazette_block:
+        if gazette_block and self.obligation_is_hard('gazette_review'):
             self.feedback(name, gazette_block[0], False)
             self.event('gazette_review_gate', gazette_block[1])
             return False
-        if close_block:
+        if close_block and self.obligation_is_hard('gazette_close'):
             self.feedback(name, close_block[0], False)
             self.event('gazette_close_gate', close_block[1])
             return False
-        if calendar_plan_block:
+        if calendar_plan_block and self.obligation_is_hard('calendar_plan'):
             self.feedback(name, calendar_plan_block[0], False)
             self.event('calendar_plan_gate', calendar_plan_block[1])
             return False
-        if calendar_week_plan_block:
+        if calendar_week_plan_block and self.obligation_is_hard('calendar_week_plan'):
             self.feedback(name, calendar_week_plan_block[0], False)
             self.event('calendar_week_plan_gate', calendar_week_plan_block[1])
             return False
-        if game_winner_block:
+        if game_winner_block and self.obligation_is_hard('gazette_game_winner'):
             self.feedback(name, game_winner_block[0], False)
             self.event('gazette_game_winner_gate', game_winner_block[1])
             return False
-        if gazette_writing_block:
+        if gazette_writing_block and self.obligation_is_hard('gazette_writing_slot'):
             self.feedback(name, gazette_writing_block[0], False)
             self.event('gazette_writing_slot_gate', gazette_writing_block[1])
             return False
@@ -1988,7 +2096,7 @@ class Resident:
         # backing off. A repeated read-only search costs a little compute but
         # changes nothing and harms nothing, unlike repeating execute_bash; it
         # is exempt from this guard so the two mechanisms cannot deadlock.
-        if name != 'idle' and name != 'memory_search' and len(matching) >= limit:
+        if name not in ('idle', 'memory_search', 'memory_get') and len(matching) >= limit:
             fps = [x.get('result_fingerprint') for x in matching if x.get('result_fingerprint')]
             # Legitimate polling progress: output changed between consecutive executions
             is_polling_progress = len(fps) >= 2 and fps[-1] != fps[-2]
@@ -2284,7 +2392,27 @@ class Resident:
                          'query':args.get('query','')}
                 result=self.memory('/v1/memories' if name=='memory_remember' else '/v1/search',value)
                 self.event('memory_result',f'result=success; action={name}; id={result.get("id", "")}; scope={args.get("scope","private")}; matches={len(result.get("items",[]))}')
-                self.feedback(name,json.dumps(result),True)
+                shown = compact_memory_hits(result) if name == 'memory_search' else result
+                if name == 'memory_remember' and isinstance(result, dict) and result.get('id'):
+                    # P125: point the resident at its notes so the new record stays findable.
+                    shown = dict(result, hint='To keep this findable, add a short pointer to your notes: '
+                                 'notes_operation add with note=... and kb_id=' + str(result['id']))
+                self.feedback(name,json.dumps(shown, ensure_ascii=False),True)
+            elif name == 'memory_get':
+                mem_id = str(args.get('id', '')).strip()
+                if not re.fullmatch(r'[A-Za-z0-9_.:-]{1,120}', mem_id):
+                    raise ValueError('id must be a knowledge-base record id (letters, digits, _ . : -)')
+                try:
+                    result = self.memory('/v1/memories/' + urllib.parse.quote(mem_id, safe=''))
+                except urllib.error.HTTPError as exc:
+                    raise ValueError(f'memory {mem_id} not available (HTTP {exc.code})') from exc
+                self.event('memory_result', f'result=success; action=memory_get; id={mem_id}; scope={result.get("scope", "")}; matches=1')
+                self.feedback(name, json.dumps(result, ensure_ascii=False), True)
+            elif name == 'notes_operation':
+                notes, summary = apply_notes_operation(load_notes(self.home), args)
+                save_notes(self.home, notes)
+                self.event('notes_result', f'result=success; operation={args.get("operation")}; {summary[:160]}')
+                self.feedback(name, f'Notes {summary}. They appear as your_notes in every turn.', True)
             elif name == 'research_request':
                 result = self.research.search(args.get('source'), args.get('query'), args.get('limit', 5))
                 self.event('research_result', json.dumps({k: result.get(k) for k in ('source', 'query', 'sha256', 'results')}, ensure_ascii=False))
