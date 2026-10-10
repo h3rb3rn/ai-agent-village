@@ -2840,6 +2840,25 @@ class Resident:
             except Exception as exc:  # noqa: BLE001 - school must never stop the King's cycle
                 self.event('school_failed', str(exc)[:300])
 
+        # P121 (operator 2026-10-10: the Jour Fixe section must say what was discussed and decided):
+        # the Gazette's meetings section is built from the closed meetings' reports and the decided
+        # role proposals, once per edition, instead of from a resident's summary of the invitation.
+        if self.id == '01-king':
+            try:
+                from village.meeting_digest import meeting_digest
+                edition = self.gazette.get_edition(gazette_today())
+                if edition and edition.get('status') != 'compiled':
+                    has_meetings = any(c.get('kind') == 'meetings' for c in edition.get('contributions', []))
+                    if not has_meetings and self.state.get('digest_day') != gazette_today():
+                        digest = meeting_digest(self.meetings.recent_closed(limit=4),
+                                                self.teams.recent_decisions(limit=4))
+                        self.gazette.submit_contribution(gazette_today(), self.id, 'meetings',
+                                                         'Jour Fixe: was berichtet und entschieden wurde', digest)
+                        self.state['digest_day'] = gazette_today()
+                        self.event('gazette_digest', f'edition={gazette_today()}')
+            except Exception as exc:  # noqa: BLE001 - the digest must never stop the King's cycle
+                self.event('gazette_digest_failed', str(exc)[:300])
+
         # P98: the King's daily edition is opened by the runtime, not by a hint the King
         # has to act on. Idempotent; anything already open is left alone.
         if self.id == '01-king':
