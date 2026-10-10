@@ -2798,6 +2798,23 @@ class Resident:
             self.event('cycle_skipped_paused', f'mode={mode}; reason={meta.get("reason", "paused")}', True)
             return
 
+        # P119 (operator 2026-10-09: learn from the strongest residents): a learner with an active
+        # task gets one mentor note per task, sent to the mentor as a direct inbox message.
+        try:
+            from village.mentorship import mentor_for, mentor_note
+            mentor = mentor_for(self.id)
+            if mentor and hasattr(self.tasks, 'store'):
+                import sqlite3 as _sqlite3
+                with _sqlite3.connect(self.board / 'coordination.sqlite3', timeout=30) as _c:
+                    row = _c.execute("SELECT id, title FROM tasks WHERE owner=? AND status='active' LIMIT 1", (self.id,)).fetchone()
+                if row and self.state.get('mentor_notified_task') != row[0]:
+                    self.tasks.store.post_inbox_message(source='direct', sender='village-council',
+                                                        recipient=mentor, content=mentor_note(self.id, row[0], row[1]))
+                    self.state['mentor_notified_task'] = row[0]
+                    self.event('mentor_notified', f'learner={self.id}; mentor={mentor}; task={row[0]}')
+        except Exception as exc:  # noqa: BLE001 - mentoring must never stop a cycle
+            self.event('mentor_failed', str(exc)[:300])
+
         # P106 (operator 2026-10-09): school. The King posts the planned lesson of the day to all
         # residents once per day, and is reminded while the next seven days are not planned.
         if self.id == '01-king' and hasattr(self.tasks, 'store'):
