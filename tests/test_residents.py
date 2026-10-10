@@ -305,3 +305,19 @@ class ResidentStoreTests(unittest.TestCase):
 if __name__ == "__main__":
     unittest.main()
 
+
+
+class OwnPortraitOnlyTests(unittest.TestCase):
+    """P122: the generated catalogue portraits are never shown in place of the agent's own."""
+
+    def test_unauthored_profile_shows_no_generated_portrait(self):
+        from village.residents import get_resident
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as d:
+            from village.residents import ResidentStore
+            store = ResidentStore(Path(d) / "coordination.sqlite3")
+            res = get_resident("03-librarian", store=store)
+            self.assertFalse(res["has_profile"])
+            self.assertEqual(res["ascii_art"], "")
+            self.assertEqual(res["ascii_art_plain"], "")

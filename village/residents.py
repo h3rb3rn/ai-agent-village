@@ -568,13 +568,18 @@ def get_resident(agent_id: str, lang: str = "en", include_art: bool = True, stor
             "accent_color": authored.get("accent_color") or fallback.accent_color,
         }
         if include_art:
-            data["ascii_art"] = authored.get("ascii_art") or get_resident_art(target_id, plain=False)
-            data["ascii_art_plain"] = authored.get("ascii_art_plain") or get_resident_art(target_id, plain=True)
+            # P122 (operator 2026-10-10): only the agent's own portrait is shown. The generated
+            # portraits from the earlier catalog are no longer used as a fallback.
+            data["ascii_art"] = authored.get("ascii_art") or ""
+            data["ascii_art_plain"] = authored.get("ascii_art_plain") or ""
         return data
 
     # Unauthored fallback profile
     data = fallback.to_dict(lang=lang, include_art=include_art)
     data["has_profile"] = False
+    if include_art:
+        data["ascii_art"] = ""
+        data["ascii_art_plain"] = ""
     data["dna"] = dna.to_dict()
     return data
 
