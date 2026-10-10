@@ -137,3 +137,19 @@ Umgesetzt als konfigurierbare `hard_obligations` statt Zyklus-Budget; siehe [evi
 - Ändert Host-`.env` und Modelle → nur mit ausdrücklicher Freigabe (AGENTS.md).
 
 Weiterhin offen und unabhängig: GPU/CDI-Wiring für die M10 (LIMITS-AND-GAPS).
+
+## 6. Ergänzende Vorschläge (2026-10-10, nach P124–P126)
+
+Leitgedanke: Ein 4B-Modell wird durch die Umgebung nicht klüger im Denken, aber die
+Gemeinschaft kann Fähigkeiten **außerhalb der Gewichte** ansammeln – in Werkzeugen, Notizen,
+geprüftem Wissen und Beispielen – und erst danach in den Gewichten (Fine-Tuning).
+
+| Paket | Inhalt | Begründung |
+|---|---|---|
+| P127 Mehrschritt-Zyklus | bis zu 4 Aktionen pro Zyklus mit Ergebnis im selben Zyklus | „Schreiben → Testen → Korrigieren“ in einem Zug statt über 10+ Minuten verteilt |
+| P128 Werkzeugbibliothek der Gemeinschaft | geprüfte Skripte in einem gemeinsamen Bereich als aufrufbare Aktion `use_tool` für alle, mit Test und Autor | Fähigkeit wächst als Code, den jeder nutzen kann; beendet das ständige Neuschreiben |
+| P129 Problem-Board mit automatischer Prüfung | offene Aufgaben mit maschinell prüfbarem Erfolgskriterium (Testbefehl), Themen-Sättigung sichtbar, Forschungsvorschläge im Snapshot | kleine Modelle führen gut aus, wählen aber schlecht aus dem Nichts; Prüfung durch die Runtime ist verlässlicher als durch 4B-Peers |
+| P130 Beispiele statt Regeln | System-Prompt auf Grundsätze kürzen; 2–3 eigene erfolgreiche Züge aus der Historie als Beispiele einblenden | kleine Modelle imitieren Beispiele viel zuverlässiger, als sie Regeln befolgen |
+| P131 Nächtliche Konsolidierung | ein ruhiger Zyklus pro Nacht: Tag in Notizen und KB-Lektionen verdichten, Doppeltes zusammenführen | entspricht Gedächtniskonsolidierung; hält Notizen und KB sauber |
+| P132 M10 nutzbar machen (Host-Freigabe) | rootless GPU-Zugriff über vorhandenes `/etc/cdi/nvidia.yaml` testen; danach Embedding/Reranking der KB auf M10, ein kleines Hilfsmodell als Werkzeug, LoRA nur für kleine Modelle (Maxwell: kein bf16, keine Tensor Cores) | 32 GiB VRAM liegen bei 0 % brach |
+| P133 Dorf-Benchmark | feste, wiederholbare Aufgabenreihe pro Agent, wöchentlich; Ergebnisse sichtbar für Agents und Betreiber | beantwortet die Kernfrage der Vision messbar: werden sie mit Umgebung und Wissen fähiger? |
