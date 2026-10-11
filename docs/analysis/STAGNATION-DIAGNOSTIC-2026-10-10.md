@@ -180,3 +180,25 @@ Freier Speicher: 2 × 3,4 TB HDD, 440 GB SSD.
   3. Lokales Wheelhouse für zusätzliche, geprüfte Pakete statt Internetzugriff der Agents.
   4. Gemeinsames Datenverzeichnis auf `/mnt/hdd1` für Datensätze und Modelle.
   5. GPU-Belegung (`finetune_gpu_reservations`, P90) und Labor-Fähigkeiten im Snapshot sichtbar.
+
+## 8. Effizienz-Messung 2026-10-11 und weitere Lösungen
+
+Messung und Sofortmaßnahmen: [evidence/P135.md](../evidence/P135.md). Kurz: Prompt-Verarbeitung
+macht 213 von ~260 s pro Zyklus aus; jeder Agent sah 32 tote Tasks pro Zyklus; 60 von 86
+Aktionsfehlern waren doppelte Meeting-Berichte.
+
+| Paket | Idee | Erwarteter Effekt |
+|---|---|---|
+| P136 Fokus- und Rundblick-Zyklen | Meist ein kleiner Fokus-Prompt (Notizen, letztes Ergebnis, eigener Task, direkte Nachrichten; ~3–5k Tokens), der volle Snapshot nur alle N Zyklen oder bei neuen Ereignissen | 3–5× mehr Zyklen pro Stunde auf derselben Lane; kleiner, sauberer Kontext passt besser zu 4B-Modellen |
+| P137 `write_file`-Aktion | Datei per `path` + `content` schreiben statt Heredoc in einem JSON-String | entfernt die häufigste Ursache ungültiger Aktionen bei Skripten |
+| P138 Neuheitsprüfung | gleicher Befehl + gleiche Ausgabe wie zuvor → Rückmeldung „nichts Neues seit HH:MM, bereits bekannt“ | bricht Schleifen wie 6× `habitat_inventory.py` |
+| P139 Beiträge statt Ablehnung | `complete`/`claim` auf fremden Task wird zu einem Evidenz-Beitrag an den Besitzer statt zu einem Fehler | verwandelt 22 verschwendete Aktionen in Zusammenarbeit |
+| P140 Werkstatt und `share_file` | eigene Datei in den gemeinsamen Bereich veröffentlichen; bei `foreign_home_blocked` nennt die Rückmeldung den Weg | Wiederverwendung statt Neuschreiben |
+| P141 Labor-Quests | kleine, maschinell prüfbare Einstiegsaufgaben für Container/GPU (z. B. CUDA-Container zeigt die M10, kleines Modell auf M10 serviert, Tokens/s gemessen) | erste echte Nutzung der M10 |
+| P142 Pfad-Hilfe | bei „No such file“ nächstliegenden existierenden Pfad im eigenen Home vorschlagen | Operator halluziniert `/var/var/ai- village/…` |
+
+Host-/Konfigurationsthemen (Betreiberentscheidung):
+- King: 734 s pro Inferenz, 3× Output-Budget erschöpft, 13 Inferenzen in 5,5 h. `think` senken
+  oder `num_predict` erhöhen; ggf. Gazette-Redaktion an einen schnelleren Agent.
+- 06-operator (nemotron-3-nano:4b): niedrigste Effizienz (0,58 erfolgreiche Aktionen pro Inferenz,
+  29 Fehler in 5,5 h) – Kandidat für einen Modellwechsel.
