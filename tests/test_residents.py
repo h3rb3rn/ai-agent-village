@@ -100,7 +100,7 @@ class ResidentCatalogTests(unittest.TestCase):
         self.assertEqual(king["profession"], "")
         self.assertEqual(king["calling"], "")
         self.assertEqual(king["dna"]["model"], "qwen3.6:35b")
-        self.assertEqual(king["dna"]["context_size"], 131072)
+        self.assertEqual(king["dna"]["context_size"], 262144)
         self.assertEqual(king["dna"]["batch_size"], 128)
         self.assertEqual(king["dna"]["num_predict"], 8192)
         self.assertEqual(king["dna"]["think_level"], "medium")
@@ -110,6 +110,18 @@ class ResidentCatalogTests(unittest.TestCase):
 
 class AsciiArtDimensionTests(unittest.TestCase):
     """Verifies that 250x250 ASCII art validation strictly enforces dimensions and UTF-8 characters."""
+
+    def test_wrong_size_portrait_does_not_block_the_text_fields(self):
+        # P108 (live finding 2026-10-09): agents sent 7 to 9 lines; the profile must still be saved
+        import tempfile
+        from pathlib import Path
+        from village.residents import ResidentStore
+        with tempfile.TemporaryDirectory() as d:
+            store = ResidentStore(Path(d) / "coordination.sqlite3")
+            result = store.update_profile(agent_id="03-librarian", profession="librarian",
+                                          calling="steward", ascii_art="only\nseven\nlines\n")
+            self.assertEqual(result.get("profession"), "librarian")
+            self.assertIn("250", result.get("art_warning", ""))
 
     def test_validate_ascii_art_exact_250x250(self):
         # A valid 250x250 plain matrix must pass validation
@@ -281,7 +293,7 @@ class ResidentStoreTests(unittest.TestCase):
         # Verify that infer_cognitive_dna returns full Ollama DNA settings
         dna = infer_cognitive_dna("01-king")
         self.assertEqual(dna.model, "qwen3.6:35b")
-        self.assertEqual(dna.context_size, 131072)
+        self.assertEqual(dna.context_size, 262144)
         self.assertEqual(dna.batch_size, 128)
         self.assertEqual(dna.num_predict, 8192)
         self.assertEqual(dna.think_level, "medium")
@@ -293,3 +305,19 @@ class ResidentStoreTests(unittest.TestCase):
 if __name__ == "__main__":
     unittest.main()
 
+
+
+class OwnPortraitOnlyTests(unittest.TestCase):
+    """P122: the generated catalogue portraits are never shown in place of the agent's own."""
+
+    def test_unauthored_profile_shows_no_generated_portrait(self):
+        from village.residents import get_resident
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as d:
+            from village.residents import ResidentStore
+            store = ResidentStore(Path(d) / "coordination.sqlite3")
+            res = get_resident("03-librarian", store=store)
+            self.assertFalse(res["has_profile"])
+            self.assertEqual(res["ascii_art"], "")
+            self.assertEqual(res["ascii_art_plain"], "")

@@ -51,6 +51,9 @@ RELEASE_FILES = [
     ("village/artifacts.py", "lib/village/artifacts.py", 0o644),
     ("village/containers.py", "lib/village/containers.py", 0o644),
     ("village/meetings.py", "lib/village/meetings.py", 0o644),
+    ("village/school.py", "lib/village/school.py", 0o644),
+    ("village/mentorship.py", "lib/village/mentorship.py", 0o644),
+    ("village/meeting_digest.py", "lib/village/meeting_digest.py", 0o644),
     ("village/gazette.py", "lib/village/gazette.py", 0o644),
     ("village/gazette_pdf.py", "lib/village/gazette_pdf.py", 0o644),
     ("village/calendar.py", "lib/village/calendar.py", 0o644),
@@ -74,6 +77,7 @@ RELEASE_FILES = [
     ("village/auditor.py", "lib/village/auditor.py", 0o644),
     ("village/auditor_llm.py", "lib/village/auditor_llm.py", 0o644),
     ("village/residents.py", "lib/village/residents.py", 0o644),
+    ("village/notes.py", "lib/village/notes.py", 0o644),
     *[(f"village/assets/ascii_art/{f}", f"lib/village/assets/ascii_art/{f}", 0o644)
       for f in sorted(os.listdir(Path(__file__).resolve().parent / "assets/ascii_art")) if f.endswith(".txt")],
     ("village/__init__.py", "lib/village/__init__.py", 0o644),

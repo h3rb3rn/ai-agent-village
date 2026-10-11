@@ -199,6 +199,78 @@ class TestCoordinationStore(unittest.TestCase):
             })
         self.assertIn("64 open projects already exist", str(ctx.exception))
 
+    def test_abandoned_projects_neither_block_nor_count_towards_the_limit(self) -> None:
+        # P96 (live incident 2026-10-08): 63 orphaned tasks were set to 'abandoned',
+        # but the limit and the duplicate check still counted them, so every new
+        # project was refused with "64 open projects already exist".
+        for i in range(64):
+            task = self.store.operate("builder", {
+                "action": "create", "title": f"Orphan project {i:03d}", "success_criterion": "x"})
+            with self.store._conn() as conn:
+                conn.execute("UPDATE tasks SET status='abandoned' WHERE id=?", (task["id"],))
+                conn.commit()
+        created = self.store.operate("builder", {
+            "action": "create", "title": "Fresh project", "success_criterion": "a real check"})
+        self.assertEqual(created["status"], "open")
+        # the same title as an abandoned project is a new project, not the dead one
+        again = self.store.operate("builder", {
+            "action": "create", "title": "Orphan project 000", "success_criterion": "a real check",
+            "new_because": "Earlier attempt was abandoned; this one starts from a new plan."})
+        self.assertNotEqual(again["id"], task["id"])
+
+    def test_same_topic_under_other_wording_returns_the_existing_project(self) -> None:
+        # P96: "Disk usage monitor script" and "Create disk monitoring script" for
+        # the same mount are one project, not two.
+        first = self.store.operate("01-a", {
+            "action": "create", "title": "Disk usage monitor script for /mnt/hdd1",
+            "success_criterion": "a real check"})
+        second = self.store.operate("01-b", {
+            "action": "create", "title": "Create disk monitoring script for /mnt/hdd1",
+            "success_criterion": "a real check"})
+        self.assertEqual(second["id"], first["id"])
+        self.assertEqual(self.store.get_task(first["id"])["title"], "Disk usage monitor script for /mnt/hdd1")
+
+    def test_different_topics_stay_separate(self) -> None:
+        # P96: the similarity rule must not merge unrelated projects, nor one project
+        # per mount point / number (hdd1 vs hdd2 are two different jobs)
+        a = self.store.operate("01-a", {
+            "action": "create", "title": "Disk usage monitor for /mnt/hdd1", "success_criterion": "a real check"})
+        b = self.store.operate("01-a", {
+            "action": "create", "title": "Compare zstd vs lzma compression", "success_criterion": "a real check"})
+        c = self.store.operate("01-a", {
+            "action": "create", "title": "Disk usage monitor for /mnt/hdd2", "success_criterion": "a real check"})
+        self.assertNotEqual(a["id"], b["id"])
+        self.assertNotEqual(a["id"], c["id"])
+
+    def test_abandoned_topic_needs_a_stated_reason_to_come_back(self) -> None:
+        # P101 (live finding 2026-10-08/09): the disk monitor topic returned after it had
+        # been abandoned. A new project on an abandoned topic must say what is different.
+        old = self.store.operate("01-a", {"action": "create",
+                                          "title": "Disk usage monitor for /mnt/hdd1",
+                                          "success_criterion": "a real check"})
+        with self.store._conn() as conn:
+            conn.execute("UPDATE tasks SET status='abandoned' WHERE id=?", (old["id"],))
+            conn.commit()
+        with self.assertRaises(ValueError) as ctx:
+            self.store.operate("01-b", {"action": "create",
+                                        "title": "Create disk monitoring script for /mnt/hdd1",
+                                        "success_criterion": "a real check"})
+        self.assertIn(old["id"], str(ctx.exception))
+        again = self.store.operate("01-b", {"action": "create",
+                                            "title": "Create disk monitoring script for /mnt/hdd1",
+                                            "success_criterion": "a real check",
+                                            "new_because": "The mount is now monitored by the existing cron job, so this adds alerting only."})
+        self.assertNotEqual(again["id"], old["id"])
+
+    def test_unknown_task_id_lists_the_open_tasks(self) -> None:
+        # P104 (live finding 2026-10-09): agents sent IDs of merged or abandoned tasks
+        task = self.store.operate("01-a", {"action": "create", "title": "Habitat inventory script",
+                                           "success_criterion": "a real check"})
+        with self.assertRaises(ValueError) as ctx:
+            self.store.operate("01-a", {"action": "claim", "task_id": "deadbeef0000"})
+        self.assertIn(task["id"], str(ctx.exception))
+        self.assertIn("Habitat inventory script", str(ctx.exception))
+
     def test_file_permissions_restrictive(self) -> None:
         """Verify that coordination.sqlite3 has restrictive permissions (0660)."""
         mode = self.db_path.stat().st_mode & 0o777

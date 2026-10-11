@@ -88,6 +88,18 @@ ACTION_SPECS: Dict[str, Dict[str, Any]] = {
     "memory_search": {
         "doc": "query, scope? (private|shared) -> search stored memories",
         "properties": {"query": _s(300), "scope": {"enum": ["private", "shared"]}}, "required": ["query"]},
+    "memory_get": {
+        "doc": "id -> fetch one full knowledge-base record by its id (e.g. a kb_id from your notes or a search hit)",
+        "properties": {"id": _s(120)}, "required": ["id"]},
+    "notes_operation": {
+        "doc": "operation=set(focus?,next_step?,next_query?) | add(note,kb_id?,list=entries|commitments) | remove(list,index) "
+               "-> your own short notes, shown to you every turn; next_query steers which memories are retrieved for you",
+        "properties": {
+            "operation": {"enum": ["set", "add", "remove"]},
+            "focus": _s(300, 0), "next_step": _s(300, 0), "next_query": _s(200, 0),
+            "note": _s(240), "kb_id": _s(120), "list": {"enum": ["entries", "commitments"]},
+            "index": {"type": "integer", "minimum": 0, "maximum": 20}},
+        "required": ["operation"]},
     "research_request": {
         "doc": "source (wikipedia|github|dockerhub|huggingface), query, limit? -> read-only discovery; huggingface returns dataset metadata (license/files) only, never dataset content",
         "properties": {"source": {"enum": ["wikipedia", "github", "dockerhub", "huggingface"]}, "query": _s(300), "limit": {"type": "integer", "minimum": 1, "maximum": 10}},
@@ -239,6 +251,8 @@ ACTION_SPECS: Dict[str, Dict[str, Any]] = {
             "ascii_art": _s(70000),
             "ascii_art_file": _s(300),
         },
+        "required": ["operation"]},
+    "school_operation": {"doc": "operation=plan(lesson_day=YYYY-MM-DD, topic) -> plan one school lesson, only King, 1 to 7 days ahead; the curriculum must always cover the next 7 days", "properties": {"operation": {"enum": ["plan", "answer"]}, "lesson_day": _s(10), "topic": _s(200), "answer": _s(2000)},
         "required": ["operation"]},
     "idle": {"doc": "no arguments -> deliberate rest", "properties": {}, "required": []},
 }

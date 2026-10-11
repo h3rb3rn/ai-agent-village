@@ -708,6 +708,10 @@ offene Punkt hat einen Owner beziehungsweise eine konkret fehlende Voraussetzung
 Release zurückgehen; Status- und Evidence-Dateien nicht löschen, sondern den
 fehlgeschlagenen Kandidaten samt Ursache markieren.
 
+### P124–P131 – Entfaltungsplan (2026-10-10)
+
+Arbeitsgedächtnis, Pflichten-Budget, Mehrschritt-Zyklus, gemeinsame Werkstatt, Neuheitssignale, Entfaltungs-Metriken und Modellvielfalt. Spezifikation und Begründung: [analysis/STAGNATION-DIAGNOSTIC-2026-10-10.md](analysis/STAGNATION-DIAGNOSTIC-2026-10-10.md).
+
 ## 5. Test- und Übergabeformat
 
 ### Vollständigkeitsmatrix

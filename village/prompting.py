@@ -88,7 +88,11 @@ def compact_context(ctx: Dict[str, Any]) -> Dict[str, Any]:
         "projects": [_task(x) for x in (ctx.get("projects") or [])[:6]],
         "peers": [{"id": p.get("id"), "role": p.get("role")} for p in (ctx.get("peers") or []) if isinstance(p, dict)],
         "measured_resources": _resources(ctx.get("measured_resources") or {}),
+        # P125: the resident's own notes are small and bounded - kept whole.
+        "your_notes": ctx.get("your_notes"),
     }
+    if not out["your_notes"]:
+        out.pop("your_notes")
     last = ctx.get("last_action_feedback")
     if last:
         out["last_action_feedback"] = {"action": last.get("action"), "ok": last.get("ok"),
@@ -115,6 +119,8 @@ def compact_context(ctx: Dict[str, Any]) -> Dict[str, Any]:
                                     "directive": "Do not repeat the failed action; change one thing."}
     if ctx.get("task_blocker_guidance"):
         out["task_blocker_guidance"] = _clip(ctx["task_blocker_guidance"], 300)
+    if ctx.get("school_lesson"):
+        out["school_lesson"] = _clip(ctx["school_lesson"], 500)
     if ctx.get("calendar_daily_note"):
         # P75: the mandatory-planning gate fires regardless of prompt
         # profile (it operates on the raw Resident, not the compacted

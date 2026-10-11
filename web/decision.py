@@ -10,9 +10,9 @@ import sys
 SUPPORTED_ACTIONS = frozenset({
     'execute_bash', 'start_job', 'job_status', 'cancel_job',
     'board_message', 'task_operation', 'team_operation', 'artifact_operation',
-    'memory_remember', 'memory_search', 'research_request', 'meeting_operation',
+    'memory_remember', 'memory_search', 'memory_get', 'notes_operation', 'research_request', 'meeting_operation',
     'calc_operation', 'research_proposal', 'gazette_operation', 'calendar_operation',
-    'finetune_operation', 'profile_operation', 'idle',
+    'finetune_operation', 'profile_operation', 'school_operation', 'idle',
 })
 
 
@@ -27,7 +27,11 @@ NAME_ALIASES = {'board_operation': 'board_message', 'message_operation': 'board_
 def _normalize_action(name, args):
     """Normalize documented legacy aliases without interpreting free prose."""
     normalized = dict(args)
-    if name in ('meeting_operation', 'artifact_operation', 'team_operation', 'research_proposal', 'gazette_operation', 'calendar_operation', 'finetune_operation', 'profile_operation') and not normalized.get('operation'):
+    # P114 (live finding 2026-10-09, Chronicler): a meeting report with meeting_id and achieved but no
+    # operation field was refused as 'missing action argument'. The fields make the intent unambiguous.
+    if name == 'meeting_operation' and not normalized.get('operation') and 'achieved' in normalized and normalized.get('meeting_id'):
+        normalized['operation'] = 'report'
+    if name in ('meeting_operation', 'artifact_operation', 'team_operation', 'research_proposal', 'gazette_operation', 'calendar_operation', 'finetune_operation', 'profile_operation', 'notes_operation') and not normalized.get('operation'):
         if normalized.get('action'):
             normalized['operation'] = normalized['action']
         elif name == 'team_operation' and all(normalized.get(k) for k in ('project', 'goal', 'role')):
@@ -48,7 +52,8 @@ def _validate_action(name, args):
         'artifact_operation': ('operation', 'artifact_id'), 'calc_operation': ('tool',),
         'research_proposal': ('operation',), 'gazette_operation': ('operation',),
         'calendar_operation': ('operation',), 'finetune_operation': ('operation',),
-        'profile_operation': ('operation',),
+        'profile_operation': ('operation',), 'notes_operation': ('operation',),
+        'memory_get': ('id',),
     }.get(name, ())
     if any(not isinstance(args.get(field), str) or not args[field].strip() for field in required):
         return 'missing action argument'
@@ -57,11 +62,15 @@ def _validate_action(name, args):
     if name == 'research_request' and args.get('source') not in ('wikipedia', 'github', 'dockerhub', 'huggingface'):
         return 'unsupported research source'
     if name == 'meeting_operation' and args.get('operation') not in ('report', 'close'):
-        return 'unknown meeting operation'
+        # P112 (live finding 2026-10-09, Methodologist): agents tried operation=create. Only report and
+        # close exist; the scheduler opens meetings. The reason now says so.
+        return 'unknown meeting operation: only report or close exist; meetings are opened by the scheduler, never created by an agent'
     if name == 'team_operation' and args.get('operation') not in ('create', 'join', 'leave', 'create_subtask', 'claim_subtask', 'complete_subtask', 'propose_role', 'vote_role'):
         return 'unknown team operation'
     if name == 'artifact_operation' and args.get('operation') not in ('register', 'claim_success', 'verify', 'adopt', 'inspect'):
         return 'unknown artifact operation'
+    if name == 'notes_operation' and args.get('operation') not in ('set', 'add', 'remove'):
+        return 'unknown notes operation'
     if name == 'profile_operation' and args.get('operation') not in ('view', 'update'):
         return 'unknown profile operation'
     return None
@@ -169,6 +178,11 @@ def decision(response, allowed=None):
     tool = obj.get('tool_call', obj)
     if not isinstance(tool, dict): return fallback('invalid action envelope', content)
     name, args = tool.get('name'), tool.get('arguments', {})
+    # P135 (live 2026-10-11): a string/list 'arguments' raised ValueError in
+    # _normalize_action's dict(args) and aborted the whole cycle as an
+    # inference_error - a malformed action, not a crash.
+    if not isinstance(args, dict):
+        return fallback('arguments must be a JSON object', content)
     name = NAME_ALIASES.get(name, name)
     args = _normalize_action(name, args)
     reason = _validate_action(name, args)

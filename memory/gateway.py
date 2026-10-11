@@ -8,6 +8,7 @@ isolation, atomic write quotas, fail-closed credential validation, and full CRUD
 from __future__ import annotations
 
 import argparse
+import functools
 import hashlib
 import json
 import math
@@ -16,6 +17,7 @@ import re
 import shutil
 import sqlite3
 import sys
+import threading
 import time
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -130,20 +132,19 @@ def migrate_memories_schema(conn: sqlite3.Connection) -> None:
     )
 
 
-def db() -> sqlite3.Connection:
-    """Open or initialize authoritative memory SQLite database with secure permissions."""
-    db_dir = DB.parent
-    db_dir.mkdir(parents=True, exist_ok=True)
-    try:
-        db_dir.chmod(0o700)
-    except OSError:
-        pass
+# P93: schema creation and migration contain write statements (including a full-table
+# UPDATE). They used to run on every connection, so even a read-only search took the
+# SQLite WAL write lock and serialised against every other request and the projection
+# worker. They now run once per process and database path.
+_SCHEMA_LOCK = threading.Lock()
+_SCHEMA_READY: Set[str] = set()
+# Connections opened while a request is handled, so the handler wrapper can roll back and
+# close whatever an error path left open (an open BEGIN IMMEDIATE blocks all writers).
+_REQUEST = threading.local()
 
-    conn = sqlite3.connect(str(DB), timeout=30.0)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA busy_timeout=30000")
 
+def init_schema(conn: sqlite3.Connection) -> None:
+    """Create tables and indexes and run the additive migration (idempotent)."""
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS memories (
@@ -195,13 +196,64 @@ def db() -> sqlite3.Connection:
     )
     conn.commit()
 
+
+def db() -> sqlite3.Connection:
+    """Open the authoritative memory SQLite database with secure permissions."""
+    db_dir = DB.parent
+    db_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        db_dir.chmod(0o700)
+    except OSError:
+        pass
+
+    conn = sqlite3.connect(str(DB), timeout=30.0)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=30000")
+
+    key = str(DB)
+    if key not in _SCHEMA_READY:
+        with _SCHEMA_LOCK:
+            if key not in _SCHEMA_READY:
+                try:
+                    init_schema(conn)
+                except BaseException:
+                    conn.close()
+                    raise
+                _SCHEMA_READY.add(key)
+
     if DB.exists():
         try:
             DB.chmod(0o600)
         except OSError:
             pass
 
+    tracked = getattr(_REQUEST, "conns", None)
+    if tracked is not None:
+        tracked.append(conn)
     return conn
+
+
+def release_connections(method):
+    """Roll back and close every connection a request handler left open."""
+    @functools.wraps(method)
+    def wrapper(self, *args, **kwargs):
+        _REQUEST.conns = []
+        try:
+            return method(self, *args, **kwargs)
+        finally:
+            conns, _REQUEST.conns = _REQUEST.conns, None
+            for conn in conns:
+                try:
+                    if conn.in_transaction:
+                        conn.rollback()
+                except sqlite3.Error:
+                    pass
+                try:
+                    conn.close()
+                except sqlite3.Error:
+                    pass
+    return wrapper
 
 
 def extract_tokens(text: str) -> Set[str]:
@@ -330,6 +382,7 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    @release_connections
     def do_GET(self):
         """Handle GET requests."""
         route = urlsplit(self.path).path
@@ -474,6 +527,7 @@ class Handler(BaseHTTPRequestHandler):
 
         return self.send_json(404, {"error": "not found"})
 
+    @release_connections
     def do_POST(self):
         """Handle POST requests."""
         if not auth(self):
@@ -580,7 +634,11 @@ class Handler(BaseHTTPRequestHandler):
                     return self.send_json(429, {"error": "agent memory write quota exceeded"})
 
                 created = now()
-                ident = hashlib.sha256(f"{agent}\0{created}\0{content}".encode()).hexdigest()[:24]
+                # P97: the source event is part of the identity. Several corrections with the
+                # same text (written by the same author within one second, e.g. for different
+                # residents) used to collide on the primary key and dropped the connection.
+                source_event = str(value.get("source_event", ""))[:200]
+                ident = hashlib.sha256(f"{agent}\0{created}\0{content}\0{source_event}".encode()).hexdigest()[:24]
                 metadata_str = json.dumps(value.get("metadata", {}), ensure_ascii=False) if isinstance(value.get("metadata"), dict) else "{}"
 
                 item = {
@@ -617,6 +675,11 @@ class Handler(BaseHTTPRequestHandler):
                 row = conn.execute("SELECT * FROM memories WHERE id = ?", (ident,)).fetchone()
                 conn.close()
                 return self.send_json(201, format_memory_row(row))
+            except sqlite3.IntegrityError:
+                # P97: an identical memory already exists - answer, never drop the connection
+                conn.rollback()
+                conn.close()
+                return self.send_json(409, {"error": "duplicate memory"})
             except sqlite3.OperationalError as exc:
                 return self.send_json(500, {"error": f"Database error: {exc}"})
 
@@ -756,6 +819,7 @@ class Handler(BaseHTTPRequestHandler):
 
         return self.send_json(404, {"error": "not found"})
 
+    @release_connections
     def do_PATCH(self):
         """Handle PATCH updates to existing memories: /v1/memories/<id>."""
         if not auth(self):
@@ -837,6 +901,7 @@ class Handler(BaseHTTPRequestHandler):
         except sqlite3.OperationalError as exc:
             return self.send_json(500, {"error": f"Database error: {exc}"})
 
+    @release_connections
     def do_DELETE(self):
         """Handle DELETE requests: /v1/memories/<id>."""
         if not auth(self):

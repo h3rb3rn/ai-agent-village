@@ -5,6 +5,7 @@ No model settings are calibrated here. Agent configuration remains authoritative
 The shared board is collaboration data, never a privilege boundary.
 """
 import fcntl
+from collections import Counter
 import hashlib
 import json
 import os
@@ -17,6 +18,7 @@ import subprocess
 import time
 import traceback
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 import sys
@@ -32,6 +34,8 @@ if str(LIB_DIR) not in sys.path:
 
 from decision import decision, final_content
 from village.control import is_paused, read_pause_metadata
+from village.notes import (load_notes, save_notes, apply_operation as apply_notes_operation,
+                          retrieval_query as notes_retrieval_query, is_empty as notes_empty)
 from village.coordinator import CoordinationStore
 from village.inference import (
     build_ollama_request,
@@ -219,6 +223,33 @@ REPEATED_REJECTION_WINDOW_SECONDS = 6 * 3600
 REPEATED_REJECTION_NUDGE_AT = 2
 
 
+# P112: actions the King may take while the school plan has open days (see Resident.guard)
+SCHOOL_GATE_EXEMPT = frozenset({'school_operation', 'profile_operation', 'idle', 'meeting_operation', 'calendar_operation', 'gazette_operation'})
+# P106 (measured 2026-10-09 18:50 UTC): the first gate covered only solo work, and blocked agents
+# moved on to board messages and meeting reports instead of the one profile call. Everything except
+# the profile call, idle and the obligation actions (meetings, calendar, gazette) is gated. Memory
+# actions are gated too: the King used them to avoid the profile (measured 19:00 UTC).
+PROFILE_GATE_EXEMPT = frozenset({'profile_operation', 'idle', 'meeting_operation', 'calendar_operation',
+                                 'gazette_operation', 'school_operation'})
+
+
+# P107 (live finding 2026-10-09): agents answered the auditor and the council, but these
+# system senders were not valid recipients, so replies to them were refused.
+SYSTEM_SENDERS = frozenset({'village-auditor', 'village-council'})
+
+
+# P123: identical refusals of one action are withheld after this many, within this window (seconds)
+REFUSAL_LIMIT = 4
+REFUSAL_WINDOW_SECONDS = 1800
+
+
+def recipient_error(recipient, known_ids):
+    """P104 (live finding 2026-10-09): name-style recipients ('methodologist') were refused
+    with no hint of the valid IDs. The message now lists them."""
+    return (f"recipient '{recipient}' is not a known agent; use ALL or one of the exact IDs: "
+            + ", ".join(sorted(known_ids)))
+
+
 def invalid_decision_guidance(reason, preview):
     """Concrete, reason-specific correction instead of one generic phrase
     for every cause - proven repeatedly this session (P58/P60/P63) that a
@@ -249,6 +280,139 @@ def invalid_decision_guidance(reason, preview):
         return ('A required argument was empty or missing. Check every field the action needs '
                 'and provide all of them as non-empty values.')
     return 'Correct your envelope: {"name":"tool_name","arguments":{...}}.'
+
+
+# P124: limits that used to be fixed regardless of the resident's real context
+# window. A 262k-token resident was squeezed into a 24k-character snapshot
+# (~5% of its window, measured live 2026-10-10), and its knowledge-base hits
+# were the first thing dropped. The budget now scales with OLLAMA_NUM_CTX;
+# VILLAGE_CONTEXT_MAX_CHARS stays available as an explicit operator ceiling.
+CONTEXT_BUDGET_FLOOR_CHARS = 8000
+# Characters reserved per token of the window that is NOT available to the
+# snapshot (system prompt, identity, num_predict output) - conservative
+# chars/token estimate for JSON-heavy text.
+CONTEXT_CHARS_PER_TOKEN = 3
+CONTEXT_SYSTEM_RESERVE_TOKENS = 4096
+RETRIEVAL_LIMIT_DEFAULT = 8
+# P135: P124 lifted the snapshot to ~60k chars; measured live (2026-10-11)
+# prompt evaluation grew linearly (12k -> 24k tokens, 98 s -> 213 s median),
+# cutting cycles per hour by 30 %. A default ceiling keeps the gain in
+# priority (notes, memory protected) without doubling latency. Operators may
+# still raise it via VILLAGE_CONTEXT_MAX_CHARS.
+CONTEXT_DEFAULT_MAX_CHARS = 36000
+# P135: only live tasks belong in the per-turn project list.
+LIVE_TASK_STATUSES = ('open', 'active', 'forming')
+PROJECTS_IN_CONTEXT = 12
+SATURATION_MIN_TASKS = 5
+SATURATION_STOPWORDS = frozenset(
+    'with from into that this your their test tests testing create implement verify verification '
+    'script local check fix complete final finalize build run prototype tool simple specific task '
+    'shared review follow before after using based'.split())
+OWN_RECENT_RESULTS = 8
+# Stored action results keep both ends: structured JSON (memory/task/research
+# results) is ranked best-first at the head, command output reports errors at
+# the tail. The old [:6000] then [-2500:] pair silently kept only the middle.
+FEEDBACK_HEAD_CHARS = 4000
+FEEDBACK_TAIL_CHARS = 8000
+MEMORY_HIT_CHARS = 700
+
+
+def context_char_budget(env) -> int:
+    """Snapshot character budget derived from the resident's own context window.
+
+    Identical to the historical formula for small windows (so trimming
+    behaviour of small-context residents is unchanged), but without the old
+    fixed 24k ceiling. Never exceeds what is left of the window after the
+    system prompt and the configured output budget."""
+    num_ctx = int(env.get('OLLAMA_NUM_CTX', '8192'))
+    num_predict = int(env.get('OLLAMA_NUM_PREDICT', '768'))
+    budget = max(CONTEXT_BUDGET_FLOOR_CHARS, num_ctx * 2 - 10000)
+    room = (num_ctx - num_predict - CONTEXT_SYSTEM_RESERVE_TOKENS) * CONTEXT_CHARS_PER_TOKEN
+    if room > CONTEXT_BUDGET_FLOOR_CHARS:
+        budget = min(budget, room)
+    ceiling = int(env.get('VILLAGE_CONTEXT_MAX_CHARS') or CONTEXT_DEFAULT_MAX_CHARS)
+    return max(CONTEXT_BUDGET_FLOOR_CHARS, min(budget, ceiling))
+
+
+def topic_saturation(tasks, limit=5):
+    """P135: the words that keep coming back in finished or abandoned task
+    titles, with counts - so a resident can see a topic is exhausted instead
+    of being shown 32 dead tasks about it every turn."""
+    counts = Counter()
+    for task in tasks:
+        if task.get('status') not in ('complete', 'abandoned'):
+            continue
+        words = set(re.findall(r'[a-z][a-z0-9_.-]{3,}', str(task.get('title', '')).lower()))
+        counts.update(w.strip('.-_') for w in words if w not in SATURATION_STOPWORDS)
+    return [dict(topic=w, finished_or_abandoned_tasks=n)
+            for w, n in counts.most_common(limit) if n >= SATURATION_MIN_TASKS]
+
+
+# P135: Ollama can only reuse its KV cache for an identical prompt PREFIX.
+# The snapshot used to start with a timestamped resource reading, so every
+# turn re-evaluated the whole prompt. Stable fields first, volatile last.
+SNAPSHOT_STABLE_FIRST = (
+    'runtime', 'identity', 'private_work_directory', 'groups', 'peers', 'tools', 'task_ownership_note',
+    'context_note', 'king_guidance', 'village_topic_saturation', 'your_notes', 'notes_hint', 'projects',
+    'teams', 'artifacts', 'retrieved_memory_untrusted', 'memory_status')
+SNAPSHOT_VOLATILE_LAST = (
+    'measured_resources', 'token_budget', 'recovery_guidance', 'last_action_feedback')
+
+
+def order_for_prefix_cache(context):
+    first = {k: context[k] for k in SNAPSHOT_STABLE_FIRST if k in context}
+    last = {k: context[k] for k in SNAPSHOT_VOLATILE_LAST if k in context}
+    middle = {k: v for k, v in context.items() if k not in first and k not in last}
+    return {**first, **middle, **last}
+
+
+def clip_head_tail(text: str, head: int = FEEDBACK_HEAD_CHARS, tail: int = FEEDBACK_TAIL_CHARS) -> str:
+    """Bound a result while keeping its beginning and its end."""
+    if len(text) <= head + tail:
+        return text
+    omitted = len(text) - head - tail
+    return f'{text[:head]}\n...[{omitted} chars omitted]...\n{text[-tail:]}'
+
+
+def compact_memory_hits(result) -> dict:
+    """Readable memory_search feedback: every hit survives, each one clipped,
+    instead of a raw JSON dump whose best-ranked head was cut away."""
+    items = result.get('items', []) if isinstance(result, dict) else []
+    hits = []
+    for x in items:
+        if not isinstance(x, dict):
+            continue
+        content = str(x.get('content', ''))
+        if len(content) > MEMORY_HIT_CHARS:
+            content = content[:MEMORY_HIT_CHARS] + '...'
+        hits.append(dict(id=x.get('id'), agent=x.get('agent'), scope=x.get('scope'), kind=x.get('kind'),
+                         created_at=x.get('created_at'), score=x.get('score'), content=content))
+    return dict(query=result.get('query') if isinstance(result, dict) else None,
+                backend=result.get('backend') if isinstance(result, dict) else None,
+                count=len(hits), items=hits)
+
+
+# P134: "Rootless containers: ready" alone never led anyone to use the lab
+# (0 container runs, M10 at 0 % for two weeks), while other lines read as
+# "no downloads". Name what is allowed and the exact first commands.
+def lab_guidance(desc) -> str:
+    containers = desc.get('containers') or {}
+    gpu = desc.get('gpu') or {}
+    if containers.get('rootless_supported'):
+        text = (" Container lab: build your own images (podman build) and pull public images pinned by "
+                "digest - read the digest with `skopeo inspect docker://docker.io/library/python:3.12-slim`, "
+                "then `podman pull docker.io/library/python@sha256:<digest>`. Never use --privileged.")
+    else:
+        text = (" Container lab: podman is not executable for you yet - ask King to request the "
+                "'containers' capability for you via village-authority.")
+    devices = gpu.get('devices') or []
+    if devices:
+        maxwell = any('M10' in d or 'M60' in d for d in devices)
+        text += (f" Local GPUs free for your experiments, training or serving: {len(devices)}x "
+                 f"{devices[0].split(' (UUID')[0].split(': ', 1)[-1]}"
+                 + (" (Maxwell, CUDA compute capability 5.0 - pick CUDA builds that still support sm_50)" if maxwell else "")
+                 + ". In a container: podman run --device nvidia.com/gpu=all ...")
+    return text
 
 
 def now():
@@ -434,7 +598,7 @@ class Resident:
         fingerprint = hashlib.sha256(normalized_result.encode()).hexdigest()[:16]
         self.state['last_result'] = dict(
             timestamp=now(), action=action, ok=ok,
-            result=self.redact(str(result))[:6000],
+            result=clip_head_tail(self.redact(str(result))),
             result_fingerprint=fingerprint,
         )
         self.state['updated_at'] = now()
@@ -445,12 +609,14 @@ class Resident:
                 self.state['recent_actions'] = recent
         write_json(self.path, self.state)
 
-    def memory(self, endpoint, value):
+    def memory(self, endpoint, value=None):
+        """POST value to the memory gateway, or GET endpoint when value is None (P125)."""
         url = self.env.get('MEMORY_GATEWAY_URL', 'http://127.0.0.1:8090')
         token = self.env.get('MEMORY_AGENT_TOKEN', '')
         if not token:
             raise ValueError('Memory credential missing from service environment; this is configuration, not host memory pressure')
-        request = urllib.request.Request(url+endpoint, data=json.dumps(value).encode(),
+        data = None if value is None else json.dumps(value).encode()
+        request = urllib.request.Request(url+endpoint, data=data,
                   headers={'Authorization': 'Bearer '+token, 'Content-Type': 'application/json'})
         with urllib.request.urlopen(request, timeout=10) as response:
             return json.load(response)
@@ -712,6 +878,11 @@ class Resident:
         """Concrete, named gap (not just 'plan more') for snapshot(): the
         exact day and time range still uncovered, so the resident acts on
         real information instead of guessing what 'no gaps' even means."""
+        # P126: asking every resident each turn to fill 09:00-17:00 for the
+        # whole week is busywork, not development - shown only when the
+        # operator made full-week planning a hard obligation.
+        if not self.obligation_is_hard('calendar_week_plan'):
+            return ''
         pending = self.calendar_pending_week_gaps(today_str)
         if not pending:
             return ''
@@ -897,7 +1068,7 @@ class Resident:
         self.state['discussion_turn'] = turn + 1
         self.state['discussion_target_id'] = discussion_target.get('id') if discussion_target else None
         self.pending_cursor = max((event_time(x) for x in events), default=cutoff)
-        own = [x for x in events if x.get('agent') == self.id and x.get('event') in ('command_result', 'memory_result', 'task_result')][-3:]
+        own = [x for x in events if x.get('agent') == self.id and x.get('event') in ('command_result', 'memory_result', 'task_result')][-OWN_RECENT_RESULTS:]
         projects = read_json(self.tasks.path, [])
         # P09: Sync organic inbox to transactional coordinator store with deterministic IDs
         organic_file = self.board / 'organic-inbox.jsonl'
@@ -934,6 +1105,12 @@ class Resident:
                 return 1
             return 0
 
+        all_tasks = projects
+        # P135: the full projection holds every task ever (live: 152, of which
+        # 124 complete/abandoned). Sorted best-first and then cut with [-32:],
+        # each resident saw the 32 LEAST relevant rows - other agents' dead
+        # tasks, mostly the disk-monitor history it kept repeating.
+        projects = [x for x in all_tasks if x.get('status') in LIVE_TASK_STATUSES]
         projects.sort(key=task_priority, reverse=True)
         own_project = next((x for x in projects if x.get('owner')==self.id and x.get('status')=='active'), None)
         active_teams = self.teams.list_for_agent(self.id)
@@ -965,10 +1142,12 @@ class Resident:
             artifacts=recent_artifacts,
             untrusted_direct_messages=addressed[-12:], untrusted_peer_messages=chosen[:9],
             discussion_target=discussion_target,
-            collaboration_checkpoint=collaboration_checkpoint.to_record(),
+            collaboration_checkpoint=dict(collaboration_checkpoint.to_record(),
+                **({} if self.obligation_is_hard('collaboration') else {'enforcement': 'advisory'})),
             direct_ack_target=direct_ack_target,
             king_guidance=(self.id == '01-king'),
-            projects=projects[-32:], recent_organic_messages_untrusted=organic[-3:],
+            projects=projects[:PROJECTS_IN_CONTEXT], recent_organic_messages_untrusted=organic[-3:],
+            village_topic_saturation=topic_saturation(all_tasks),
             # Generated from the single ACTION_SPECS source of truth (village/actions.py)
             # instead of a hand-maintained copy, which had drifted stale - missing
             # calc_operation and research_proposal entirely, and describing
@@ -1211,6 +1390,17 @@ class Resident:
         note = self.calendar_daily_note()
         if note:
             context['calendar_daily_note'] = note
+        # P117 (live finding 2026-10-10): the lesson was posted to the inbox, but no resident's
+        # replies mentioned it. Today's lesson now sits in every resident's context until answered.
+        try:
+            from datetime import date as _date
+            from village.school import Curriculum, daily_announcement
+            today_day = _date.fromisoformat(gazette_today())
+            lesson_text = daily_announcement(Curriculum(self.board / 'school.sqlite3'), today_day)
+            if lesson_text:
+                context['school_lesson'] = lesson_text
+        except Exception:
+            pass
         # P76 (operator directive): "Ein Primaeres Goal eines Jedes Agents
         # soll die eigene Verbesserung sein." Advisory only - see
         # finetune_daily_note()'s own docstring for why this one is
@@ -1257,16 +1447,26 @@ class Resident:
                 "cycle, try a genuinely different, simpler approach to whatever you were "
                 f"attempting. {self.sparring_partner_hint()}"
             )
-        query = own_project['title'] if own_project else 'observation experiment evidence project'
+        # P125: the resident's own notes are always shown and steer retrieval.
+        notes = load_notes(self.home)
+        context['your_notes'] = notes
+        if notes_empty(notes):
+            context['notes_hint'] = ('Your notes are empty. They are your memory between turns: use notes_operation set '
+                                     'focus/next_step/next_query, and add short entries with the kb_id of knowledge-base '
+                                     'records you may need again; fetch full detail later with memory_get id=...')
+        fallback_query = own_project['title'] if own_project else 'observation experiment evidence project'
+        query = notes_retrieval_query(notes, fallback_query)
         try:
-            memories = self.memory('/v1/search', {'query': query, 'limit': 4})
+            retrieval_limit = int(self.env.get('VILLAGE_RETRIEVAL_LIMIT', RETRIEVAL_LIMIT_DEFAULT))
+            memories = self.memory('/v1/search', {'query': query, 'limit': retrieval_limit})
             context['retrieved_memory_untrusted'] = [dict(id=x['id'],agent=x['agent'],scope=x['scope'],
                 content=x['content'][:1000],source_event=x.get('source_event','')) for x in memories.get('items',[])]
         except (OSError, ValueError) as exc:
             context['memory_status'] = f'Retrieval unavailable: {exc}; private workspace remains available'
         # Approximate character budget, not a tokenizer: keep small-context residents
         # usable even when peers publish lengthy messages or the archive grows.
-        budget=max(8000,min(24000,int(self.env.get('OLLAMA_NUM_CTX','8192'))*2-10000))
+        # P124: scales with the real window (see context_char_budget()).
+        budget = context_char_budget(self.env)
         context['context_note']='Bounded excerpts; omitted detail remains on disk. This is not the entire history.'
         last_metrics = read_json(self.home / 'last-response.json', {}).get('metrics', {})
         context['token_budget'] = {
@@ -1284,11 +1484,12 @@ class Resident:
                 'error': str(last_res.get('result', ''))[:1000],
                 'directive': 'Previous action did not succeed. Formulate a revised hypothesis, verify prerequisites (paths, permissions, arguments), and execute a single reversible step. Do not repeat the failed action verbatim.',
             }
-        if context.get('last_action_feedback'):
-            context['last_action_feedback']=dict(context['last_action_feedback'])
-            context['last_action_feedback']['result']=context['last_action_feedback']['result'][-2500:]
+        # P124: last_action_feedback is already bounded head+tail by feedback();
+        # a second tail-only cut here used to discard the best-ranked memory
+        # hits and the start of every structured result.
         if self.policy.prompt_profile == 'compact':
             context = compact_context(context)
+        context = order_for_prefix_cache(context)
         # P48: trim least-actionable content first. 'projects' is a bulky,
         # re-derivable snapshot (already capped at 32) that can dwarf the whole
         # budget on its own (observed: 14 tasks ~13.8k chars against a ~6.4k
@@ -1297,7 +1498,10 @@ class Resident:
         # messages were wiped out first. Those are now the most protected:
         # losing a few stale task rows is a much smaller loss than an agent
         # never seeing a message addressed directly to it.
-        for field in ('retrieved_memory_untrusted','untrusted_peer_messages','own_recent_results','projects',
+        # P124: knowledge-base hits used to be trimmed FIRST, so the community's
+        # own recorded experience was the first casualty of any squeeze. They
+        # now go after the re-derivable peer/project excerpts.
+        for field in ('untrusted_peer_messages','own_recent_results','projects','retrieved_memory_untrusted',
                       'recent_organic_messages_untrusted','untrusted_direct_messages',
                       'recent_meetings_closed_untrusted','recent_role_decisions_untrusted',
                       'calendar_today_untrusted'):
@@ -1311,7 +1515,9 @@ class Resident:
                 # one - backwards from this loop's own stated intent
                 # ("losing a few stale task rows"). Trim from the tail
                 # instead, only for this field.
-                if field == 'projects':
+                # P124: retrieved memories are ranked best-first by the
+                # gateway, so they are trimmed from the tail as well.
+                if field in ('projects', 'retrieved_memory_untrusted'):
                     context[field].pop()
                 else:
                     context[field].pop(0)
@@ -1394,6 +1600,11 @@ class Resident:
             return None
         return ids[int(self.state.get('pair_index', 0)) % len(ids)]
 
+    def obligation_is_hard(self, obligation):
+        """P126: only obligations listed in the policy's hard_obligations may
+        block an action; the rest stay hints (pressure still measured)."""
+        return obligation in self.policy.hard_obligations
+
     def effective_action_format(self):
         if self.state.get('schema_disabled_until', 0) > time.time():
             return 'text'
@@ -1422,8 +1633,19 @@ class Resident:
         set right then - not because the content was ever wrong. See
         _loop_breaker_allowed_actions() for the fix."""
         if self._loop_breaker_active():
-            return self._loop_breaker_allowed_actions()
-        return self.policy.allowed_actions
+            allowed = self._loop_breaker_allowed_actions()
+        else:
+            allowed = self.policy.allowed_actions
+        # P126: meeting_operation is only offered while a meeting is actually
+        # open - live, residents reported into closed meetings 33x in 4h,
+        # each a wasted action, because the tool was always on their list.
+        # P135: also hidden once this resident has reported to every open
+        # meeting - live, 60 of 86 action errors in 5.5 h were
+        # "report already submitted for this meeting".
+        if 'meeting_operation' in allowed and not any(
+                not self.meetings.has_report(m['id'], self.id) for m in self.meetings.active()):
+            allowed = [x for x in allowed if x != 'meeting_operation']
+        return allowed
 
     def _loop_breaker_active(self):
         """True exactly when effective_allowed_actions() would otherwise
@@ -1472,6 +1694,59 @@ class Resident:
         return allowed or ['idle']
 
     def guard(self, name, args):
+        # P123: after REFUSAL_LIMIT identical refusals of the same action within REFUSAL_WINDOW_SECONDS,
+        # that action is withheld for the rest of the window, and the agent is told to choose another.
+        if name != 'idle':
+            for key, times in self.state.get('refusal_times', {}).items():
+                action = key.split('|', 1)[0]
+                recent = [t for t in times if time.time() - t < REFUSAL_WINDOW_SECONDS]
+                if action == name and len(recent) >= REFUSAL_LIMIT:
+                    self.feedback(name, f'This action was refused {len(recent)} times in the last 30 minutes with the same '
+                                        f'reason ({key.split("|", 1)[1]}). Do not send it again; choose a different action.', False)
+                    self.event('refusal_withheld', f'action={name}; count={len(recent)}')
+                    return False
+        # P106 (operator 2026-10-09): residents without an authored profile were only hinted at,
+        # and the hint was never acted on (one of nine wrote one). With VILLAGE_PROFILE_GATE=1
+        # solo work (commands, jobs, tasks, team and research actions) is refused after two
+        # cycles until the profile exists. Profile, calendar, gazette and meeting actions are
+        # never blocked by it. Off by default, so existing behaviour and tests are unchanged.
+        # P112 (operator 2026-10-09: the curriculum is always planned a week ahead): with
+        # VILLAGE_SCHOOL_GATE=1 the King's other actions are refused after two cycles while any of
+        # the next seven days has no lesson. He can always plan (school_operation) and do the
+        # obligations; nothing else is blocked. Off by default.
+        if self.id == '01-king' and self.env.get('VILLAGE_SCHOOL_GATE') == '1' and name not in SCHOOL_GATE_EXEMPT:
+            try:
+                from datetime import date as _date
+                from village.school import Curriculum
+                gaps = Curriculum(self.board / 'school.sqlite3').gaps(_date.fromisoformat(gazette_today()))
+            except Exception:
+                gaps = []
+            if gaps:
+                pressure = int(self.state.get('school_gate_pressure', 0)) + 1
+                self.state['school_gate_pressure'] = pressure
+                if pressure >= 2:
+                    self.feedback(name, 'School curriculum has open days: call school_operation (operation=plan, '
+                                        'lesson_day, topic) for the next open day first.', False)
+                    self.event('school_gate', f'pressure={pressure}; open={len(gaps)}')
+                    return False
+            else:
+                self.state['school_gate_pressure'] = 0
+        if self.env.get('VILLAGE_PROFILE_GATE') == '1' and name not in PROFILE_GATE_EXEMPT:
+            try:
+                has_profile = bool(self.residents.get_profile(self.id))
+            except Exception:
+                has_profile = True
+            if not has_profile:
+                pressure = int(self.state.get('profile_required_pressure', 0)) + 1
+                self.state['profile_required_pressure'] = pressure
+                if pressure >= 2:
+                    self.feedback(name, 'Profile required before other actions: call profile_operation with '
+                                        'operation=update and profession, calling, personal_info, preferences, '
+                                        'hobbies, goals, wishes.', False)
+                    self.event('profile_required_gate', f'pressure={pressure}')
+                    return False
+            else:
+                self.state['profile_required_pressure'] = 0
         if is_paused(self.pause_marker) and name in ('execute_bash', 'start_job'):
             self.feedback(name, 'Execution blocked: simulation is paused ("pausiert startet nichts").', False)
             return False
@@ -1498,12 +1773,22 @@ class Resident:
                     self.feedback(name, f'Conversation budget with {recipient} reached ({len(stamps)} messages this hour). Do independent work, run a check, or record a memory instead.', False)
                     self.event('dm_budget_reached', f'peer={recipient}', True)
                     return False
+                # P100 (live finding 2026-10-08/09): the same message text went to the same
+                # peer again and again (e.g. librarian -> methodologist, identical 240-char
+                # text, same reply_to). Identical text to one peer within 6 hours is refused.
+                digest = hashlib.sha256(' '.join(str(args.get('message', '')).split()).lower().encode('utf-8')).hexdigest()
+                sent = self.state.setdefault('dm_digests', {}).get(recipient, [])
+                if any(d == digest and t > time.time() - 6 * 3600 for d, t in sent):
+                    self.feedback(name, f'You already sent this exact message to {recipient} recently. Send something new or do not repeat it.', False)
+                    self.event('dm_duplicate_blocked', f'peer={recipient}', True)
+                    return False
 
         # P21.6: cooperation is advisory first, then bounded enforcement after
         # three misses. This prevents small models from deadlocking while still
         # stopping an endless sequence of expensive solo actions.
         checkpoint = getattr(self, 'current_collaboration_checkpoint', None)
-        if checkpoint and checkpoint.stage == 'consult' and name == 'board_message' and checkpoint.peer_id:
+        if checkpoint and checkpoint.stage == 'consult' and name == 'board_message' and checkpoint.peer_id \
+                and self.obligation_is_hard('collaboration'):
             recipient = str(args.get('recipient', 'ALL'))
             if recipient != checkpoint.peer_id:
                 self.feedback(name, f'Named peer consultation required: address exactly {checkpoint.peer_id}, not {recipient}. Ask one concrete, reproducible question.', False)
@@ -1534,7 +1819,10 @@ class Resident:
         # post-reset, unrestricted list. Read the flag execute() captured
         # beforehand instead.
         loop_breaker_was_active = self.state.pop('_loop_breaker_was_active', False)
+        # P125: maintaining one's own notes or reading one record is knowledge
+        # upkeep, not solo work - it never builds collaboration pressure.
         if checkpoint and not (name == 'idle' and loop_breaker_was_active) \
+                and name not in ('notes_operation', 'memory_get') \
                 and not is_checkpoint_action(checkpoint, name) and checkpoint.required_action:
             pressure = int(self.state.get('collaboration_pressure', 0)) + 1
             self.state['collaboration_pressure'] = pressure
@@ -1543,9 +1831,9 @@ class Resident:
             # orient (search before acting) and record (share what you learned); consult keeps
             # its grace, since peer availability is a social, not a knowledge, precondition.
             threshold = 1 if checkpoint.hard else 3
-            if pressure >= COLLABORATION_PRESSURE_CEILING or (
+            if self.obligation_is_hard('collaboration') and (pressure >= COLLABORATION_PRESSURE_CEILING or (
                 pressure >= threshold and name in ('execute_bash', 'start_job', 'task_operation', 'team_operation')
-            ):
+            )):
                 self.feedback(name, f'Collaboration checkpoint required before more solo work: use {checkpoint.required_action}. {checkpoint.rationale}', False)
                 self.event('collaboration_gate', f'stage={checkpoint.stage}; required={checkpoint.required_action}; pressure={pressure}; mode={"mandatory" if checkpoint.hard else "advisory"}')
                 return False
@@ -1583,7 +1871,7 @@ class Resident:
         # gate on the very next cycle instead of waiting through another
         # GAZETTE_REVIEW_CEILING cycles from zero.
         meeting_block = None
-        if name not in ('meeting_operation', 'gazette_operation', 'idle'):
+        if name not in ('meeting_operation', 'gazette_operation', 'profile_operation', 'idle'):
             pending = next((m for m in self.meetings.active() if not self.meetings.has_report(m['id'], self.id)), None)
             if pending:
                 mid = pending['id']
@@ -1616,7 +1904,7 @@ class Resident:
         # depends on (see gazette_pending_assignment()'s own comment for the
         # live incident this closes).
         assign_block = None
-        if self.id == '01-king' and name not in ('meeting_operation', 'gazette_operation', 'idle'):
+        if self.id == '01-king' and name not in ('meeting_operation', 'gazette_operation', 'profile_operation', 'idle'):
             pending_assign = self.gazette_pending_assignment()
             if not pending_assign:
                 self.state['gazette_assign_pressure'] = 0
@@ -1643,7 +1931,7 @@ class Resident:
         # so it is checked (and its pressure resets/advances) before the
         # review/close gates below, which only ever concern King/reviewer.
         contribute_block = None
-        if name not in ('meeting_operation', 'gazette_operation', 'idle'):
+        if name not in ('meeting_operation', 'gazette_operation', 'profile_operation', 'idle'):
             pending_own = self.gazette_pending_own_contribution()
             if not pending_own:
                 self.state['gazette_contribute_pressure'] = 0
@@ -1683,7 +1971,7 @@ class Resident:
         # gate message includes a ready-to-submit example from the start
         # (P58 already proved naming fields in prose is not enough).
         gazette_block = None
-        if self.id == GAZETTE_REVIEWER and name not in ('meeting_operation', 'gazette_operation', 'idle'):
+        if self.id == GAZETTE_REVIEWER and name not in ('meeting_operation', 'gazette_operation', 'profile_operation', 'idle'):
             pending_reviews = self.gazette_pending_reviews()
             if not pending_reviews:
                 self.state['gazette_review_pressure'] = 0
@@ -1705,7 +1993,7 @@ class Resident:
         # a fully-reviewed edition still needs King's own close to ever be
         # compiled/archived (see gazette_closable_editions()).
         close_block = None
-        if self.id == '01-king' and name not in ('meeting_operation', 'gazette_operation', 'idle'):
+        if self.id == '01-king' and name not in ('meeting_operation', 'gazette_operation', 'profile_operation', 'idle'):
             closable = self.gazette_closable_editions()
             if not closable:
                 self.state['gazette_close_pressure'] = 0
@@ -1732,7 +2020,7 @@ class Resident:
         # have voluntarily played (P90: game_participants(), not a fixed
         # drawn pair).
         game_winner_block = None
-        if self.id == '01-king' and name not in ('meeting_operation', 'gazette_operation', 'idle'):
+        if self.id == '01-king' and name not in ('meeting_operation', 'gazette_operation', 'profile_operation', 'idle'):
             pending_winner = self.gazette_pending_game_winner()
             if not pending_winner:
                 self.state['gazette_game_winner_pressure'] = 0
@@ -1760,7 +2048,7 @@ class Resident:
         # already returns False outright on Sat/Sun - weekends stay the
         # agent's free choice, never gated).
         calendar_plan_block = None
-        if name not in ('meeting_operation', 'gazette_operation', 'calendar_operation', 'idle'):
+        if name not in ('meeting_operation', 'gazette_operation', 'calendar_operation', 'profile_operation', 'idle'):
             if not self.calendar_pending_daily_plan():
                 self.state['calendar_plan_pressure'] = 0
             else:
@@ -1781,7 +2069,7 @@ class Resident:
         # calendar_plan_block above (which only ever required a daily
         # touch) - its own pressure counter, same proven ceiling pattern.
         calendar_week_plan_block = None
-        if name not in ('meeting_operation', 'gazette_operation', 'calendar_operation', 'idle'):
+        if name not in ('meeting_operation', 'gazette_operation', 'calendar_operation', 'profile_operation', 'idle'):
             pending_week = self.calendar_pending_week_gaps()
             if not pending_week:
                 self.state['calendar_week_plan_pressure'] = 0
@@ -1806,7 +2094,7 @@ class Resident:
         # verfassen") - own counter, checked every day including weekends
         # (see calendar_pending_gazette_writing_slot()'s own comment).
         gazette_writing_block = None
-        if name not in ('meeting_operation', 'gazette_operation', 'calendar_operation', 'idle'):
+        if name not in ('meeting_operation', 'gazette_operation', 'calendar_operation', 'profile_operation', 'idle'):
             if not self.calendar_pending_gazette_writing_slot():
                 self.state['gazette_writing_slot_pressure'] = 0
             else:
@@ -1824,39 +2112,39 @@ class Resident:
                                              f"up once as a recurring entry: {example}",
                                              f"pressure={pressure}")
 
-        if meeting_block:
+        if meeting_block and self.obligation_is_hard('meeting_report'):
             self.feedback(name, meeting_block[0], False)
             self.event('meeting_gate', meeting_block[1])
             return False
-        if assign_block:
+        if assign_block and self.obligation_is_hard('gazette_assign'):
             self.feedback(name, assign_block[0], False)
             self.event('gazette_assign_gate', assign_block[1])
             return False
-        if contribute_block:
+        if contribute_block and self.obligation_is_hard('gazette_contribute'):
             self.feedback(name, contribute_block[0], False)
             self.event('gazette_contribute_gate', contribute_block[1])
             return False
-        if gazette_block:
+        if gazette_block and self.obligation_is_hard('gazette_review'):
             self.feedback(name, gazette_block[0], False)
             self.event('gazette_review_gate', gazette_block[1])
             return False
-        if close_block:
+        if close_block and self.obligation_is_hard('gazette_close'):
             self.feedback(name, close_block[0], False)
             self.event('gazette_close_gate', close_block[1])
             return False
-        if calendar_plan_block:
+        if calendar_plan_block and self.obligation_is_hard('calendar_plan'):
             self.feedback(name, calendar_plan_block[0], False)
             self.event('calendar_plan_gate', calendar_plan_block[1])
             return False
-        if calendar_week_plan_block:
+        if calendar_week_plan_block and self.obligation_is_hard('calendar_week_plan'):
             self.feedback(name, calendar_week_plan_block[0], False)
             self.event('calendar_week_plan_gate', calendar_week_plan_block[1])
             return False
-        if game_winner_block:
+        if game_winner_block and self.obligation_is_hard('gazette_game_winner'):
             self.feedback(name, game_winner_block[0], False)
             self.event('gazette_game_winner_gate', game_winner_block[1])
             return False
-        if gazette_writing_block:
+        if gazette_writing_block and self.obligation_is_hard('gazette_writing_slot'):
             self.feedback(name, gazette_writing_block[0], False)
             self.event('gazette_writing_slot_gate', gazette_writing_block[1])
             return False
@@ -1888,7 +2176,7 @@ class Resident:
         # backing off. A repeated read-only search costs a little compute but
         # changes nothing and harms nothing, unlike repeating execute_bash; it
         # is exempt from this guard so the two mechanisms cannot deadlock.
-        if name != 'idle' and name != 'memory_search' and len(matching) >= limit:
+        if name not in ('idle', 'memory_search', 'memory_get') and len(matching) >= limit:
             fps = [x.get('result_fingerprint') for x in matching if x.get('result_fingerprint')]
             # Legitimate polling progress: output changed between consecutive executions
             is_polling_progress = len(fps) >= 2 and fps[-1] != fps[-2]
@@ -1953,8 +2241,17 @@ class Resident:
             # bounded recent window, independent of the streak.
             window = [r for r in self.state.get('recent_rejected_fingerprints', [])
                      if time.time() - r['at'] < REPEATED_REJECTION_WINDOW_SECONDS]
-            repeat_count = sum(1 for r in window if r['fp'] == fp) + 1
-            window.append({'fp': fp, 'at': time.time()})
+            # P94 (live incident 2026-10-06, 01-king): an empty rejected text (e.g.
+            # 'output budget exhausted', the model spent its whole budget thinking)
+            # always hashes to the same fingerprint, so three unrelated empty outputs
+            # in six hours looked like "the same content three times" and held the
+            # loop-breaker menu (no memory_search/profile_operation/board_message)
+            # active for hours. Nothing was repeated, so empty text is never tracked.
+            if str(preview).strip():
+                repeat_count = sum(1 for r in window if r['fp'] == fp) + 1
+                window.append({'fp': fp, 'at': time.time()})
+            else:
+                repeat_count = 1
             self.state['recent_rejected_fingerprints'] = window[-40:]
             if repeat_count >= REPEATED_REJECTION_NUDGE_AT:
                 guidance += (f' You have attempted this exact same rejected content {repeat_count} '
@@ -2063,9 +2360,9 @@ class Resident:
                     self.feedback(name, f'Cancelled job {job_id}. Status: {status}', True)
             elif name == 'board_message':
                 recipient = args.get('recipient','ALL')
-                known = {x['id'] for x in read_json(Path('/etc/ai-village/runtime-peers.json'),[])}
+                known = {x['id'] for x in read_json(Path('/etc/ai-village/runtime-peers.json'),[])} | SYSTEM_SENDERS
                 if recipient != 'ALL' and recipient not in known:
-                    raise ValueError('recipient must be ALL or exact agent ID from peers')
+                    raise ValueError(recipient_error(recipient, known))
                 reply_to = args.get('reply_to', '')
                 if reply_to == 'discussion_target':
                     reply_to = self.state.get('discussion_target_id') or ''
@@ -2081,6 +2378,9 @@ class Resident:
                 if recipient != 'ALL':
                     log = self.state.setdefault('dm_log', {})
                     log[recipient] = [t for t in log.get(recipient, []) if t > time.time() - 3600] + [time.time()]
+                    digest = hashlib.sha256(' '.join(str(args.get('message', '')).split()).lower().encode('utf-8')).hexdigest()
+                    digests = self.state.setdefault('dm_digests', {})
+                    digests[recipient] = [(d, t) for d, t in digests.get(recipient, []) if t > time.time() - 6 * 3600] + [(digest, time.time())]
                     if recipient == self.pair_partner():
                         self.state['pair_index'] = int(self.state.get('pair_index', 0)) + 1
                 feedback_text = 'Message posted. A reply is not guaranteed; continue independent work.'
@@ -2172,7 +2472,27 @@ class Resident:
                          'query':args.get('query','')}
                 result=self.memory('/v1/memories' if name=='memory_remember' else '/v1/search',value)
                 self.event('memory_result',f'result=success; action={name}; id={result.get("id", "")}; scope={args.get("scope","private")}; matches={len(result.get("items",[]))}')
-                self.feedback(name,json.dumps(result),True)
+                shown = compact_memory_hits(result) if name == 'memory_search' else result
+                if name == 'memory_remember' and isinstance(result, dict) and result.get('id'):
+                    # P125: point the resident at its notes so the new record stays findable.
+                    shown = dict(result, hint='To keep this findable, add a short pointer to your notes: '
+                                 'notes_operation add with note=... and kb_id=' + str(result['id']))
+                self.feedback(name,json.dumps(shown, ensure_ascii=False),True)
+            elif name == 'memory_get':
+                mem_id = str(args.get('id', '')).strip()
+                if not re.fullmatch(r'[A-Za-z0-9_.:-]{1,120}', mem_id):
+                    raise ValueError('id must be a knowledge-base record id (letters, digits, _ . : -)')
+                try:
+                    result = self.memory('/v1/memories/' + urllib.parse.quote(mem_id, safe=''))
+                except urllib.error.HTTPError as exc:
+                    raise ValueError(f'memory {mem_id} not available (HTTP {exc.code})') from exc
+                self.event('memory_result', f'result=success; action=memory_get; id={mem_id}; scope={result.get("scope", "")}; matches=1')
+                self.feedback(name, json.dumps(result, ensure_ascii=False), True)
+            elif name == 'notes_operation':
+                notes, summary = apply_notes_operation(load_notes(self.home), args)
+                save_notes(self.home, notes)
+                self.event('notes_result', f'result=success; operation={args.get("operation")}; {summary[:160]}')
+                self.feedback(name, f'Notes {summary}. They appear as your_notes in every turn.', True)
             elif name == 'research_request':
                 result = self.research.search(args.get('source'), args.get('query'), args.get('limit', 5))
                 self.event('research_result', json.dumps({k: result.get(k) for k in ('source', 'query', 'sha256', 'results')}, ensure_ascii=False))
@@ -2565,6 +2885,24 @@ class Resident:
                 else:
                     raise ValueError('finetune_operation requires operation propose, update_status, evaluate, '
                                     'request_swap, review_swap, release_gpu, or list')
+            elif name == 'school_operation':
+                # P111/P115: King plans the school lessons (at most a week ahead); any resident
+                # answers today's lesson (proof of learning, one answer per day).
+                from datetime import date as _date
+                from village.school import Curriculum, record_answer
+                plan = Curriculum(self.board / 'school.sqlite3')
+                if args.get('operation') == 'answer':
+                    day = _date.fromisoformat(gazette_today())
+                    stored = record_answer(plan, self.id, day, str(args.get('answer', '')))
+                    self.event('school_answered', f'agent={self.id}; day={day.isoformat()}; stored={stored}')
+                    self.feedback(name, json.dumps({'answered': day.isoformat(), 'stored': stored}, ensure_ascii=False), True)
+                else:
+                    if self.id != '01-king':
+                        raise ValueError('only 01-king plans school lessons')
+                    lesson_day = _date.fromisoformat(str(args.get('lesson_day', '')))
+                    plan.add(lesson_day, str(args.get('topic', '')), self.id, _date.fromisoformat(gazette_today()))
+                    self.event('school_planned', f"day={lesson_day.isoformat()}; topic={str(args.get('topic',''))[:120]}")
+                    self.feedback(name, json.dumps({'planned': lesson_day.isoformat()}, ensure_ascii=False), True)
             elif name == 'profile_operation':
                 # P91 (operator directive): "Zudem sollen die Agents selbst die
                 # Seite anlegen und pflegen, nicht du" - agents author and maintain
@@ -2617,6 +2955,11 @@ class Resident:
         except (OSError, ValueError, sqlite3.Error) as exc:
             self.feedback(name,f'{type(exc).__name__}: {exc}',False)
             self.event('action_error',f'action={name}; error={exc}')
+            # P123 (live finding 2026-10-10): the same refused action was sent again and again
+            # ('report already submitted', 72 times in two hours). Repeated identical refusals are counted.
+            refusals = self.state.setdefault('refusal_times', {})
+            key = f'{name}|{str(exc)[:80]}'
+            refusals[key] = [t for t in refusals.get(key, []) if time.time() - t < REFUSAL_WINDOW_SECONDS] + [time.time()]
 
     def capability_summary(self, ttl_seconds: float = 1800.0) -> str:
         """Cached, human-readable summary of what this agent can actually do in
@@ -2644,7 +2987,7 @@ class Resident:
                 f"Rootless containers: {'ready' if desc['containers']['rootless_supported'] else 'not ready yet'}. "
                 f"GPU compute: {'ready' if desc['gpu']['gpu_compute_ready'] else 'not ready yet'}. "
                 f"Request more capability via: {desc['authority']['request_channel']}."
-            )
+            ) + lab_guidance(desc)
         except Exception as exc:
             summary = f"Habitat capabilities unknown this cycle ({type(exc).__name__}: {exc})."
         self.state['capabilities_summary'] = summary
@@ -2683,6 +3026,77 @@ class Resident:
             mode = meta.get('mode', 'drain')
             self.event('cycle_skipped_paused', f'mode={mode}; reason={meta.get("reason", "paused")}', True)
             return
+
+        # P119 (operator 2026-10-09: learn from the strongest residents): a learner with an active
+        # task gets one mentor note per task, sent to the mentor as a direct inbox message.
+        try:
+            from village.mentorship import mentor_for, mentor_note
+            mentor = mentor_for(self.id)
+            if mentor and hasattr(self.tasks, 'store'):
+                import sqlite3 as _sqlite3
+                with _sqlite3.connect(self.board / 'coordination.sqlite3', timeout=30) as _c:
+                    row = _c.execute("SELECT id, title FROM tasks WHERE owner=? AND status='active' LIMIT 1", (self.id,)).fetchone()
+                if row and self.state.get('mentor_notified_task') != row[0]:
+                    self.tasks.store.post_inbox_message(source='direct', sender='village-council',
+                                                        recipient=mentor, content=mentor_note(self.id, row[0], row[1]))
+                    self.state['mentor_notified_task'] = row[0]
+                    self.event('mentor_notified', f'learner={self.id}; mentor={mentor}; task={row[0]}')
+        except Exception as exc:  # noqa: BLE001 - mentoring must never stop a cycle
+            self.event('mentor_failed', str(exc)[:300])
+
+        # P106 (operator 2026-10-09): school. The King posts the planned lesson of the day to all
+        # residents once per day, and is reminded while the next seven days are not planned.
+        if self.id == '01-king' and hasattr(self.tasks, 'store'):
+            try:
+                from datetime import date as _date
+                from village.school import Curriculum, daily_announcement, planning_reminder
+                plan = Curriculum(self.board / 'school.sqlite3')
+                today = _date.fromisoformat(gazette_today())
+                # P113: open days are filled from the default curriculum, so the week is never empty
+                from village.school import autofill_week
+                autofill_week(plan, today)
+                if self.state.get('school_announced_day') != today.isoformat():
+                    text = daily_announcement(plan, today)
+                    if text:
+                        self.tasks.store.post_inbox_message(source='board', sender=self.id, content=text)
+                        self.state['school_announced_day'] = today.isoformat()
+                if self.state.get('school_reminded_day') != today.isoformat():
+                    reminder = planning_reminder(plan, today)
+                    if reminder:
+                        self.tasks.store.post_inbox_message(source='direct', sender='village-council',
+                                                            recipient=self.id, content=reminder)
+                        self.state['school_reminded_day'] = today.isoformat()
+            except Exception as exc:  # noqa: BLE001 - school must never stop the King's cycle
+                self.event('school_failed', str(exc)[:300])
+
+        # P121 (operator 2026-10-10: the Jour Fixe section must say what was discussed and decided):
+        # the Gazette's meetings section is built from the closed meetings' reports and the decided
+        # role proposals, once per edition, instead of from a resident's summary of the invitation.
+        if self.id == '01-king':
+            try:
+                from village.meeting_digest import meeting_digest
+                edition = self.gazette.get_edition(gazette_today())
+                if edition and edition.get('status') != 'compiled':
+                    has_meetings = any(c.get('kind') == 'meetings' for c in edition.get('contributions', []))
+                    if not has_meetings and self.state.get('digest_day') != gazette_today():
+                        digest = meeting_digest(self.meetings.recent_closed(limit=4),
+                                                self.teams.recent_decisions(limit=4))
+                        self.gazette.submit_contribution(gazette_today(), self.id, 'meetings',
+                                                         'Jour Fixe: was berichtet und entschieden wurde', digest)
+                        self.state['digest_day'] = gazette_today()
+                        self.event('gazette_digest', f'edition={gazette_today()}')
+            except Exception as exc:  # noqa: BLE001 - the digest must never stop the King's cycle
+                self.event('gazette_digest_failed', str(exc)[:300])
+
+        # P98: the King's daily edition is opened by the runtime, not by a hint the King
+        # has to act on. Idempotent; anything already open is left alone.
+        if self.id == '01-king':
+            try:
+                opened = self.gazette.ensure_edition_for_day(self.id, self.peer_ids(), gazette_today())
+                if opened:
+                    self.event('gazette_opened', json.dumps(opened, ensure_ascii=False)[:1000])
+            except Exception as exc:  # noqa: BLE001 - a gazette failure must not stop the King's cycle
+                self.event('gazette_open_failed', str(exc)[:300])
 
         snapshot = self.snapshot()
         identity = Path(self.env['AGENT_IDENTITY_PROMPT']).read_text()

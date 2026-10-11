@@ -43,6 +43,13 @@ def record_unreported(meetings, events_path, meeting_id, agents):
                          event='meeting_unreported', agent=agent_id,
                          detail=f"meeting_id={meeting_id}; agent={agent_id}", meeting_id=meeting_id)
 
+def round_id(kind, now):
+    """P102 (live finding 2026-10-08/09): one jour fixe per UTC day, not one per hour.
+    The hourly rounds produced 4 to 6 open agendas a day and about 540 reports."""
+    if kind == 'daily_standup':
+        return f'meeting_daily_standup_{now.strftime("%Y%m%d%H")}'
+    return f'meeting_jour_fixe_{now.strftime("%Y%m%d")}'
+
 def main():
     meetings=MeetingStore(DB); board=CoordinationStore(DB, ROOT/'board')
     while True:
@@ -66,7 +73,7 @@ def main():
             continue
         stamp=datetime.now(timezone.utc).strftime('%Y%m%dT%H%MZ')
         kind='daily_standup' if datetime.now(timezone.utc).hour % 24 == 8 else 'jour_fixe'
-        mid=f'meeting_{kind}_{datetime.now(timezone.utc).strftime("%Y%m%d%H")}'
+        mid=round_id(kind, datetime.now(timezone.utc))
         if not meetings.get(mid):
             m=meetings.schedule(kind, 'Progress, evidence, next step, blockers; no new project without a concrete criterion.', datetime.now(timezone.utc).isoformat(), 'rotating-council', mid)
             board.post_inbox_message('board','village-council',f'Meeting {kind} {mid} is open. Report achieved work, evidence, next step and blockers with meeting_operation; do not create status-only Board posts.',None,None,msg_id=f'{mid}_agenda')

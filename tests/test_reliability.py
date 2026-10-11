@@ -23,8 +23,11 @@ class ReliabilityTests(unittest.TestCase):
         self.root = Path(tempfile.mkdtemp(prefix='village-rel-'))
         (self.root / 'board').mkdir(); (self.root / 'telemetry').mkdir()
         (self.root / 'identity.txt').write_text('identity')
+        # P126: escalation mechanism under test - all obligations hard.
+        (self.root / 'policy.json').write_text(json.dumps({'defaults': {'hard_obligations': 'all'}}))
         self.env = dict(AGENT_ID='01-a', AGENT_NAME='a', AGENT_ROLE='resident', VILLAGE_ROOT=str(self.root),
-                        AGENT_IDENTITY_PROMPT=str(self.root / 'identity.txt'), OLLAMA_MODEL='m')
+                        AGENT_IDENTITY_PROMPT=str(self.root / 'identity.txt'), OLLAMA_MODEL='m',
+                        VILLAGE_POLICY_FILE='/nonexistent', VILLAGE_POLICY_LOCAL_FILE=str(self.root / 'policy.json'))
         # P75: pin the calendar plan gate/hint to "weekend" so it never
         # competes for budget or pressure in tests unrelated to it - same
         # rationale as test_runtime.py's class-level patch.
@@ -309,7 +312,8 @@ class SnapshotToolsSyncTests(unittest.TestCase):
         from village.actions import normalize_allowed
         snap = json.loads(self.agent.snapshot())
         expected = set(normalize_allowed(self.agent.policy.allowed_actions))
-        self.assertEqual(set(snap['tools']), expected)
+        # P126: meeting_operation is only offered while a meeting is open.
+        self.assertEqual(set(snap['tools']), expected - {'meeting_operation'})
         self.assertIn('calc_operation', snap['tools'])
         self.assertIn('research_proposal', snap['tools'])
         self.assertIn('huggingface', snap['tools']['research_request'])
@@ -641,7 +645,10 @@ class MandatoryKnowledgebaseGateTests(unittest.TestCase):
         root = Path(tempfile.mkdtemp(prefix='village-kb-'))
         (root / 'board').mkdir(); (root / 'telemetry').mkdir()
         (root / 'identity.txt').write_text('identity')
-        (root / 'policy.json').write_text(json.dumps({'defaults': {'knowledgebase_gate': gate}}))
+        # P126: the collaboration gate only blocks when the operator lists it
+        # in hard_obligations; this class tests that opted-in behaviour.
+        (root / 'policy.json').write_text(json.dumps({'defaults': {'knowledgebase_gate': gate,
+                                                                   'hard_obligations': ['collaboration']}}))
         env = dict(AGENT_ID='02-explorer', AGENT_NAME='explorer', AGENT_ROLE='resident', VILLAGE_ROOT=str(root),
                    AGENT_IDENTITY_PROMPT=str(root / 'identity.txt'), OLLAMA_MODEL='m',
                    VILLAGE_POLICY_FILE='/nonexistent', VILLAGE_POLICY_LOCAL_FILE=str(root / 'policy.json'))
@@ -981,8 +988,9 @@ class LoopBreakerTests(unittest.TestCase):
         # P86: the loop-breaker's own menu widened past bare 'idle' to also
         # admit the *_operation names every hard gate already exempts -
         # 'tools' must mirror exactly that widened menu, no more.
+        # P126: without an open meeting, meeting_operation is not offered.
         self.assertEqual(set(ctx['tools'].keys()),
-                         {'idle', 'meeting_operation', 'gazette_operation', 'calendar_operation'})
+                         {'idle', 'gazette_operation', 'calendar_operation'})
 
     def test_guard_rejects_non_idle_actions_while_loop_broken_but_allows_idle(self):
         self.agent.state['invalid_streak'] = rt.LOOP_BREAKER_STREAK
@@ -1045,3 +1053,12 @@ class LoopBreakerTests(unittest.TestCase):
         # decision still counts exactly as before.
         self.reject('{"name":"broken')
         self.assertEqual(self.agent.state.get('invalid_streak', 0), 1)
+
+    def test_empty_rejected_output_never_feeds_the_repeated_fingerprint_tracker(self):
+        # P94 (live incident 2026-10-06, 01-king): 'output budget exhausted' leaves
+        # an empty preview; every empty text hashes identically, so unrelated
+        # empty outputs must not add up to "the same content repeated 3 times".
+        for _ in range(rt.LOOP_BREAKER_REPEAT + 2):
+            self.reject('')
+        self.assertEqual(self.agent.state.get('recent_rejected_fingerprints', []), [])
+        self.assertFalse(self.agent._loop_breaker_active())

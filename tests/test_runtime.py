@@ -5,6 +5,7 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 import sys
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'web'))
@@ -20,8 +21,13 @@ class RuntimeTests(unittest.TestCase):
     def setUp(self):
         self.tmp=tempfile.TemporaryDirectory(); self.root=Path(self.tmp.name)
         (self.root/'board').mkdir(); (self.root/'telemetry').mkdir()
+        # P126: obligations are advisory by default; this class exercises the
+        # escalation mechanism itself, which an operator can still switch on
+        # per obligation via hard_obligations - here: all of them.
+        (self.root/'policy.json').write_text(json.dumps({'defaults': {'hard_obligations': 'all'}}))
         self.env=dict(os.environ,AGENT_ID='01-a',AGENT_NAME='a',AGENT_ROLE='resident',VILLAGE_ROOT=str(self.root),
-                      VILLAGE_MAX_OUTPUT_BYTES='4096',VILLAGE_COMMAND_TIMEOUT_SECONDS='2')
+                      VILLAGE_MAX_OUTPUT_BYTES='4096',VILLAGE_COMMAND_TIMEOUT_SECONDS='2',
+                      VILLAGE_POLICY_FILE='/nonexistent',VILLAGE_POLICY_LOCAL_FILE=str(self.root/'policy.json'))
         # P75: the calendar plan gate keys off the real wall-clock weekday
         # (calendar_is_workday(calendar_today())) - defaulting it to
         # "weekend" here keeps every pre-existing test in this class (most
@@ -90,6 +96,99 @@ class RuntimeTests(unittest.TestCase):
         self.agent.execute(decision({'message':{'content':'I inspected the habitat and found no reusable artifact yet.'}}))
         events=tail(self.root/'board/events.jsonl')
         self.assertTrue(any(e.get('event') == 'board_message' for e in events))
+
+    def test_profile_gate_refuses_solo_work_after_two_cycles_without_profile(self):
+        # P106: with the gate switched on, solo work waits for the profile; the profile call passes
+        self.agent.env['VILLAGE_PROFILE_GATE'] = '1'
+        self.agent.residents.get_profile = lambda agent_id: None
+        self.agent.state['profile_required_pressure'] = 0
+        self.assertTrue(self.agent.guard('execute_bash', {'command': 'ls'}))  # first cycle: passes
+        self.assertFalse(self.agent.guard('execute_bash', {'command': 'ls'}))
+        self.assertTrue(self.agent.guard('profile_operation', {'operation': 'update'}))
+        self.assertTrue(self.agent.guard('calendar_operation', {'operation': 'list'}))
+        self.assertFalse(self.agent.guard('board_message', {'recipient': 'ALL', 'message': 'hi'}))
+        self.assertFalse(self.agent.guard('memory_remember', {'content': 'x'}))
+
+    def test_profile_gate_is_released_once_a_profile_exists(self):
+        self.agent.env['VILLAGE_PROFILE_GATE'] = '1'
+        self.agent.residents.get_profile = lambda agent_id: {'agent_id': agent_id}
+        self.agent.state['profile_required_pressure'] = 5
+        self.assertTrue(self.agent.guard('execute_bash', {'command': 'ls'}))
+        self.assertEqual(self.agent.state['profile_required_pressure'], 0)
+
+    def test_profile_gate_is_off_by_default(self):
+        self.agent.env.pop('VILLAGE_PROFILE_GATE', None)
+        self.agent.residents.get_profile = lambda agent_id: None
+        self.agent.state['profile_required_pressure'] = 9
+        self.assertTrue(self.agent.guard('execute_bash', {'command': 'ls'}))
+
+    def test_system_senders_are_valid_reply_targets(self):
+        # P107: agents reply to the auditor and the council; those must be accepted recipients
+        from runtime import SYSTEM_SENDERS
+        self.assertIn('village-auditor', SYSTEM_SENDERS)
+        self.assertIn('village-council', SYSTEM_SENDERS)
+
+    def test_school_operation_is_known_and_only_the_king_may_plan(self):
+        # P111: lessons are planned by the King; any other resident is refused
+        from village.actions import ACTION_SPECS
+        from web.decision import SUPPORTED_ACTIONS
+        self.assertIn('school_operation', ACTION_SPECS)
+        self.assertIn('school_operation', SUPPORTED_ACTIONS)
+        self.execute('school_operation', operation='plan', lesson_day='2026-10-12', topic='fractions')
+        self.assertFalse(self.agent.state['last_result']['ok'])
+        self.assertIn('only 01-king', self.agent.state['last_result']['result'])
+
+    def test_school_gate_blocks_the_king_while_days_are_open(self):
+        # P112: with the school gate on, the King's other actions are refused after two cycles
+        # while the next seven days are not planned; school_operation stays open.
+        self.agent.env['VILLAGE_SCHOOL_GATE'] = '1'
+        self.agent.id = '01-king'
+        self.agent.state['school_gate_pressure'] = 0
+        self.assertTrue(self.agent.guard('execute_bash', {'command': 'ls'}))
+        self.assertFalse(self.agent.guard('execute_bash', {'command': 'ls'}))
+        self.assertTrue(self.agent.guard('school_operation', {'operation': 'plan'}))
+        self.agent.id = '01-a'
+
+    def test_repeated_identical_refusals_withhold_only_that_action(self):
+        # P123: four identical refusals of one action within 30 minutes withhold that action only
+        import time as _time
+        reason = 'report already submitted for this meeting'
+        self.agent.state['refusal_times'] = {f'meeting_operation|{reason}': [_time.time()] * 4}
+        self.assertFalse(self.agent.guard('meeting_operation', {'operation': 'report', 'meeting_id': 'm1'}))
+        self.assertTrue(self.agent.guard('execute_bash', {'command': 'ls'}))
+        self.assertTrue(self.agent.guard('idle', {}))
+
+    def test_three_refusals_are_not_yet_enough(self):
+        import time as _time
+        reason = 'report already submitted for this meeting'
+        self.agent.state['refusal_times'] = {f'meeting_operation|{reason}': [_time.time()] * 3}
+        # P126: meeting_operation is only offered while a meeting is open.
+        self.agent.meetings.schedule('jour_fixe', 'status', '2026-10-10T10:00:00Z', meeting_id='m1')
+        self.assertTrue(self.agent.guard('meeting_operation', {'operation': 'report', 'meeting_id': 'm1'}))
+
+    def test_recipient_error_lists_the_valid_peer_ids(self):
+        # P104: name-style recipients were refused without telling the agent the valid IDs
+        from runtime import recipient_error
+        msg = recipient_error('methodologist', ['07-methodologist', '01-king'])
+        self.assertIn('01-king', msg)
+        self.assertIn('07-methodologist', msg)
+
+    def test_identical_direct_message_to_the_same_peer_is_refused(self):
+        # P100 (live finding 2026-10-08/09): the same text was sent to the same peer again
+        # and again. The guard refuses it while the earlier text is recorded (6 h window).
+        import hashlib
+        args = {'recipient': '02-b', 'message': 'Could you check the  disk   monitor?'}
+        digest = hashlib.sha256(' '.join(args['message'].split()).lower().encode('utf-8')).hexdigest()
+        self.agent.state['dm_digests'] = {'02-b': [[digest, time.time()]]}
+        self.assertFalse(self.agent.guard('board_message', args))
+        self.assertIn('already sent this exact message', self.agent.state['last_result']['result'])
+
+    def test_a_different_direct_message_to_the_same_peer_passes(self):
+        # P100: only identical text is refused, a new message to the same peer is fine
+        import hashlib
+        digest = hashlib.sha256('old text'.encode('utf-8')).hexdigest()
+        self.agent.state['dm_digests'] = {'02-b': [[digest, time.time()]]}
+        self.assertTrue(self.agent.guard('board_message', {'recipient': '02-b', 'message': 'new text'}))
 
     def test_consult_checkpoint_rejects_broadcast(self):
         self.agent.current_collaboration_checkpoint = CooperationCheckpoint(
@@ -187,6 +286,18 @@ class RuntimeTests(unittest.TestCase):
                       achieved='x', evidence='y', next_step='z', blockers='')
         self.assertTrue(self.agent.state['last_result']['ok'])
 
+    def test_profile_operation_is_never_gated_by_an_open_meeting(self):
+        # P95 (live finding 2026-10-08): no agent ever wrote its resident profile
+        # although the runtime asks every cycle - profile_operation was not on
+        # the hard gates' exemption lists, so it was rejected like any other
+        # solo action once a meeting (or calendar plan) stayed open.
+        self.agent.meetings.schedule('jour_fixe', 'status update', '2026-09-24T10:00:00Z', meeting_id='m1')
+        for i in range(MEETING_REPORT_CEILING + 2):
+            self.execute('execute_bash', command=f'printf ok{i}')
+        self.assertFalse(self.agent.state['last_result']['ok'])  # the gate is active
+        self.execute('profile_operation', operation='update', profession='tester')
+        self.assertTrue(self.agent.state['last_result']['ok'], self.agent.state['last_result'])
+
     def test_meeting_nudge_stops_once_the_report_is_submitted(self):
         self.agent.meetings.schedule('jour_fixe', 'status update', '2026-09-24T10:00:00Z', meeting_id='m1')
         self.execute('meeting_operation', operation='report', meeting_id='m1',
@@ -261,9 +372,13 @@ class RuntimeTests(unittest.TestCase):
         # from the tail for this field specifically.
         own_active = {'id': 'own-active', 'title': 'x', 'owner': '01-a', 'status': 'active'}
         stale = [{'id': f'stale-{i}', 'title': 'x' * 700, 'owner': '02-b', 'status': 'open'} for i in range(20)]
-        self.agent.tasks.path.write_text(json.dumps([own_active] + stale))
-        with patch.object(self.agent, 'memory', return_value={'items': []}):
-            ctx = json.loads(self.agent.snapshot())
+        # P125: the always-present notes/notes_hint push the 8192-token
+        # baseline past the floor budget on their own (same situation as
+        # P76); a modest bump keeps this test about trim ORDER.
+        agent = Resident(dict(self.env, OLLAMA_NUM_CTX='9216'))
+        agent.tasks.path.write_text(json.dumps([own_active] + stale))
+        with patch.object(agent, 'memory', return_value={'items': []}):
+            ctx = json.loads(agent.snapshot())
         self.assertLess(len(ctx['projects']), 21)  # trimming did happen
         self.assertIn('own-active', [p['id'] for p in ctx['projects']])
 

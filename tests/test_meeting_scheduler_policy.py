@@ -79,3 +79,25 @@ class RecordUnreportedTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class RoundIdTests(unittest.TestCase):
+    """P102: one jour fixe per UTC day instead of one per hour."""
+
+    def test_jour_fixe_id_is_the_same_for_every_hour_of_a_day(self):
+        from datetime import datetime, timezone
+        morning = datetime(2026, 10, 9, 6, 0, tzinfo=timezone.utc)
+        evening = datetime(2026, 10, 9, 21, 30, tzinfo=timezone.utc)
+        self.assertEqual(meeting_scheduler.round_id('jour_fixe', morning), 'meeting_jour_fixe_20261009')
+        self.assertEqual(meeting_scheduler.round_id('jour_fixe', evening), 'meeting_jour_fixe_20261009')
+
+    def test_jour_fixe_id_changes_with_the_day(self):
+        from datetime import datetime, timezone
+        a = meeting_scheduler.round_id('jour_fixe', datetime(2026, 10, 9, 12, tzinfo=timezone.utc))
+        b = meeting_scheduler.round_id('jour_fixe', datetime(2026, 10, 10, 12, tzinfo=timezone.utc))
+        self.assertNotEqual(a, b)
+
+    def test_standup_keeps_its_hour(self):
+        from datetime import datetime, timezone
+        self.assertEqual(meeting_scheduler.round_id('daily_standup', datetime(2026, 10, 9, 8, tzinfo=timezone.utc)),
+                         'meeting_daily_standup_2026100908')

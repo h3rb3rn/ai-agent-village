@@ -237,9 +237,9 @@ def full_audit_cycle(events: List[Mapping[str, Any]], store: AuditStore, *, coor
         scope = store.route(finding, source="deterministic")
         if scope is None:
             continue
-        deliver(finding, scope, coordination_store=coordination_store, memory_writer=memory_writer)
-        store.mark_delivered(finding.category, finding.source_event_id)
-        stats["deterministic_delivered"] += 1
+        if deliver(finding, scope, coordination_store=coordination_store, memory_writer=memory_writer):
+            store.mark_delivered(finding.category, finding.source_event_id)
+            stats["deterministic_delivered"] += 1
 
     if not llm_enabled:
         store.record_cycle(stats)
@@ -260,9 +260,9 @@ def full_audit_cycle(events: List[Mapping[str, Any]], store: AuditStore, *, coor
         scope = store.route(finding, source="llm")
         if scope is None:
             continue
-        deliver(finding, scope, coordination_store=coordination_store, memory_writer=memory_writer)
-        store.mark_delivered(finding.category, finding.source_event_id)
-        stats["llm_delivered"] += 1
+        if deliver(finding, scope, coordination_store=coordination_store, memory_writer=memory_writer):
+            store.mark_delivered(finding.category, finding.source_event_id)
+            stats["llm_delivered"] += 1
     store.record_cycle(stats)
     return stats
 

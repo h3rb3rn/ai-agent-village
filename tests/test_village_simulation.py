@@ -124,7 +124,8 @@ class SimulationTests(unittest.TestCase):
         v = Village(self); self.addCleanup(v.close)
         v.say("librarian", {"name": "idle", "arguments": {}}); v.agents["librarian"].cycle()
         names = [var["properties"]["name"]["const"] for var in v.requests[-1]["format"]["oneOf"]]
-        self.assertEqual(set(names), {"board_message", "memory_search", "memory_remember", "meeting_operation", "idle"})
+        # P126: meeting_operation only appears while a meeting is open.
+        self.assertEqual(set(names), {"board_message", "memory_search", "memory_remember", "idle"})
 
     def test_auto_memory_does_not_satisfy_record_checkpoint(self):
         v = Village(self); self.addCleanup(v.close)

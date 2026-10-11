@@ -109,11 +109,12 @@ RESIDENTS_DATA: List[ResidentProfile] = [
         id="01-king",
         name="King",
         role="king",
-        # Context size at 132k tier (131072), batch_size at 128 per operator request
+        # Context size at 256k tier (262144) per operator request 2026-10-06 (was 131072),
+        # batch_size at 128 per operator request
         # (256 was tested but 128 is the stable operating point for 4x Tesla M60).
         dna=CognitiveDNA(
             model="qwen3.6:35b",
-            context_size=131072,
+            context_size=262144,
             model_quant="Q4_K_M",
             kv_cache_quant="q4_0",
             model_size="35.5B Parameters (~22.6 GiB)",
@@ -468,12 +469,18 @@ class ResidentStore:
 
         art = existing.get("ascii_art", "")
         art_plain = existing.get("ascii_art_plain", "")
+        art_warning = None
         if ascii_art is not None:
             valid, plain, err = validate_ascii_art(ascii_art)
-            if not valid:
-                raise ValueError(f"Invalid ASCII art: {err}")
-            art = ascii_art
-            art_plain = plain
+            if valid:
+                art = ascii_art
+                art_plain = plain
+            else:
+                # P108 (live finding 2026-10-09): a wrong-size portrait (7 or 9 lines instead of
+                # 250) refused the whole profile, so the profession and the lists were lost too.
+                # The text fields are saved; the portrait keeps its previous value and the
+                # agent is told what to fix.
+                art_warning = err
 
         with sqlite3.connect(self.db_path, timeout=30) as conn:
             conn.execute("""
@@ -514,7 +521,10 @@ class ResidentStore:
         except OSError:
             pass
 
-        return self.get_profile(target_id) or {}
+        result = self.get_profile(target_id) or {}
+        if art_warning:
+            result = dict(result, art_warning=art_warning)
+        return result
 
 def get_resident(agent_id: str, lang: str = "en", include_art: bool = True, store: Optional[ResidentStore] = None) -> Optional[Dict[str, Any]]:
     """Retrieve an individual resident's profile by identifier (e.g. '01-king').
@@ -558,13 +568,18 @@ def get_resident(agent_id: str, lang: str = "en", include_art: bool = True, stor
             "accent_color": authored.get("accent_color") or fallback.accent_color,
         }
         if include_art:
-            data["ascii_art"] = authored.get("ascii_art") or get_resident_art(target_id, plain=False)
-            data["ascii_art_plain"] = authored.get("ascii_art_plain") or get_resident_art(target_id, plain=True)
+            # P122 (operator 2026-10-10): only the agent's own portrait is shown. The generated
+            # portraits from the earlier catalog are no longer used as a fallback.
+            data["ascii_art"] = authored.get("ascii_art") or ""
+            data["ascii_art_plain"] = authored.get("ascii_art_plain") or ""
         return data
 
     # Unauthored fallback profile
     data = fallback.to_dict(lang=lang, include_art=include_art)
     data["has_profile"] = False
+    if include_art:
+        data["ascii_art"] = ""
+        data["ascii_art_plain"] = ""
     data["dna"] = dna.to_dict()
     return data
 

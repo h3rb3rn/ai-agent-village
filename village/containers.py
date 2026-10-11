@@ -756,6 +756,7 @@ def describe_agent_capabilities(
             "driver_responsive": audit.driver_status["responsive"],
             "cdi_specs_found": len(audit.cdi_spec_files),
             "gpu_compute_ready": gpu_ready,
+            "devices": list(audit.driver_status.get("devices") or []),
         },
         "authority": {
             "socket": DEFAULT_AUTHORITY_SOCKET,

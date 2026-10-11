@@ -19,6 +19,7 @@ not duplicated authoring.
 from __future__ import annotations
 
 import difflib
+import logging
 import re
 import sqlite3
 import uuid
@@ -29,6 +30,9 @@ from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional
 
 SCHEMA_VERSION = 1
 RATE_LIMIT_SECONDS = 3600  # at most one correction per (category, agent) per hour
+
+
+logger = logging.getLogger("village.auditor")
 
 
 def utc_now() -> str:
@@ -490,7 +494,7 @@ def _seconds_between(a: str, b: str) -> float:
 
 # --- delivery: wires findings into the existing inbox / memory-gateway paths -
 
-def deliver(finding: "AuditFinding", scope: str, *, coordination_store, memory_writer) -> None:
+def deliver(finding: "AuditFinding", scope: str, *, coordination_store, memory_writer) -> bool:
     """Deliver one routed finding.
 
     Private: a direct inbox message from the system sender 'village-auditor' to
@@ -510,12 +514,20 @@ def deliver(finding: "AuditFinding", scope: str, *, coordination_store, memory_w
             source="direct", sender="village-auditor", recipient=finding.agent,
             content=text[:4000],
         )
-    else:
+        return True
+    # P97 (live incident 2026-10-08): a failed shared write used to propagate and end the
+    # auditor process, which restarted and rescanned the same events (193 restarts).
+    # The finding now stays undelivered and the audit cycle continues.
+    try:
         memory_writer({
             "agent": "village-auditor", "scope": "shared", "kind": "correction",
             "content": text[:4000], "source_event": f"audit:{finding.category}:{finding.source_event_id}",
             "confidence": 1.0,
         })
+    except Exception as exc:  # noqa: BLE001 - any gateway failure must not stop the audit
+        logger.warning("shared correction not delivered for %s: %s", finding.source_event_id, exc)
+        return False
+    return True
 
 
 def audit_cycle(events, store: "AuditStore", *, coordination_store, memory_writer) -> int:
@@ -525,7 +537,7 @@ def audit_cycle(events, store: "AuditStore", *, coordination_store, memory_write
         scope = store.route(finding)
         if scope is None:
             continue
-        deliver(finding, scope, coordination_store=coordination_store, memory_writer=memory_writer)
-        store.mark_delivered(finding.category, finding.source_event_id)
-        delivered += 1
+        if deliver(finding, scope, coordination_store=coordination_store, memory_writer=memory_writer):
+            store.mark_delivered(finding.category, finding.source_event_id)
+            delivered += 1
     return delivered

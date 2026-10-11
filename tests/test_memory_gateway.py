@@ -318,6 +318,22 @@ if __name__ == "__main__":
     unittest.main()
 
 
+    def test_identical_corrections_from_different_sources_are_both_stored(self):
+        """P97: same text and author within one second must not collide on the primary key."""
+        base = {"agent": "a", "scope": "shared", "kind": "correction", "content": "same text", "confidence": 1.0}
+        status1, _ = self.call("POST", "/v1/memories", dict(base, source_event="audit:cat:e1"), token="token-a")
+        status2, _ = self.call("POST", "/v1/memories", dict(base, source_event="audit:cat:e2"), token="token-a")
+        self.assertEqual((status1, status2), (201, 201))
+
+    def test_duplicate_memory_is_answered_not_dropped(self):
+        """P97: an exact duplicate gets a clean 409 instead of an aborted connection."""
+        body = {"agent": "a", "scope": "shared", "kind": "correction", "content": "dup", "confidence": 1.0,
+                "source_event": "audit:cat:e9"}
+        self.call("POST", "/v1/memories", body, token="token-a")
+        status, _ = self.call("POST", "/v1/memories", body, token="token-a")
+        self.assertIn(status, (201, 409))
+
+
 class MemoryStatsRouteTests(MemoryGatewayTests):
     """Regression: 2026-09-27, N06-M10. /v1/stats crashed with an unhandled NameError
     ('projection' referenced but never assigned in that branch), so curl saw "Empty
@@ -355,3 +371,38 @@ class MemoryStatsRouteTests(MemoryGatewayTests):
         self.assertEqual(status, 200, body)
         self.assertEqual(body["total"], 3)
         self.assertEqual(body["by_scope"], {"private": 2, "shared": 1})
+
+    def test_schema_migration_runs_once_not_per_request(self):
+        """P93: reads must not re-run the schema migration (it writes and takes the WAL lock)."""
+        calls = []
+        original = gateway.migrate_memories_schema
+
+        def counting(conn):
+            calls.append(1)
+            return original(conn)
+
+        gateway.migrate_memories_schema = counting
+        try:
+            self.call("POST", "/v1/memories", {"content": "x", "scope": "shared"}, token="token-a")
+            for _ in range(4):
+                status, _ = self.call("GET", "/v1/stats", token=None)
+                self.assertEqual(status, 200)
+        finally:
+            gateway.migrate_memories_schema = original
+        self.assertEqual(len(calls), 1)
+
+    def test_handler_error_does_not_leave_write_lock_held(self):
+        """P93: an exception between BEGIN IMMEDIATE and commit must release the write lock."""
+        status, item = self.call("POST", "/v1/memories", {"content": "keep", "scope": "private"}, token="token-a")
+        self.assertEqual(status, 201)
+        try:
+            # float("abc") raises ValueError after BEGIN IMMEDIATE; the connection used to leak
+            self.call("PATCH", f"/v1/memories/{item['id']}", {"confidence": "abc"}, token="token-a")
+        except Exception:
+            pass  # the dropped connection is expected; only the lock matters
+        probe = sqlite3.connect(str(gateway.DB), timeout=0.5)
+        try:
+            probe.execute("BEGIN IMMEDIATE")
+            probe.rollback()
+        finally:
+            probe.close()
