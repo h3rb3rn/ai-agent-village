@@ -78,6 +78,7 @@ RELEASE_FILES = [
     ("village/auditor_llm.py", "lib/village/auditor_llm.py", 0o644),
     ("village/residents.py", "lib/village/residents.py", 0o644),
     ("village/notes.py", "lib/village/notes.py", 0o644),
+    ("village/focus.py", "lib/village/focus.py", 0o644),
     *[(f"village/assets/ascii_art/{f}", f"lib/village/assets/ascii_art/{f}", 0o644)
       for f in sorted(os.listdir(Path(__file__).resolve().parent / "assets/ascii_art")) if f.endswith(".txt")],
     ("village/__init__.py", "lib/village/__init__.py", 0o644),

@@ -36,6 +36,7 @@ from decision import decision, final_content
 from village.control import is_paused, read_pause_metadata
 from village.notes import (load_notes, save_notes, apply_operation as apply_notes_operation,
                           retrieval_query as notes_retrieval_query, is_empty as notes_empty)
+from village.focus import choose_mode as choose_cycle_mode, focus_context
 from village.coordinator import CoordinationStore
 from village.inference import (
     build_ollama_request,
@@ -1487,6 +1488,11 @@ class Resident:
         # P124: last_action_feedback is already bounded head+tail by feedback();
         # a second tail-only cut here used to discard the best-ranked memory
         # hits and the start of every structured result.
+        # P136: focus cycles drop the village-wide overview while nothing urgent waits; the
+        # system prompt stays byte-identical, so only the snapshot shrinks.
+        self.current_cycle_mode = choose_cycle_mode(context, notes, self.state, self.env, self.id)
+        if self.current_cycle_mode == 'focus':
+            context = focus_context(context, self.id)
         if self.policy.prompt_profile == 'compact':
             context = compact_context(context)
         context = order_for_prefix_cache(context)
@@ -3132,7 +3138,7 @@ class Resident:
             generation=self.generation,
         )
         self.tracker.start_request(req_record.request_id)
-        self.event('inference_started', f'request_id={req_record.request_id} generation={self.generation} provider={api_type} model={self.env["OLLAMA_MODEL"]} context={self.env.get("OLLAMA_NUM_CTX")}', True)
+        self.event('inference_started', f'request_id={req_record.request_id} generation={self.generation} provider={api_type} model={self.env["OLLAMA_MODEL"]} context={self.env.get("OLLAMA_NUM_CTX")} mode={getattr(self, "current_cycle_mode", "full")}', True)
         if api_type == 'openai':
             request = build_openai_request(
                 url=self.env['OLLAMA_URL'],
