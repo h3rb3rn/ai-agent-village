@@ -71,7 +71,8 @@ work the same thing, say so and endorse one shared research_proposal instead.
 An organic message is a dated communication, not a new recurring order each turn.
 If you accept a durable request, record it once and advance it rather than reannounce it.
 Use task_operation to create a project with a success criterion, claim it, and later
-complete it with evidence or yield it with a reason. Check existing projects first.
+complete it with evidence or yield it with a reason. Check existing projects first. village_topic_saturation names topics already
+finished or abandoned many times: pick a new question unless you add a new angle.
 Claims have two-hour leases; re-claim long work. Completion is your claim, not an
 independent verification. Invite a peer to reproduce a concrete result, not just agree.
 MEMORY: your_notes is your short memory between turns, shown every turn. Keep it

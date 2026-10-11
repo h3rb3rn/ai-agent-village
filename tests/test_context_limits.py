@@ -26,12 +26,20 @@ class ContextBudgetTests(unittest.TestCase):
         self.assertEqual(context_char_budget({'OLLAMA_NUM_CTX': '9216'}), 8432)
         self.assertEqual(context_char_budget({'OLLAMA_NUM_CTX': '16384'}), 22768)
 
-    def test_large_windows_are_no_longer_capped_at_24k(self):
+    def test_large_windows_use_the_measured_default_ceiling(self):
+        # P135: prompt evaluation grows linearly with the snapshot (measured
+        # 98 s -> 213 s), so large windows get a default ceiling above the
+        # old 24k cap; operators can lift it explicitly.
+        from runtime import CONTEXT_DEFAULT_MAX_CHARS
         budget = context_char_budget({'OLLAMA_NUM_CTX': '262144', 'OLLAMA_NUM_PREDICT': '8192'})
-        self.assertGreater(budget, 24000 * 10)
+        self.assertEqual(budget, CONTEXT_DEFAULT_MAX_CHARS)
+        self.assertGreater(budget, 24000)
+        lifted = context_char_budget({'OLLAMA_NUM_CTX': '262144', 'OLLAMA_NUM_PREDICT': '8192',
+                                      'VILLAGE_CONTEXT_MAX_CHARS': '500000'})
+        self.assertGreater(lifted, 24000 * 10)
 
     def test_budget_never_exceeds_the_window_left_after_output_and_system(self):
-        env = {'OLLAMA_NUM_CTX': '32768', 'OLLAMA_NUM_PREDICT': '12288'}
+        env = {'OLLAMA_NUM_CTX': '32768', 'OLLAMA_NUM_PREDICT': '12288', 'VILLAGE_CONTEXT_MAX_CHARS': '100000'}
         # 2*ctx-10000 = 55536, but only (32768-12288-4096)*3 = 49152 fit.
         self.assertEqual(context_char_budget(env), 49152)
 

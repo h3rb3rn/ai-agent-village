@@ -178,6 +178,11 @@ def decision(response, allowed=None):
     tool = obj.get('tool_call', obj)
     if not isinstance(tool, dict): return fallback('invalid action envelope', content)
     name, args = tool.get('name'), tool.get('arguments', {})
+    # P135 (live 2026-10-11): a string/list 'arguments' raised ValueError in
+    # _normalize_action's dict(args) and aborted the whole cycle as an
+    # inference_error - a malformed action, not a crash.
+    if not isinstance(args, dict):
+        return fallback('arguments must be a JSON object', content)
     name = NAME_ALIASES.get(name, name)
     args = _normalize_action(name, args)
     reason = _validate_action(name, args)

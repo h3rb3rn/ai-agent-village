@@ -5,6 +5,7 @@ No model settings are calibrated here. Agent configuration remains authoritative
 The shared board is collaboration data, never a privilege boundary.
 """
 import fcntl
+from collections import Counter
 import hashlib
 import json
 import os
@@ -293,6 +294,20 @@ CONTEXT_BUDGET_FLOOR_CHARS = 8000
 CONTEXT_CHARS_PER_TOKEN = 3
 CONTEXT_SYSTEM_RESERVE_TOKENS = 4096
 RETRIEVAL_LIMIT_DEFAULT = 8
+# P135: P124 lifted the snapshot to ~60k chars; measured live (2026-10-11)
+# prompt evaluation grew linearly (12k -> 24k tokens, 98 s -> 213 s median),
+# cutting cycles per hour by 30 %. A default ceiling keeps the gain in
+# priority (notes, memory protected) without doubling latency. Operators may
+# still raise it via VILLAGE_CONTEXT_MAX_CHARS.
+CONTEXT_DEFAULT_MAX_CHARS = 36000
+# P135: only live tasks belong in the per-turn project list.
+LIVE_TASK_STATUSES = ('open', 'active', 'forming')
+PROJECTS_IN_CONTEXT = 12
+SATURATION_MIN_TASKS = 5
+SATURATION_STOPWORDS = frozenset(
+    'with from into that this your their test tests testing create implement verify verification '
+    'script local check fix complete final finalize build run prototype tool simple specific task '
+    'shared review follow before after using based'.split())
 OWN_RECENT_RESULTS = 8
 # Stored action results keep both ends: structured JSON (memory/task/research
 # results) is ranked best-first at the head, command output reports errors at
@@ -315,10 +330,40 @@ def context_char_budget(env) -> int:
     room = (num_ctx - num_predict - CONTEXT_SYSTEM_RESERVE_TOKENS) * CONTEXT_CHARS_PER_TOKEN
     if room > CONTEXT_BUDGET_FLOOR_CHARS:
         budget = min(budget, room)
-    ceiling = env.get('VILLAGE_CONTEXT_MAX_CHARS')
-    if ceiling:
-        budget = max(CONTEXT_BUDGET_FLOOR_CHARS, min(budget, int(ceiling)))
-    return budget
+    ceiling = int(env.get('VILLAGE_CONTEXT_MAX_CHARS') or CONTEXT_DEFAULT_MAX_CHARS)
+    return max(CONTEXT_BUDGET_FLOOR_CHARS, min(budget, ceiling))
+
+
+def topic_saturation(tasks, limit=5):
+    """P135: the words that keep coming back in finished or abandoned task
+    titles, with counts - so a resident can see a topic is exhausted instead
+    of being shown 32 dead tasks about it every turn."""
+    counts = Counter()
+    for task in tasks:
+        if task.get('status') not in ('complete', 'abandoned'):
+            continue
+        words = set(re.findall(r'[a-z][a-z0-9_.-]{3,}', str(task.get('title', '')).lower()))
+        counts.update(w.strip('.-_') for w in words if w not in SATURATION_STOPWORDS)
+    return [dict(topic=w, finished_or_abandoned_tasks=n)
+            for w, n in counts.most_common(limit) if n >= SATURATION_MIN_TASKS]
+
+
+# P135: Ollama can only reuse its KV cache for an identical prompt PREFIX.
+# The snapshot used to start with a timestamped resource reading, so every
+# turn re-evaluated the whole prompt. Stable fields first, volatile last.
+SNAPSHOT_STABLE_FIRST = (
+    'runtime', 'identity', 'private_work_directory', 'groups', 'peers', 'tools', 'task_ownership_note',
+    'context_note', 'king_guidance', 'village_topic_saturation', 'your_notes', 'notes_hint', 'projects',
+    'teams', 'artifacts', 'retrieved_memory_untrusted', 'memory_status')
+SNAPSHOT_VOLATILE_LAST = (
+    'measured_resources', 'token_budget', 'recovery_guidance', 'last_action_feedback')
+
+
+def order_for_prefix_cache(context):
+    first = {k: context[k] for k in SNAPSHOT_STABLE_FIRST if k in context}
+    last = {k: context[k] for k in SNAPSHOT_VOLATILE_LAST if k in context}
+    middle = {k: v for k, v in context.items() if k not in first and k not in last}
+    return {**first, **middle, **last}
 
 
 def clip_head_tail(text: str, head: int = FEEDBACK_HEAD_CHARS, tail: int = FEEDBACK_TAIL_CHARS) -> str:
@@ -1060,6 +1105,12 @@ class Resident:
                 return 1
             return 0
 
+        all_tasks = projects
+        # P135: the full projection holds every task ever (live: 152, of which
+        # 124 complete/abandoned). Sorted best-first and then cut with [-32:],
+        # each resident saw the 32 LEAST relevant rows - other agents' dead
+        # tasks, mostly the disk-monitor history it kept repeating.
+        projects = [x for x in all_tasks if x.get('status') in LIVE_TASK_STATUSES]
         projects.sort(key=task_priority, reverse=True)
         own_project = next((x for x in projects if x.get('owner')==self.id and x.get('status')=='active'), None)
         active_teams = self.teams.list_for_agent(self.id)
@@ -1095,7 +1146,8 @@ class Resident:
                 **({} if self.obligation_is_hard('collaboration') else {'enforcement': 'advisory'})),
             direct_ack_target=direct_ack_target,
             king_guidance=(self.id == '01-king'),
-            projects=projects[-32:], recent_organic_messages_untrusted=organic[-3:],
+            projects=projects[:PROJECTS_IN_CONTEXT], recent_organic_messages_untrusted=organic[-3:],
+            village_topic_saturation=topic_saturation(all_tasks),
             # Generated from the single ACTION_SPECS source of truth (village/actions.py)
             # instead of a hand-maintained copy, which had drifted stale - missing
             # calc_operation and research_proposal entirely, and describing
@@ -1437,6 +1489,7 @@ class Resident:
         # hits and the start of every structured result.
         if self.policy.prompt_profile == 'compact':
             context = compact_context(context)
+        context = order_for_prefix_cache(context)
         # P48: trim least-actionable content first. 'projects' is a bulky,
         # re-derivable snapshot (already capped at 32) that can dwarf the whole
         # budget on its own (observed: 14 tasks ~13.8k chars against a ~6.4k
@@ -1586,7 +1639,11 @@ class Resident:
         # P126: meeting_operation is only offered while a meeting is actually
         # open - live, residents reported into closed meetings 33x in 4h,
         # each a wasted action, because the tool was always on their list.
-        if 'meeting_operation' in allowed and not self.meetings.active():
+        # P135: also hidden once this resident has reported to every open
+        # meeting - live, 60 of 86 action errors in 5.5 h were
+        # "report already submitted for this meeting".
+        if 'meeting_operation' in allowed and not any(
+                not self.meetings.has_report(m['id'], self.id) for m in self.meetings.active()):
             allowed = [x for x in allowed if x != 'meeting_operation']
         return allowed
 
