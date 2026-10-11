@@ -23,6 +23,12 @@ class Curriculum:
                 lesson_day TEXT PRIMARY KEY, topic TEXT NOT NULL, teacher TEXT NOT NULL,
                 planned_on TEXT NOT NULL)""")
             c.commit()
+        # P145: residents run with umask 077, so the King created this file 0600 and no other
+        # resident could read the lesson plan (live 2026-10-12). Shared like coordination.sqlite3.
+        try:
+            self.db_path.chmod(0o660)
+        except OSError:
+            pass
 
     def add(self, lesson_day: date, topic: str, teacher: str, today: date) -> None:
         """Plan a lesson. It must lie inside the horizon and must be planned at least one day ahead."""

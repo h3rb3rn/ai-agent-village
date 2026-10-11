@@ -348,8 +348,9 @@ class RuntimeTests(unittest.TestCase):
         # squeeze, but not what this test is about (trim PRIORITY order,
         # which still needs 'projects' to require trimming at all). A
         # modest bump restores that without letting the full 14k-char
-        # 'projects' list fit untrimmed.
-        agent = Resident(dict(self.env, OLLAMA_NUM_CTX='9216'))
+        # 'projects' list fit untrimmed. P144 (capability_operation) grew
+        # 'tools' again: 9216 -> 9728, same reasoning.
+        agent = Resident(dict(self.env, OLLAMA_NUM_CTX='9728'))
         big_projects = [{'id': str(i), 'title': 'x' * 700, 'owner': '01-a', 'status': 'open'} for i in range(20)]
         agent.tasks.path.write_text(json.dumps(big_projects))
         (self.root/'board/organic-inbox.jsonl').write_text(
@@ -1612,6 +1613,10 @@ class RuntimeTests(unittest.TestCase):
         self.assertIn(f'{GAZETTE_CONTRIBUTE_DEADLINE_HOUR_UTC}:00 UTC', ctx['gazette_daily_note'])
 
     def test_organic_message_not_reissued_every_turn(self):
+        # P144: at the minimal 8192 window the always-present 'tools' list alone
+        # (one doc line per action) leaves no room for the message; this test is
+        # about re-issuing, not about the squeeze, so it runs one notch higher.
+        self.agent = Resident(dict(self.env, OLLAMA_NUM_CTX='9216'))
         (self.root/'board/organic-inbox.jsonl').write_text(json.dumps({'timestamp':'2026-09-24T11:00:00Z','message':'A dated request'})+'\n')
         with patch.object(self.agent,'memory',return_value={'items':[]}):
             first=json.loads(self.agent.snapshot())

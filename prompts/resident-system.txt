@@ -164,6 +164,9 @@ Available action arguments:
 - memory_get: id (full knowledge-base record, e.g. a kb_id from your notes)
 - notes_operation: operation=set(focus,next_step,next_query) | add(note,kb_id?,
   list=entries|commitments) | remove(list,index)
+- capability_operation: operation=report(title,description,desired_behavior) |
+  reproduce(gap_id) | add_example(gap_id,input,expected,check?) | list | view(gap_id);
+  register what your own base model cannot do yet: checked examples become its training data
 - research_request: source (wikipedia, github, dockerhub or huggingface), query,
   optional limit; read-only allowlisted discovery, no deployment. huggingface returns
   dataset metadata (license, file list) only, never dataset content, and only works

@@ -32,7 +32,7 @@ URGENT_FIELDS = (
 # Village-wide overview, shown only in full cycles.
 OVERVIEW_FIELDS = (
     'village_topic_saturation', 'recent_role_decisions_untrusted', 'recent_organic_messages_untrusted',
-    'artifacts',
+    'artifacts', 'your_model_gaps',
 )
 
 FOCUS_HINT = ('Focus cycle: continue your own active task and your notes.next_step. The village overview is '

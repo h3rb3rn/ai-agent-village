@@ -37,6 +37,8 @@ from village.control import is_paused, read_pause_metadata
 from village.notes import (load_notes, save_notes, apply_operation as apply_notes_operation,
                           retrieval_query as notes_retrieval_query, is_empty as notes_empty)
 from village.focus import choose_mode as choose_cycle_mode, focus_context
+from village.capabilities import CapabilityStore
+from village.traces import append_trace, build_record as build_trace_record, store_system_prompt, TRACE_MAX_MB_DEFAULT
 from village.coordinator import CoordinationStore
 from village.inference import (
     build_ollama_request,
@@ -345,8 +347,10 @@ def topic_saturation(tasks, limit=5):
             continue
         words = set(re.findall(r'[a-z][a-z0-9_.-]{3,}', str(task.get('title', '')).lower()))
         counts.update(w.strip('.-_') for w in words if w not in SATURATION_STOPWORDS)
-    return [dict(topic=w, finished_or_abandoned_tasks=n)
-            for w, n in counts.most_common(limit) if n >= SATURATION_MIN_TASKS]
+    # P143: ties are broken alphabetically. most_common() kept insertion order, which came
+    # from iterating a set - so the order changed with each process's hash seed.
+    ranked = sorted(counts.items(), key=lambda item: (-item[1], item[0]))[:limit]
+    return [dict(topic=w, finished_or_abandoned_tasks=n) for w, n in ranked if n >= SATURATION_MIN_TASKS]
 
 
 # P135: Ollama can only reuse its KV cache for an identical prompt PREFIX.
@@ -562,6 +566,8 @@ class Resident:
         # tracking, evaluation, swap requests) - training itself runs via
         # the existing start_job mechanism.
         self.finetune = FinetuneStore(self.board / 'coordination.sqlite3')
+        # P144: register of missing model capabilities, prepared for later training.
+        self.capabilities = CapabilityStore(self.board / 'coordination.sqlite3')
         # P91: resident profile store - agents author their own profiles and ASCII art.
         self.residents = ResidentStore(self.board / 'coordination.sqlite3')
         # P12: SQLite-backed manager for persistent background tool jobs with crash reconciliation
@@ -1451,6 +1457,16 @@ class Resident:
         # P125: the resident's own notes are always shown and steer retrieval.
         notes = load_notes(self.home)
         context['your_notes'] = notes
+        # P144: the largest capability gaps measured for this resident's own model.
+        try:
+            own_model = self.env.get('OLLAMA_MODEL', '')
+            gaps = [g for g in self.capabilities.list(model=own_model, limit=5) if g['observed_for_model']][:3]
+            if gaps:
+                context['your_model_gaps'] = dict(model=own_model, gaps=gaps, hint=(
+                    'Measured failure classes of your own base model. Report what else it cannot do, reproduce '
+                    'peers\' gaps and add checkable examples with capability_operation; they become its training data.'))
+        except Exception:  # noqa: BLE001 - the register must never stop a snapshot
+            pass
         if notes_empty(notes):
             context['notes_hint'] = ('Your notes are empty. They are your memory between turns: use notes_operation set '
                                      'focus/next_step/next_query, and add short entries with the kb_id of knowledge-base '
@@ -1550,6 +1566,32 @@ class Resident:
             except sqlite3.Error as exc:
                 self.event('inbox_delivery_error', f'{type(exc).__name__}: {exc}', True)
         return json.dumps(context, ensure_ascii=False)
+
+    def archive_trace(self, request_id, messages, norm, parsed, last_result, executed):
+        """P143: append this cycle to the resident's private training-trace archive.
+        P144: the same record feeds the capability-gap register (failure classes per model)."""
+        archive = self.env.get('VILLAGE_TRACE_ARCHIVE', '1') != '0'
+        try:
+            message = (norm.raw_response or {}).get('message') or {}
+            system_text = self.redact(messages[0]['content'])
+            system_sha = store_system_prompt(self.home, system_text) if archive else \
+                hashlib.sha256(system_text.encode('utf-8')).hexdigest()[:16]
+            record = build_trace_record(
+                agent=self.id, model=self.env.get('OLLAMA_MODEL', ''),
+                think_level=self.env.get('OLLAMA_THINK_LEVEL', 'off'), num_ctx=self.env.get('OLLAMA_NUM_CTX'),
+                cycle_mode=getattr(self, 'current_cycle_mode', 'full'), request_id=request_id,
+                system_sha=system_sha, user=self.redact(messages[1]['content']),
+                output=self.redact(final_content(norm.content)), thinking=self.redact(str(message.get('thinking') or '')),
+                parsed=parsed, last_result=last_result, executed=executed, metrics=norm.metrics, timestamp=now())
+            if archive:
+                append_trace(self.home, record, int(self.env.get('VILLAGE_TRACE_MAX_MB', TRACE_MAX_MB_DEFAULT)))
+        except Exception as exc:  # noqa: BLE001 - the archive must never stop a cycle
+            self.event('trace_archive_failed', str(exc)[:300], True)
+            return
+        try:
+            self.capabilities.observe(record)
+        except Exception as exc:  # noqa: BLE001 - the register must never stop a cycle
+            self.event('capability_observe_failed', str(exc)[:300], True)
 
     def auto_record(self, summary, key_material):
         """Runtime-authored, clearly labelled observation. It never counts as an agent action
@@ -2503,6 +2545,25 @@ class Resident:
                 result = self.research.search(args.get('source'), args.get('query'), args.get('limit', 5))
                 self.event('research_result', json.dumps({k: result.get(k) for k in ('source', 'query', 'sha256', 'results')}, ensure_ascii=False))
                 self.feedback(name, json.dumps(result, ensure_ascii=False), True)
+            elif name == 'capability_operation':
+                # P144: residents register what their own model cannot do yet.
+                op = args.get('operation')
+                model = self.env.get('OLLAMA_MODEL', '')
+                store = self.capabilities
+                if op == 'report':
+                    result = store.report(self.id, model, args.get('title', ''), args.get('description', ''),
+                                          args.get('desired_behavior', ''), args.get('role', 'any'), args.get('request_id', ''))
+                elif op == 'reproduce':
+                    result = store.reproduce(args.get('gap_id', ''), self.id, model, args.get('note', ''), args.get('request_id', ''))
+                elif op == 'add_example':
+                    result = store.add_example(args.get('gap_id', ''), self.id, model, args.get('input', ''),
+                                               args.get('expected', ''), args.get('check', 'manual'))
+                elif op == 'view':
+                    result = store.view(args.get('gap_id', ''))
+                else:
+                    result = store.list(args.get('status'), args.get('role'), model)
+                self.event('capability_result', json.dumps({'operation': op, 'gap_id': args.get('gap_id')}, ensure_ascii=False))
+                self.feedback(name, json.dumps(result, ensure_ascii=False), True)
             elif name == 'calc_operation':
                 tool = args.get('tool')
                 tool_args = {k: v for k, v in args.items() if k != 'tool'}
@@ -3212,10 +3273,17 @@ class Resident:
                 self.state['last_error_category'] = None
 
             # P06: Atomically authorize execution against active generation and duplicate run prevention
-            if self.tracker.mark_action_executed(req_record.request_id, self.generation):
+            previous_result = self.state.get('last_result')
+            executed = self.tracker.mark_action_executed(req_record.request_id, self.generation)
+            if executed:
                 self.execute(parsed)
             else:
                 self.event('action_discarded', f'request_id={req_record.request_id} execution denied: generation mismatch or duplicate execution', True)
+            # P143: keep this cycle as training material. feedback() always stores a new
+            # dict, so an unchanged object means execute() produced no result of its own.
+            current_result = self.state.get('last_result')
+            self.archive_trace(req_record.request_id, messages, norm, parsed,
+                               current_result if current_result is not previous_result else None, executed)
         except (OSError, ValueError) as exc:
             elapsed_ms = int((time.monotonic() - start) * 1000)
             meta = read_pause_metadata(self.pause_marker) if is_paused(self.pause_marker) else {}

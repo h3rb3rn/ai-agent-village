@@ -12,7 +12,7 @@ SUPPORTED_ACTIONS = frozenset({
     'board_message', 'task_operation', 'team_operation', 'artifact_operation',
     'memory_remember', 'memory_search', 'memory_get', 'notes_operation', 'research_request', 'meeting_operation',
     'calc_operation', 'research_proposal', 'gazette_operation', 'calendar_operation',
-    'finetune_operation', 'profile_operation', 'school_operation', 'idle',
+    'finetune_operation', 'profile_operation', 'school_operation', 'capability_operation', 'idle',
 })
 
 
@@ -31,7 +31,7 @@ def _normalize_action(name, args):
     # operation field was refused as 'missing action argument'. The fields make the intent unambiguous.
     if name == 'meeting_operation' and not normalized.get('operation') and 'achieved' in normalized and normalized.get('meeting_id'):
         normalized['operation'] = 'report'
-    if name in ('meeting_operation', 'artifact_operation', 'team_operation', 'research_proposal', 'gazette_operation', 'calendar_operation', 'finetune_operation', 'profile_operation', 'notes_operation') and not normalized.get('operation'):
+    if name in ('meeting_operation', 'artifact_operation', 'team_operation', 'research_proposal', 'gazette_operation', 'calendar_operation', 'finetune_operation', 'profile_operation', 'notes_operation', 'capability_operation') and not normalized.get('operation'):
         if normalized.get('action'):
             normalized['operation'] = normalized['action']
         elif name == 'team_operation' and all(normalized.get(k) for k in ('project', 'goal', 'role')):
@@ -53,7 +53,7 @@ def _validate_action(name, args):
         'research_proposal': ('operation',), 'gazette_operation': ('operation',),
         'calendar_operation': ('operation',), 'finetune_operation': ('operation',),
         'profile_operation': ('operation',), 'notes_operation': ('operation',),
-        'memory_get': ('id',),
+        'memory_get': ('id',), 'capability_operation': ('operation',),
     }.get(name, ())
     if any(not isinstance(args.get(field), str) or not args[field].strip() for field in required):
         return 'missing action argument'
@@ -73,6 +73,14 @@ def _validate_action(name, args):
         return 'unknown notes operation'
     if name == 'profile_operation' and args.get('operation') not in ('view', 'update'):
         return 'unknown profile operation'
+    if name == 'capability_operation':
+        op = args.get('operation')
+        if op not in ('report', 'reproduce', 'add_example', 'list', 'view'):
+            return 'unknown capability operation: use report, reproduce, add_example, list or view'
+        needed = {'report': ('title', 'description'), 'reproduce': ('gap_id',),
+                  'add_example': ('gap_id', 'input', 'expected'), 'view': ('gap_id',)}.get(op, ())
+        if any(not isinstance(args.get(f), str) or not args[f].strip() for f in needed):
+            return 'missing action argument'
     return None
 
 

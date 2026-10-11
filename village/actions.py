@@ -91,6 +91,17 @@ ACTION_SPECS: Dict[str, Dict[str, Any]] = {
     "memory_get": {
         "doc": "id -> fetch one full knowledge-base record by its id (e.g. a kb_id from your notes or a search hit)",
         "properties": {"id": _s(120)}, "required": ["id"]},
+    "capability_operation": {
+        "doc": "operation=report(title,description)|reproduce(gap_id)|add_example(gap_id,input,expected)|list|view(gap_id)"
+               " -> what your base model cannot do yet; becomes its training data",
+        "properties": {
+            "operation": {"enum": ["report", "reproduce", "add_example", "list", "view"]},
+            "title": _s(200), "description": _s(1200), "desired_behavior": _s(800),
+            "role": {"enum": ["planner", "expert", "judge", "any"]}, "request_id": _s(120),
+            "gap_id": _s(40), "note": _s(600), "input": _s(4000), "expected": _s(4000),
+            "check": {"enum": ["exact", "contains", "regex", "json_keys", "manual"]},
+            "status": {"enum": ["open", "confirmed", "spec_ready", "data_ready", "trained", "verified", "rejected"]}},
+        "required": ["operation"]},
     "notes_operation": {
         "doc": "operation=set(focus?,next_step?,next_query?) | add(note,kb_id?,list=entries|commitments) | remove(list,index) "
                "-> your own short notes, shown to you every turn; next_query steers which memories are retrieved for you",
