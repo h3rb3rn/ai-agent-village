@@ -48,7 +48,7 @@ class SnapshotTests(unittest.TestCase):
                         VILLAGE_ROOT=str(self.root), VILLAGE_MAX_OUTPUT_BYTES='4096',
                         VILLAGE_COMMAND_TIMEOUT_SECONDS='2', OLLAMA_NUM_CTX='262144',
                         VILLAGE_POLICY_FILE='/nonexistent', VILLAGE_POLICY_LOCAL_FILE=str(self.root / 'none.json'))
-        for target in ('runtime.calendar_is_workday', 'runtime.gazette_deadline_passed'):
+        for target in ('runtime.calendar_is_planning_day', 'runtime.gazette_deadline_passed'):
             p = patch(target, return_value=False); p.start(); self.addCleanup(p.stop)
         p = patch.object(Resident, 'calendar_pending_gazette_writing_slot', return_value=False)
         p.start(); self.addCleanup(p.stop)

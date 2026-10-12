@@ -128,6 +128,90 @@ class StoreTests(unittest.TestCase):
             self.store.add_example('cap_missing', '02-a', 'm', 'in', 'out', 'exact')
 
 
+
+class KnowledgeFirstTests(unittest.TestCase):
+    """P146: skills are trained, knowledge goes to the knowledge base."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.store = CapabilityStore(Path(self.tmp.name) / 'coordination.sqlite3')
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_research_and_honesty_targets_are_seeded_as_skills(self):
+        gaps = {g['id']: g for g in self.store.list(limit=100)}
+        titles = {g['title'] for g in gaps.values()}
+        for title in ('Retrieve before answering when the fact is not certain',
+                      'Admit a knowledge gap instead of inventing',
+                      'Research missing knowledge, then store it with its source',
+                      'Answer only from the retrieved text and cite it'):
+            self.assertIn(title, titles)
+        self.assertTrue(all(g['kind'] == 'skill' for g in gaps.values()))
+
+    def test_knowledge_gap_points_to_the_knowledge_base_and_takes_no_examples(self):
+        res = self.store.report('02-a', 'qwen3.5:4b', 'Does not know the M10 driver version',
+                                'guessed 470', '', kind='knowledge')
+        self.assertEqual(res['gap']['kind'], 'knowledge')
+        self.assertIn('memory_remember', res['hint'])
+        with self.assertRaises(ValueError) as ctx:
+            self.store.add_example(res['gap_id'], '02-a', 'm', 'driver?', '535', 'exact')
+        self.assertIn('memory_remember', str(ctx.exception))
+        self.store.reproduce(res['gap_id'], '03-b', 'qwen3.5:4b')
+        self.assertEqual(self.store.view(res['gap_id'])['status'], 'confirmed')
+        with self.assertRaises(ValueError):
+            self.store.report('02-a', 'm', 'Some other missing thing', 'd', '', kind='opinion')
+
+    def test_export_never_contains_knowledge(self):
+        import sqlite3
+        skill = self.store.report('02-a', 'm', 'Drops units from constants', 'd', '')['gap_id']
+        fact = self.store.report('02-a', 'm', 'Unknown host name of the lab', 'd', '', kind='knowledge')['gap_id']
+        for i in range(30):
+            self.store.add_example(skill, '02-a', 'm', f'in {i}', f'out {i}', 'exact')
+        with sqlite3.connect(self.store.db_path) as c:  # even if an example slipped in by other means
+            c.execute("INSERT INTO capability_examples (id, gap_id, agent, model, input, expected, check_kind, split, "
+                      "created_at) VALUES ('ex_fact', ?, '02-a', 'm', 'host?', 'n06', 'exact', 'train', 'x')", (fact,))
+        out = Path(self.tmp.name) / 'train.jsonl'
+        self.store.export_examples(out, 'train')
+        gaps = {json.loads(l)['gap'] for l in out.read_text().splitlines()}
+        self.assertEqual(gaps, {'reported:drops_units_from_constants'})
+
+    def test_old_database_is_migrated_with_kind_skill(self):
+        import sqlite3
+        db = Path(self.tmp.name) / 'old.sqlite3'
+        with sqlite3.connect(db) as c:
+            c.execute('''CREATE TABLE capability_gaps(id TEXT PRIMARY KEY, signature TEXT UNIQUE, origin TEXT,
+                role TEXT, title TEXT, description TEXT, desired_behavior TEXT, acceptance TEXT, status TEXT,
+                created_by TEXT, created_at TEXT, updated_at TEXT)''')
+            c.execute("INSERT INTO capability_gaps VALUES ('cap_old','reported:x','reported','any','old gap','d','','','open','a','t','t')")
+            c.execute('''CREATE TABLE capability_examples(id TEXT PRIMARY KEY, gap_id TEXT, agent TEXT, model TEXT,
+                input TEXT, expected TEXT, check_kind TEXT, split TEXT, created_at TEXT)''')
+            c.execute("INSERT INTO capability_examples VALUES ('ex_old','cap_old','a','m','i','o','exact','train','t')")
+        store = CapabilityStore(db)
+        self.assertEqual(store.view('cap_old')['kind'], 'skill')
+        out = Path(self.tmp.name) / 'old.jsonl'
+        store.export_examples(out, 'train')
+        self.assertEqual(json.loads(out.read_text())['source'], 'resident')
+
+    def test_teacher_demonstrations_are_marked_and_exported(self):
+        gap = self.store.list(limit=100)
+        gap_id = next(g['id'] for g in gap if g['title'] == 'Research missing knowledge, then store it with its source')
+        for i in range(40):
+            self.store.add_example(gap_id, '01-king', 'qwen3.6:35b', f'question {i}',
+                                   f'memory_search -> research_request -> memory_remember #{i}', 'contains', source='teacher')
+        out = Path(self.tmp.name) / 'teacher.jsonl'
+        n = self.store.export_examples(out, 'train', gap_id)
+        rows = [json.loads(l) for l in out.read_text().splitlines()]
+        self.assertEqual(len(rows), n)
+        self.assertTrue(rows and all(r['source'] == 'teacher' and r['author_model'] == 'qwen3.6:35b' for r in rows))
+        with self.assertRaises(ValueError):
+            self.store.add_example(gap_id, '01-king', 'm', 'q', 'a', 'exact', source='internet')
+
+    def test_parser_rejects_unknown_kind(self):
+        parsed = decision({'message': {'content': json.dumps({'name': 'capability_operation', 'arguments': {
+            'operation': 'report', 'title': 'a title here', 'description': 'd', 'kind': 'fact'}})}})
+        self.assertIn('skill or knowledge', parsed['fallback_reason'])
+
 class DecisionTests(unittest.TestCase):
     def parse(self, args):
         return decision({'message': {'content': json.dumps({'name': 'capability_operation', 'arguments': args})}})
@@ -149,7 +233,7 @@ class RuntimeTests(unittest.TestCase):
                         VILLAGE_ROOT=str(self.root), VILLAGE_MAX_OUTPUT_BYTES='4096',
                         VILLAGE_COMMAND_TIMEOUT_SECONDS='2', OLLAMA_MODEL='qwen3.5:4b',
                         OLLAMA_URL='http://localhost:1234', AGENT_IDENTITY_PROMPT='/test/identity')
-        for target in ('runtime.calendar_is_workday', 'runtime.gazette_deadline_passed'):
+        for target in ('runtime.calendar_is_planning_day', 'runtime.gazette_deadline_passed'):
             p = patch(target, return_value=False); p.start(); self.addCleanup(p.stop)
         p = patch.object(Resident, 'calendar_pending_gazette_writing_slot', return_value=False)
         p.start(); self.addCleanup(p.stop)
@@ -198,6 +282,21 @@ class RuntimeTests(unittest.TestCase):
             'operation': 'reproduce', 'gap_id': 'cap_nope'}}})
         self.assertFalse(self.agent.state['last_result']['ok'])
         self.assertIn('unknown gap_id', self.agent.state['last_result']['result'])
+
+
+# P148: these tests exercise the waking cycle; keep them independent of the wall-clock dream window.
+_no_dream = None
+
+
+def setUpModule():
+    global _no_dream
+    from web.runtime import Resident as _Resident
+    _no_dream = patch.object(_Resident, 'is_dreaming', lambda self, minute=None: False)
+    _no_dream.start()
+
+
+def tearDownModule():
+    _no_dream.stop()
 
 
 if __name__ == '__main__':

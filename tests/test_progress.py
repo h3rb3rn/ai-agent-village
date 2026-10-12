@@ -260,7 +260,7 @@ class TestWorkProgressAndClaimLoops(unittest.TestCase):
         # same tight default budget as the 'projects' priority this test
         # is actually about.
         with patch.object(agent, "memory", return_value={"items": []}), \
-             patch("web.runtime.calendar_is_workday", return_value=False):
+             patch("web.runtime.calendar_is_planning_day", return_value=False):
             data = json.loads(agent.snapshot())
 
         # Own active task is populated and first in projects list

@@ -19,6 +19,18 @@ Status moves forward only on counted facts:
 open -> confirmed (2 distinct agents or models) -> spec_ready (>= 5 held-out
 examples) -> data_ready (>= 20 train examples); trained/verified/rejected are
 set by later training and evaluation packages.
+
+P146 (operator directive 2026-10-12): MoE-Sovereign models stay as small as possible so they
+run on CPUs and low-VRAM consumer GPUs; everything that can live in infrastructure does.
+Fine-tuning therefore adds *skills*, never *knowledge*: a fact the model lacks belongs in the
+knowledge base, and the skill to train is fetching it instead of inventing it. Every gap is
+either kind=skill (trainable, exported) or kind=knowledge (stored with memory_remember, never
+exported as training data, never advanced beyond confirmed).
+Examples carry their source: 'resident' (written by a village resident) or 'teacher' (a
+demonstration by a larger model, e.g. the King's 35B or a LUMI-G teacher). Small models learn
+skills from large ones by imitating such demonstrations, so a teacher example must show the
+*process* - retrieve, research, call the tool, admit the gap - using the same knowledge base and
+tools, never an answer from the teacher's own weights; otherwise knowledge leaks into training.
 """
 import hashlib
 import json
@@ -29,6 +41,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 ROLES = ('planner', 'expert', 'judge', 'any')
+KINDS = ('skill', 'knowledge')
+SOURCES = ('resident', 'teacher')
 STATUSES = ('open', 'confirmed', 'spec_ready', 'data_ready', 'trained', 'verified', 'rejected')
 CHECK_KINDS = ('exact', 'contains', 'regex', 'json_keys', 'manual')
 HELDOUT_PERCENT = 20
@@ -108,6 +122,46 @@ TARGETS: Dict[str, Dict[str, str]] = {
         acceptance='Share of answers ending with done_reason=length.'),
 }
 
+# P146: knowledge-first skills. Small models must pull what is not in their weights from the
+# knowledge base and the tools instead of hallucinating it.
+TARGETS.update({
+    'target:retrieve_before_answer': dict(
+        role='any', title='Retrieve before answering when the fact is not certain',
+        description='Environment details, project specifics, names, paths and numbers are not in the weights of a '
+                    'small model. It must query the knowledge base or a tool first instead of answering from memory.',
+        desired_behavior='For any fact that is not general knowledge, the first step is a retrieval or tool call; '
+                         'the answer comes after the result, never before.',
+        acceptance='On probes whose answer exists only in the knowledge base (planted nonce facts), the model '
+                   'retrieves before answering and answers correctly.'),
+    'target:grounded_answer': dict(
+        role='expert', title='Answer only from the retrieved text and cite it',
+        description='When retrieved passages are given, the answer may use only them and names their ids.',
+        desired_behavior='Every factual statement is supported by a cited passage id; nothing is added from memory.',
+        acceptance='Share of answer claims supported by the cited passages (faithfulness) on a scored set.'),
+    'target:abstain_when_not_found': dict(
+        role='any', title='Admit a knowledge gap instead of inventing',
+        description='When retrieval returns nothing relevant, the correct answer states that the fact is unknown, '
+                    'not a plausible guess. Admitting the gap is the start of research, not the end of the answer.',
+        desired_behavior='Explicit "I do not know this; it is not in the knowledge base" followed by the next research '
+                         'step; never a fabricated value, path, name or number.',
+        acceptance='On probes with no answer anywhere, abstention rate high and fabrication rate near zero.'),
+    'target:research_missing_knowledge': dict(
+        role='any', title='Research missing knowledge, then store it with its source',
+        description='A gap that can be closed must be researched instead of invented: first the knowledge base, '
+                    'then local tools and commands, then the approved external sources. The finding is stored with '
+                    'its source so the next question is answered by retrieval.',
+        desired_behavior='Order: memory_search -> tool/command -> research_request; record the result with '
+                         'memory_remember including source and uncertainty; answer only from what was found.',
+        acceptance='On probes answerable only by research, the trajectory contains the research step and a stored '
+                   'record with source, and the final answer matches the researched fact.'),
+    'target:query_formulation': dict(
+        role='any', title='Write search queries that find the record, reformulate after a miss',
+        description='Retrieval only helps if the query matches; after an empty result the query must change.',
+        desired_behavior='Queries use the distinctive terms of the question; an empty result leads to a different '
+                         'query or source, never to the same query again.',
+        acceptance='Recall@k of the model-written queries against the reference record on a planted set.'),
+})
+
 # Failure classes the runtime can see in a cycle's own facts (P143 trace record).
 OBSERVED: Dict[str, Dict[str, str]] = {
     'observed:output_budget_exhausted': dict(
@@ -137,7 +191,7 @@ OBSERVED: Dict[str, Dict[str, str]] = {
     'observed:nonexistent_path': dict(
         role='any', title='Used a file path that does not exist',
         description='A command addressed a path the model assumed instead of checked (e.g. /var/var/ai- village).',
-        desired_behavior='Check paths before use; never invent them.'),
+        desired_behavior='Look the path up (ls, find, memory_search) before using it; never assume it.'),
     'observed:permission_boundary': dict(
         role='any', title='Ignored a permission boundary',
         description='A command needed rights the resident does not have (another home, root paths).',
@@ -211,6 +265,12 @@ class CapabilityStore:
             c.execute('''CREATE TABLE IF NOT EXISTS capability_examples(
                 id TEXT PRIMARY KEY, gap_id TEXT, agent TEXT, model TEXT, input TEXT, expected TEXT,
                 check_kind TEXT, split TEXT, created_at TEXT)''')
+            columns = {row[1] for row in c.execute('PRAGMA table_info(capability_gaps)')}
+            if 'kind' not in columns:  # P146 migration
+                c.execute("ALTER TABLE capability_gaps ADD COLUMN kind TEXT NOT NULL DEFAULT 'skill'")
+            columns = {row[1] for row in c.execute('PRAGMA table_info(capability_examples)')}
+            if 'source' not in columns:  # P146 migration
+                c.execute("ALTER TABLE capability_examples ADD COLUMN source TEXT NOT NULL DEFAULT 'resident'")
         self.seed_targets()
 
     def _conn(self):
@@ -224,10 +284,11 @@ class CapabilityStore:
             return row['id']
         gap_id = 'cap_' + hashlib.sha256(signature.encode('utf-8')).hexdigest()[:10]
         now = _now()
-        c.execute('INSERT INTO capability_gaps VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
+        c.execute('INSERT INTO capability_gaps (id, signature, origin, role, title, description, desired_behavior, '
+                  'acceptance, status, created_by, created_at, updated_at, kind) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
                   (gap_id, signature, origin, spec.get('role', 'any'), spec['title'][:200],
                    spec.get('description', '')[:1200], spec.get('desired_behavior', '')[:800],
-                   spec.get('acceptance', '')[:600], 'open', created_by, now, now))
+                   spec.get('acceptance', '')[:600], 'open', created_by, now, now, spec.get('kind', 'skill')))
         return gap_id
 
     def seed_targets(self) -> None:
@@ -253,7 +314,7 @@ class CapabilityStore:
         self._advance(c, gap_id)
 
     def _advance(self, c, gap_id: str) -> None:
-        gap = c.execute('SELECT status FROM capability_gaps WHERE id=?', (gap_id,)).fetchone()
+        gap = c.execute('SELECT status, kind FROM capability_gaps WHERE id=?', (gap_id,)).fetchone()
         if not gap or gap['status'] not in ('open', 'confirmed', 'spec_ready'):
             return
         rows = c.execute('SELECT model, agents FROM capability_counts WHERE gap_id=?', (gap_id,)).fetchall()
@@ -263,9 +324,9 @@ class CapabilityStore:
         status = 'open'
         if len(agents) >= 2 or len(rows) >= 2:
             status = 'confirmed'
-        if heldout >= SPEC_READY_HELDOUT:
+        if gap['kind'] == 'skill' and heldout >= SPEC_READY_HELDOUT:
             status = 'spec_ready'
-        if heldout >= SPEC_READY_HELDOUT and train >= DATA_READY_TRAIN:
+        if gap['kind'] == 'skill' and heldout >= SPEC_READY_HELDOUT and train >= DATA_READY_TRAIN:
             status = 'data_ready'
         c.execute('UPDATE capability_gaps SET status=?, updated_at=? WHERE id=?', (status, _now(), gap_id))
 
@@ -282,18 +343,24 @@ class CapabilityStore:
         return gap_id
 
     def report(self, agent: str, model: str, title: str, description: str, desired_behavior: str,
-               role: str = 'any', request_id: str = '') -> Dict[str, Any]:
+               role: str = 'any', request_id: str = '', kind: str = 'skill') -> Dict[str, Any]:
         title = (title or '').strip()
+        if kind not in KINDS:
+            raise ValueError('kind must be skill (something the model cannot do) or knowledge (a fact it lacks)')
         if len(title) < 8 or not (description or '').strip():
             raise ValueError('capability_operation report needs a title (8+ chars) and a description')
         signature = 'reported:' + _slug(title)
         spec = dict(role=role if role in ROLES else 'any', title=title, description=description,
-                    desired_behavior=desired_behavior or '')
+                    desired_behavior=desired_behavior or '', kind=kind)
         with self._conn() as c:
             existed = c.execute('SELECT id FROM capability_gaps WHERE signature=?', (signature,)).fetchone()
             gap_id = self._ensure_gap(c, signature, spec, 'reported', agent)
             self._record(c, gap_id, agent, model, request_id, 'reproduce' if existed else 'report', description)
-        return dict(gap_id=gap_id, existed=bool(existed), gap=self.view(gap_id))
+        result = dict(gap_id=gap_id, existed=bool(existed), gap=self.view(gap_id))
+        if result['gap']['kind'] == 'knowledge':
+            result['hint'] = ('A missing fact is not trained into the model: store it with memory_remember '
+                              '(scope=shared, with its source) so every resident can retrieve it.')
+        return result
 
     def reproduce(self, gap_id: str, agent: str, model: str, note: str = '', request_id: str = '') -> Dict[str, Any]:
         with self._conn() as c:
@@ -303,22 +370,29 @@ class CapabilityStore:
         return self.view(gap_id)
 
     def add_example(self, gap_id: str, agent: str, model: str, input_text: str, expected: str,
-                    check_kind: str = 'manual') -> Dict[str, Any]:
+                    check_kind: str = 'manual', source: str = 'resident') -> Dict[str, Any]:
         if not (input_text or '').strip() or not (expected or '').strip():
             raise ValueError('add_example needs input and expected')
         if check_kind not in CHECK_KINDS:
             raise ValueError('check must be one of ' + ', '.join(CHECK_KINDS))
+        if source not in SOURCES:
+            raise ValueError('source must be resident or teacher')
         if check_kind == 'regex':
             re.compile(expected)
         example_id = 'ex_' + hashlib.sha256(f'{gap_id}\0{input_text}\0{expected}'.encode('utf-8')).hexdigest()[:12]
         split = example_split(example_id)
         with self._conn() as c:
-            if not c.execute('SELECT 1 FROM capability_gaps WHERE id=?', (gap_id,)).fetchone():
+            gap = c.execute('SELECT kind FROM capability_gaps WHERE id=?', (gap_id,)).fetchone()
+            if not gap:
                 raise ValueError(f'unknown gap_id {gap_id}; use capability_operation list')
+            if gap['kind'] == 'knowledge':
+                raise ValueError('knowledge gaps take no training examples: store the fact with memory_remember '
+                                 '(scope=shared); only skills are trained into the model')
             if c.execute('SELECT 1 FROM capability_examples WHERE id=?', (example_id,)).fetchone():
                 return dict(example_id=example_id, duplicate=True)
-            c.execute('INSERT INTO capability_examples VALUES (?,?,?,?,?,?,?,?,?)',
-                      (example_id, gap_id, agent, model, input_text[:4000], expected[:4000], check_kind, split, _now()))
+            c.execute('INSERT INTO capability_examples (id, gap_id, agent, model, input, expected, check_kind, split, '
+                      'created_at, source) VALUES (?,?,?,?,?,?,?,?,?,?)',
+                      (example_id, gap_id, agent, model, input_text[:4000], expected[:4000], check_kind, split, _now(), source))
             self._advance(c, gap_id)
         # The split is not revealed: an author must not tune examples toward the held-out set.
         return dict(example_id=example_id, duplicate=False)
@@ -333,7 +407,7 @@ class CapabilityStore:
             examples = c.execute('SELECT COUNT(*) FROM capability_examples WHERE gap_id=?', (gap_id,)).fetchone()[0]
             evidence = c.execute('SELECT agent, model, request_id, kind, excerpt FROM capability_evidence '
                                  'WHERE gap_id=? ORDER BY created_at DESC LIMIT 5', (gap_id,)).fetchall()
-        out = {k: gap[k] for k in ('id', 'origin', 'role', 'title', 'description', 'desired_behavior',
+        out = {k: gap[k] for k in ('id', 'origin', 'kind', 'role', 'title', 'description', 'desired_behavior',
                                    'acceptance', 'status')}
         out['by_model'] = [dict(model=r['model'], count=r['count'], agents=len(json.loads(r['agents']))) for r in counts]
         out['examples'] = examples
@@ -343,7 +417,7 @@ class CapabilityStore:
     def list(self, status: Optional[str] = None, role: Optional[str] = None, model: Optional[str] = None,
              limit: int = 20) -> List[Dict[str, Any]]:
         with self._conn() as c:
-            rows = c.execute('SELECT id, origin, role, title, status FROM capability_gaps').fetchall()
+            rows = c.execute('SELECT id, origin, kind, role, title, status FROM capability_gaps').fetchall()
             totals = {r['gap_id']: r for r in c.execute(
                 'SELECT gap_id, SUM(count) AS total, SUM(CASE WHEN model=? THEN count ELSE 0 END) AS mine '
                 'FROM capability_counts GROUP BY gap_id', (model or '',)).fetchall()}
@@ -353,16 +427,17 @@ class CapabilityStore:
             if (status and r['status'] != status) or (role and r['role'] != role):
                 continue
             t = totals.get(r['id'])
-            out.append(dict(id=r['id'], origin=r['origin'], role=r['role'], title=r['title'], status=r['status'],
+            out.append(dict(id=r['id'], origin=r['origin'], kind=r['kind'], role=r['role'], title=r['title'], status=r['status'],
                             observed_total=t['total'] if t else 0, observed_for_model=t['mine'] if t else 0,
                             examples=examples.get(r['id'], 0)))
         out.sort(key=lambda g: (-g['observed_for_model'], -g['observed_total'], g['id']))
         return out[:limit]
 
     def export_examples(self, path: Path, split: str = 'train', gap_id: Optional[str] = None) -> int:
-        """Write examples as JSONL for a later training or evaluation run; returns the count."""
+        """Write examples as JSONL for a later training or evaluation run; returns the count.
+        P146: only skill gaps are exported - knowledge never goes into the weights."""
         query = ('SELECT e.*, g.signature, g.role, g.title, g.desired_behavior FROM capability_examples e '
-                 'JOIN capability_gaps g ON g.id=e.gap_id WHERE e.split=?')
+                 "JOIN capability_gaps g ON g.id=e.gap_id WHERE e.split=? AND g.kind='skill'")
         params: List[Any] = [split]
         if gap_id:
             query += ' AND e.gap_id=?'
@@ -374,6 +449,7 @@ class CapabilityStore:
                 handle.write(json.dumps(dict(schema='village-capability-example/1', gap=r['signature'], role=r['role'],
                                              title=r['title'], desired_behavior=r['desired_behavior'],
                                              input=r['input'], expected=r['expected'], check=r['check_kind'],
-                                             split=r['split'], author=r['agent'], author_model=r['model']),
+                                             split=r['split'], source=r['source'], author=r['agent'],
+                                             author_model=r['model']),
                                         ensure_ascii=False) + '\n')
         return len(rows)

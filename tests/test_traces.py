@@ -82,7 +82,7 @@ class CycleTests(unittest.TestCase):
                         VILLAGE_COMMAND_TIMEOUT_SECONDS='2', OLLAMA_MODEL='qwen3.5:4b',
                         OLLAMA_URL='http://localhost:1234', OLLAMA_THINK_LEVEL='medium',
                         AGENT_IDENTITY_PROMPT='/test/identity', API_TOKEN=SYNTHETIC_TOKEN)
-        for target in ('runtime.calendar_is_workday', 'runtime.gazette_deadline_passed'):
+        for target in ('runtime.calendar_is_planning_day', 'runtime.gazette_deadline_passed'):
             p = patch(target, return_value=False); p.start(); self.addCleanup(p.stop)
         p = patch.object(Resident, 'calendar_pending_gazette_writing_slot', return_value=False)
         p.start(); self.addCleanup(p.stop)
@@ -145,6 +145,21 @@ class CycleTests(unittest.TestCase):
         with patch('runtime.append_trace', side_effect=OSError('disk full')):
             self.run_cycle('{"name":"idle","arguments":{}}')
         self.assertEqual(self.agent.state['last_result']['action'], 'idle')
+
+
+# P148: these tests exercise the waking cycle; keep them independent of the wall-clock dream window.
+_no_dream = None
+
+
+def setUpModule():
+    global _no_dream
+    from web.runtime import Resident as _Resident
+    _no_dream = patch.object(_Resident, 'is_dreaming', lambda self, minute=None: False)
+    _no_dream.start()
+
+
+def tearDownModule():
+    _no_dream.stop()
 
 
 if __name__ == '__main__':

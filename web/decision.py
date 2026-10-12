@@ -10,7 +10,7 @@ import sys
 SUPPORTED_ACTIONS = frozenset({
     'execute_bash', 'start_job', 'job_status', 'cancel_job',
     'board_message', 'task_operation', 'team_operation', 'artifact_operation',
-    'memory_remember', 'memory_search', 'memory_get', 'notes_operation', 'research_request', 'meeting_operation',
+    'memory_remember', 'memory_search', 'memory_get', 'memory_update', 'memory_forget', 'notes_operation', 'research_request', 'meeting_operation',
     'calc_operation', 'research_proposal', 'gazette_operation', 'calendar_operation',
     'finetune_operation', 'profile_operation', 'school_operation', 'capability_operation', 'idle',
 })
@@ -54,6 +54,7 @@ def _validate_action(name, args):
         'calendar_operation': ('operation',), 'finetune_operation': ('operation',),
         'profile_operation': ('operation',), 'notes_operation': ('operation',),
         'memory_get': ('id',), 'capability_operation': ('operation',),
+        'memory_update': ('id',), 'memory_forget': ('id', 'reason'),
     }.get(name, ())
     if any(not isinstance(args.get(field), str) or not args[field].strip() for field in required):
         return 'missing action argument'
@@ -81,6 +82,8 @@ def _validate_action(name, args):
                   'add_example': ('gap_id', 'input', 'expected'), 'view': ('gap_id',)}.get(op, ())
         if any(not isinstance(args.get(f), str) or not args[f].strip() for f in needed):
             return 'missing action argument'
+        if args.get('kind') not in (None, 'skill', 'knowledge'):
+            return 'capability kind must be skill or knowledge'
     return None
 
 

@@ -72,7 +72,9 @@ class PromptBudgetTests(unittest.TestCase):
         # unused for two weeks while the prompt read as "no downloads").
         # 14650->14900 for P144 (capability_operation: residents register what
         # their own base model cannot do yet, as future training data).
-        self.assertLess(len(FULL), 14900)
+        # 14900->15100 for P146 (operator directive: admit knowledge gaps and
+        # research them instead of inventing; facts go to the knowledge base).
+        self.assertLess(len(FULL), 15100)
 
 
 if __name__ == "__main__":

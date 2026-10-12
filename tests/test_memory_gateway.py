@@ -150,6 +150,30 @@ class MemoryGatewayTests(unittest.TestCase):
         gateway.TOKENS_FILE.write_text("{corrupt-json")
         self.assertEqual(self.call("GET", "/v1/memories", token="some-token")[0], 401)
 
+    def test_own_memories_are_paged_oldest_first_for_the_dream_phase(self):
+        """P148: ?mine=1 pages through the caller's own memories with a created_at|id cursor."""
+        gateway.RATE_LIMIT = 100  # setUp pins the write quota to 2
+        for i in range(5):  # same second: the cursor must still not skip any
+            self.call("POST", "/v1/memories", {"content": f"a-note {i}", "scope": "private"}, token="token-a")
+        self.call("POST", "/v1/memories", {"content": "b shared", "scope": "shared"}, token="token-b")
+        seen, cursor = [], ""
+        for _ in range(4):
+            status, page = self.call("GET", f"/v1/memories?mine=1&limit=2&after={cursor}", token="token-a")
+            self.assertEqual(status, 200)
+            self.assertEqual(page["total_own"], 5)
+            if not page["items"]:
+                break
+            self.assertTrue(all(x["agent"] == "a" for x in page["items"]))
+            seen += [x["content"] for x in page["items"]]
+            last = page["items"][-1]
+            cursor = f"{last['created_at']}|{last['id']}"
+        self.assertEqual(sorted(seen), [f"a-note {i}" for i in range(5)])
+        self.assertEqual(len(seen), len(set(seen)))
+        self.assertEqual(self.call("GET", "/v1/memories?mine=1&limit=x", token="token-a")[0], 400)
+        # Without mine=1 the listing is unchanged (own + shared, newest first).
+        status, plain = self.call("GET", "/v1/memories", token="token-a")
+        self.assertIn("b shared", [x["content"] for x in plain["items"]])
+
     def test_crud_operations_update_and_delete(self):
         """Verify GET by id, PATCH update, and DELETE with strict author ownership."""
         # 1. Agent A creates memory

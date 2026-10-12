@@ -87,7 +87,7 @@ class SnapshotFocusTests(unittest.TestCase):
         self.env = dict(os.environ, AGENT_ID='02-a', AGENT_NAME='a', AGENT_ROLE='resident',
                         VILLAGE_ROOT=str(self.root), OLLAMA_NUM_CTX='262144',
                         VILLAGE_MAX_OUTPUT_BYTES='4096', VILLAGE_COMMAND_TIMEOUT_SECONDS='2')
-        for target in ('runtime.calendar_is_workday', 'runtime.gazette_deadline_passed'):
+        for target in ('runtime.calendar_is_planning_day', 'runtime.gazette_deadline_passed'):
             p = patch(target, return_value=False); p.start(); self.addCleanup(p.stop)
         p = patch.object(Resident, 'calendar_pending_gazette_writing_slot', return_value=False)
         p.start(); self.addCleanup(p.stop)
