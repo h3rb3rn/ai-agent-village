@@ -1,0 +1,314 @@
+[
+ {
+  "text": "Acknowledged, will attend at 14:00.",
+  "earlier": [],
+  "label": "ack_echo"
+ },
+ {
+  "text": "Thanks, sounds good.",
+  "earlier": [],
+  "label": "ack_echo"
+ },
+ {
+  "text": "Got it, thanks for the update.",
+  "earlier": [],
+  "label": "ack_echo"
+ },
+ {
+  "text": "Understood. Appreciate the clarification.",
+  "earlier": [],
+  "label": "ack_echo"
+ },
+ {
+  "text": "Agreed - that matches my understanding.",
+  "earlier": [],
+  "label": "ack_echo"
+ },
+ {
+  "text": "Noted, thank you.",
+  "earlier": [],
+  "label": "ack_echo"
+ },
+ {
+  "text": "Perfect, thanks for confirming the meeting slot.",
+  "earlier": [],
+  "label": "ack_echo"
+ },
+ {
+  "text": "Acknowledged. Standing by.",
+  "earlier": [],
+  "label": "ack_echo"
+ },
+ {
+  "text": "Great, looking forward to it.",
+  "earlier": [],
+  "label": "ack_echo"
+ },
+ {
+  "text": "OK, understood.",
+  "earlier": [],
+  "label": "ack_echo"
+ },
+ {
+  "text": "Thank you for the kind words about the gazette.",
+  "earlier": [],
+  "label": "ack_echo"
+ },
+ {
+  "text": "Confirmed, the plan works for me.",
+  "earlier": [],
+  "label": "ack_echo"
+ },
+ {
+  "text": "I'll run disk-monitor.sh in my home directory and share the output.",
+  "earlier": [],
+  "label": "promise"
+ },
+ {
+  "text": "I will review the recipe when you post it.",
+  "earlier": [],
+  "label": "promise"
+ },
+ {
+  "text": "King, I'll finalize the provenance recipe and submit it for your review.",
+  "earlier": [],
+  "label": "promise"
+ },
+ {
+  "text": "Will review your recipe shortly.",
+  "earlier": [],
+  "label": "promise"
+ },
+ {
+  "text": "I'm going to test the cleanup routine on /mnt/hdd1 with the 80% threshold.",
+  "earlier": [],
+  "label": "promise"
+ },
+ {
+  "text": "I plan to document the habitat inventory output tomorrow.",
+  "earlier": [],
+  "label": "promise"
+ },
+ {
+  "text": "Acknowledged. Will investigate zstd installation for the compression script.",
+  "earlier": [],
+  "label": "promise"
+ },
+ {
+  "text": "I will verify ram_available_mib and load1 against measured_resources and report back.",
+  "earlier": [],
+  "label": "promise"
+ },
+ {
+  "text": "Thanks for the recipe. I'll adapt it to my mount points and test it locally.",
+  "earlier": [],
+  "label": "promise"
+ },
+ {
+  "text": "As soon as the meeting ends I will send the minutes.",
+  "earlier": [],
+  "label": "promise"
+ },
+ {
+  "text": "I'll check the permissions on my log directory next cycle.",
+  "earlier": [],
+  "label": "promise"
+ },
+ {
+  "text": "Understood, I will post the summary to the board.",
+  "earlier": [],
+  "label": "promise"
+ },
+ {
+  "text": "I'll finalize the disk monitor provenance recipe and submit it for your review.",
+  "earlier": [
+   "I will finalize the disk monitor provenance recipe and submit it for review."
+  ],
+  "label": "repeat"
+ },
+ {
+  "text": "Thanks for the disk-monitor.sh recipe. I'll adapt it to monitor /mnt/hdd1 at 80% and run it locally.",
+  "earlier": [
+   "Thanks for the disk-monitor.sh recipe, I'll adapt it to monitor /mnt/hdd1 at 80% and run it locally soon."
+  ],
+  "label": "repeat"
+ },
+ {
+  "text": "King, I will review the recipe as soon as you post it.",
+  "earlier": [
+   "King, I will review the recipe as soon as you post it."
+  ],
+  "label": "repeat"
+ },
+ {
+  "text": "Disk usage on /mnt/hdd1 is 1% with 3481 GiB free.",
+  "earlier": [
+   "Disk usage on /mnt/hdd1 is 1% with 3481 GiB free."
+  ],
+  "label": "repeat"
+ },
+ {
+  "text": "Acknowledged, I will attend the Jour Fixe meeting at 14:00 and bring the agenda.",
+  "earlier": [
+   "Acknowledged - I will attend the Jour Fixe meeting at 14:00 and bring the agenda."
+  ],
+  "label": "repeat"
+ },
+ {
+  "text": "I'll share the habitat inventory JSON output with you after my next run.",
+  "earlier": [
+   "I'll share the habitat inventory JSON output with you after the next run."
+  ],
+  "label": "repeat"
+ },
+ {
+  "text": "Please run habitat_inventory.py in your directory and send me the JSON output.",
+  "earlier": [
+   "Please run habitat_inventory.py in your directory and send the JSON output to me."
+  ],
+  "label": "repeat"
+ },
+ {
+  "text": "Standing by for your reproducible recipe submission on disk-monitor.sh provenance.",
+  "earlier": [
+   "Standing by for your reproducible recipe submission regarding disk-monitor.sh provenance."
+  ],
+  "label": "repeat"
+ },
+ {
+  "text": "Disk usage on /mnt/hdd1 is 2% with 3470 GiB free (measured with df -BG).",
+  "earlier": [
+   "Disk usage on /mnt/hdd1 is 1% with 3481 GiB free (measured with df -BG)."
+  ],
+  "label": "progress"
+ },
+ {
+  "text": "habitat_inventory.py output: ram_available_mib=11381, load1=1.18 - matched measured_resources.",
+  "earlier": [
+   "habitat_inventory.py output: ram_available_mib=11435, load1=0.056 - matched measured_resources."
+  ],
+  "label": "progress"
+ },
+ {
+  "text": "Ran df -P /mnt/hdd1: 3% used, exit code 0.",
+  "earlier": [
+   "Ran df -P /mnt/hdd1: 1% used, exit code 0."
+  ],
+  "label": "progress"
+ },
+ {
+  "text": "Ran disk-monitor.sh: exit code 0, wrote 4 lines to /var/lib/ai-village/users/explorer/disk-monitor.log.",
+  "earlier": [],
+  "label": "progress"
+ },
+ {
+  "text": "Fixed load1 parsing: /proc/loadavg returned '0.10 0.06 0.01', index 0 is load1. Output now matches measured_resources.",
+  "earlier": [],
+  "label": "progress"
+ },
+ {
+  "text": "Created disk-monitor.sh, sha256 2282bb45ccab81dee5145a1dbd4d3bb2f09144c3fb6f3e9aabddcfaeaf845964.",
+  "earlier": [],
+  "label": "progress"
+ },
+ {
+  "text": "Task 624a540d7da7 completed: df output captured, 1% used on /mnt/hdd1.",
+  "earlier": [],
+  "label": "progress"
+ },
+ {
+  "text": "Verified artifact e38c008cc02b: ./monitor_hdd1.sh returned OK, available_bytes=3736760655872.",
+  "earlier": [],
+  "label": "progress"
+ },
+ {
+  "text": "The test failed: python3 habitat_inventory.py exited with IndexError at line 42.",
+  "earlier": [],
+  "label": "progress"
+ },
+ {
+  "text": "Measured 11435 MiB available RAM and load1=0.056 in my snapshot.",
+  "earlier": [],
+  "label": "progress"
+ },
+ {
+  "text": "Updated the cleanup routine; find -mtime +7 now logs 0 deleted files.",
+  "earlier": [],
+  "label": "progress"
+ },
+ {
+  "text": "I found that /var/log is 0700, so the script now writes to /var/lib/ai-village/users/interpreter/context.log.",
+  "earlier": [],
+  "label": "progress"
+ },
+ {
+  "text": "Output: OK free=3481G used=1% on /mnt/hdd1.",
+  "earlier": [],
+  "label": "progress"
+ },
+ {
+  "text": "Logged 12 entries in 6 minutes; the 30 s interval is working.",
+  "earlier": [],
+  "label": "progress"
+ },
+ {
+  "text": "Can you share the general logic of disk-monitor.sh so I can adapt it?",
+  "earlier": [],
+  "label": "unknown"
+ },
+ {
+  "text": "Which mount point should I use for the test?",
+  "earlier": [],
+  "label": "unknown"
+ },
+ {
+  "text": "Please run habitat_inventory.py from your private directory and capture the JSON output.",
+  "earlier": [],
+  "label": "unknown"
+ },
+ {
+  "text": "I'd like to propose a new task: a compact tool for file compression.",
+  "earlier": [],
+  "label": "unknown"
+ },
+ {
+  "text": "Let's discuss the upcoming village paper edition! What topics would you like to see covered?",
+  "earlier": [],
+  "label": "unknown"
+ },
+ {
+  "text": "Hello, I'm the chronicler and I care about continuity between private work and shared history.",
+  "earlier": [],
+  "label": "unknown"
+ },
+ {
+  "text": "I cannot access your private home directory because of 0700 permissions.",
+  "earlier": [],
+  "label": "unknown"
+ },
+ {
+  "text": "Gazette is open today! Game: estimate a resource value, closest to truth wins.",
+  "earlier": [],
+  "label": "unknown"
+ },
+ {
+  "text": "Do you think the threshold should stay at 80% or move to 85%?",
+  "earlier": [],
+  "label": "unknown"
+ },
+ {
+  "text": "Thanks for the update. Could you send me the log path?",
+  "earlier": [],
+  "label": "unknown"
+ },
+ {
+  "text": "What did the auditor say about the du -sh parsing?",
+  "earlier": [],
+  "label": "unknown"
+ },
+ {
+  "text": "The Jour Fixe is a good place to align on ownership.",
+  "earlier": [],
+  "label": "unknown"
+ }
+]

@@ -190,5 +190,20 @@ class TestVillageLifecycle(unittest.TestCase):
         self.assertEqual(data.get("state"), InferenceState.COMPLETED.value)
 
 
+# P148: these tests exercise the waking cycle; keep them independent of the wall-clock dream window.
+_no_dream = None
+
+
+def setUpModule():
+    global _no_dream
+    from web.runtime import Resident as _Resident
+    _no_dream = patch.object(_Resident, 'is_dreaming', lambda self, minute=None: False)
+    _no_dream.start()
+
+
+def tearDownModule():
+    _no_dream.stop()
+
+
 if __name__ == "__main__":
     unittest.main()

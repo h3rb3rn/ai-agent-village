@@ -104,18 +104,19 @@ class BoardDirectMessageTransparencyTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         return result.stdout.strip()
 
-    def test_direct_message_count_is_shown_without_content(self):
+    def test_direct_message_count_points_to_the_full_text_view(self):
         events = """[
           {"event":"board_message","agent":"01-king","timestamp":"2026-01-01T10:00:00Z","detail":"message=Alpha topic."},
           {"event":"direct_message","agent":"02-explorer","timestamp":"2026-01-01T10:05:00Z","detail":"to=03-x; chars=40"},
           {"event":"direct_message","agent":"02-explorer","timestamp":"2026-01-01T10:06:00Z","detail":"to=03-x; chars=20"}
         ]"""
         info = self.render_info(events)
-        self.assertIn("+2 private direct conversations", info)
+        # P150: the full text is in the Conversations view, the board only counts.
+        self.assertIn("+2 direct messages, full text under Conversations", info)
         self.assertNotIn("chars=", info)
 
     def test_no_direct_messages_omits_the_clause_entirely(self):
         events = """[{"event":"board_message","agent":"01-king","timestamp":"2026-01-01T10:00:00Z","detail":"message=Alpha topic."}]"""
         info = self.render_info(events)
-        self.assertNotIn("private direct conversations", info)
+        self.assertNotIn("direct messages", info)
         self.assertNotIn("+0", info)

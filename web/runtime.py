@@ -36,6 +36,14 @@ from decision import decision, final_content
 from village.control import is_paused, read_pause_metadata
 from village.notes import (load_notes, save_notes, apply_operation as apply_notes_operation,
                           retrieval_query as notes_retrieval_query, is_empty as notes_empty)
+from village.focus import choose_mode as choose_cycle_mode, focus_context
+from village.capabilities import CapabilityStore
+from village.dreaming import (DREAM_ACTIONS, DREAM_ONLY_ACTIONS, DREAM_BATCH, DREAM_INSTRUCTIONS, DREAM_MINUTES_DEFAULT,
+                              default_window as default_dream_window, planned_window as planned_dream_window,
+                              in_window as in_dream_window, minute_of_day, duplicate_pairs, cursor_of as dream_cursor_of,
+                              trace_summary, archive_forgotten)
+from village.sharing import share_group_readable
+from village.traces import append_trace, build_record as build_trace_record, store_system_prompt, TRACE_MAX_MB_DEFAULT
 from village.coordinator import CoordinationStore
 from village.inference import (
     build_ollama_request,
@@ -60,7 +68,7 @@ from village.gazette import today as gazette_today
 from village.gazette import REVIEWER_AGENT as GAZETTE_REVIEWER
 from village.gazette import game_participants
 from village.calendar import today as calendar_today
-from village.calendar import is_workday as calendar_is_workday
+from village.calendar import is_planning_day as calendar_is_planning_day
 from village.calendar import shift_date as calendar_shift_date
 from village.calendar import WEEK_HORIZON_DAYS as CALENDAR_WEEK_HORIZON_DAYS
 from village.gazette_pdf import render_edition_pdf
@@ -169,8 +177,7 @@ GAZETTE_GAME_WINNER_CEILING = 10
 # obligation above - "verpflichtend" (mandatory) means it needs the same
 # real enforcement, not just a hint that competes with ongoing work and
 # loses (the documented failure mode this whole session, P48/P52/P73).
-# Only Mon-Fri (see calendar_is_workday) - weekends are the agent's own
-# free choice per the same directive, never an obligation.
+# P147: every day is a planning day (calendar_is_planning_day), weekends included.
 CALENDAR_PLAN_CEILING = 10
 
 # P81 (operator directive, 2026-09-30): "Zielvorgabe fuer die Agents ist,
@@ -276,6 +283,14 @@ def invalid_decision_guidance(reason, preview):
         return ('job_status, cancel_job and start_job are their own top-level actions, not '
                 'task_operation sub-actions. Use {"name":"job_status","arguments":{"job_id":"..."}} '
                 'directly instead of wrapping it inside task_operation.')
+    if reason == 'action or code outside a village-action block':
+        # P152: the answer began with a code block or an action name but had no
+        # village-action block, so nothing ran and nothing was posted.
+        return ('Your answer looked like an action or a script, but it was not inside a village-action '
+                'block, so nothing ran and nothing was posted. To run a shell command use exactly: '
+                '```village-action\n{"name":"execute_bash","arguments":{"command":"..."}}\n``` '
+                '- for any other action put {"name":"...","arguments":{...}} in the same block. '
+                'Do not paste scripts or action names as a message.')
     if reason == 'missing action argument':
         return ('A required argument was empty or missing. Check every field the action needs '
                 'and provide all of them as non-empty values.')
@@ -344,8 +359,10 @@ def topic_saturation(tasks, limit=5):
             continue
         words = set(re.findall(r'[a-z][a-z0-9_.-]{3,}', str(task.get('title', '')).lower()))
         counts.update(w.strip('.-_') for w in words if w not in SATURATION_STOPWORDS)
-    return [dict(topic=w, finished_or_abandoned_tasks=n)
-            for w, n in counts.most_common(limit) if n >= SATURATION_MIN_TASKS]
+    # P143: ties are broken alphabetically. most_common() kept insertion order, which came
+    # from iterating a set - so the order changed with each process's hash seed.
+    ranked = sorted(counts.items(), key=lambda item: (-item[1], item[0]))[:limit]
+    return [dict(topic=w, finished_or_abandoned_tasks=n) for w, n in ranked if n >= SATURATION_MIN_TASKS]
 
 
 # P135: Ollama can only reuse its KV cache for an identical prompt PREFIX.
@@ -561,6 +578,8 @@ class Resident:
         # tracking, evaluation, swap requests) - training itself runs via
         # the existing start_job mechanism.
         self.finetune = FinetuneStore(self.board / 'coordination.sqlite3')
+        # P144: register of missing model capabilities, prepared for later training.
+        self.capabilities = CapabilityStore(self.board / 'coordination.sqlite3')
         # P91: resident profile store - agents author their own profiles and ASCII art.
         self.residents = ResidentStore(self.board / 'coordination.sqlite3')
         # P12: SQLite-backed manager for persistent background tool jobs with crash reconciliation
@@ -609,14 +628,15 @@ class Resident:
                 self.state['recent_actions'] = recent
         write_json(self.path, self.state)
 
-    def memory(self, endpoint, value=None):
-        """POST value to the memory gateway, or GET endpoint when value is None (P125)."""
+    def memory(self, endpoint, value=None, method=None):
+        """POST value to the memory gateway, or GET endpoint when value is None (P125).
+        P148: method='PATCH'/'DELETE' for the dream phase's update and forget."""
         url = self.env.get('MEMORY_GATEWAY_URL', 'http://127.0.0.1:8090')
         token = self.env.get('MEMORY_AGENT_TOKEN', '')
         if not token:
             raise ValueError('Memory credential missing from service environment; this is configuration, not host memory pressure')
         data = None if value is None else json.dumps(value).encode()
-        request = urllib.request.Request(url+endpoint, data=data,
+        request = urllib.request.Request(url+endpoint, data=data, method=method,
                   headers={'Authorization': 'Bearer '+token, 'Content-Type': 'application/json'})
         with urllib.request.urlopen(request, timeout=10) as response:
             return json.load(response)
@@ -841,7 +861,7 @@ class Resident:
         the operator's own directive makes them the agent's free choice,
         never an obligation ("koennen die Agents sich frei entscheiden")."""
         today_str = calendar_today()
-        if not calendar_is_workday(today_str):
+        if not calendar_is_planning_day(today_str):
             return False
         return not self.calendar.has_touched_today(self.id, today_str)
 
@@ -867,7 +887,7 @@ class Resident:
         today_str = today_str or calendar_today()
         for offset in range(CALENDAR_WEEK_HORIZON_DAYS):
             day = calendar_shift_date(today_str, offset)
-            if not calendar_is_workday(day):
+            if not calendar_is_planning_day(day):
                 continue
             gaps = self.calendar.day_gaps(self.id, day)
             if gaps:
@@ -878,11 +898,9 @@ class Resident:
         """Concrete, named gap (not just 'plan more') for snapshot(): the
         exact day and time range still uncovered, so the resident acts on
         real information instead of guessing what 'no gaps' even means."""
-        # P126: asking every resident each turn to fill 09:00-17:00 for the
-        # whole week is busywork, not development - shown only when the
-        # operator made full-week planning a hard obligation.
-        if not self.obligation_is_hard('calendar_week_plan'):
-            return ''
+        # P126 hid this unless full-week planning was a hard obligation. P147 (operator:
+        # "Ich erwarte einen vollen Kalender der alle 24h/Tag ausplant"): shown again, as its
+        # own advisory snapshot field (calendar_week_gaps) that never blocks a focus cycle.
         pending = self.calendar_pending_week_gaps(today_str)
         if not pending:
             return ''
@@ -891,9 +909,9 @@ class Resident:
         return (
             f"Your week is not fully planned: {day} has an open stretch from "
             f"{gap_start // 60:02d}:{gap_start % 60:02d} to {gap_end // 60:02d}:{gap_end % 60:02d} "
-            "(09:00-17:00 work window). Fill it with calendar_operation create - any kind fits "
-            "(focus/meeting/personal/reflection/standup/jourfixe); recurring entries cover future "
-            "days automatically once set up."
+            "(you plan all 24 hours, every day). Fill it with calendar_operation create - any kind "
+            "fits (focus/meeting/personal/reflection/dream/standup/jourfixe); recurrence=daily covers "
+            "future days automatically once set up."
         )
 
     def calendar_daily_note(self):
@@ -904,11 +922,11 @@ class Resident:
         kuemmern" made specific and actionable rather than generic."""
         parts = []
         today_str = calendar_today()
-        if calendar_is_workday(today_str) and self.calendar_pending_daily_plan():
+        if calendar_is_planning_day(today_str) and self.calendar_pending_daily_plan():
             parts.append(
                 "You have not touched your calendar today. Use calendar_operation create for today's "
-                "slots (kind=focus/standup/jourfixe, recurrence=daily_weekday/weekly if recurring); "
-                "reschedule/cancel anything that changed."
+                "slots across all 24 hours (kind=focus/standup/jourfixe/dream, recurrence=daily if "
+                "recurring); reschedule/cancel anything that changed."
             )
         pending_invites = self.calendar.pending_invites(self.id, limit=5)
         if pending_invites:
@@ -928,9 +946,6 @@ class Resident:
         sync_hint = self.calendar_meeting_sync_hint(today_str)
         if sync_hint:
             parts.append(sync_hint)
-        gap_hint = self.calendar_week_gap_hint(today_str)
-        if gap_hint:
-            parts.append(gap_hint)
         return " ".join(parts)
 
     def calendar_meeting_sync_hint(self, today_str):
@@ -1387,6 +1402,10 @@ class Resident:
         today_events = self.calendar.list_for_agent(self.id, calendar_today(), calendar_today())
         if today_events:
             context['calendar_today_untrusted'] = today_events
+        # P147: open stretches of the 24h plan, advisory and part of the overview (not urgent).
+        week_gaps = self.calendar_week_gap_hint(calendar_today())
+        if week_gaps:
+            context['calendar_week_gaps'] = week_gaps
         note = self.calendar_daily_note()
         if note:
             context['calendar_daily_note'] = note
@@ -1450,6 +1469,17 @@ class Resident:
         # P125: the resident's own notes are always shown and steer retrieval.
         notes = load_notes(self.home)
         context['your_notes'] = notes
+        # P144: the largest capability gaps measured for this resident's own model.
+        try:
+            own_model = self.env.get('OLLAMA_MODEL', '')
+            gaps = [g for g in self.capabilities.list(model=own_model, limit=5) if g['observed_for_model']][:3]
+            if gaps:
+                context['your_model_gaps'] = dict(model=own_model, gaps=gaps, hint=(
+                    'Measured failure classes of your own base model. Report skills it lacks, reproduce peers\' gaps '
+                    'and add checkable examples with capability_operation; they become its training data. A missing '
+                    'fact is not a skill: research it and store it with memory_remember.'))
+        except Exception:  # noqa: BLE001 - the register must never stop a snapshot
+            pass
         if notes_empty(notes):
             context['notes_hint'] = ('Your notes are empty. They are your memory between turns: use notes_operation set '
                                      'focus/next_step/next_query, and add short entries with the kb_id of knowledge-base '
@@ -1487,6 +1517,11 @@ class Resident:
         # P124: last_action_feedback is already bounded head+tail by feedback();
         # a second tail-only cut here used to discard the best-ranked memory
         # hits and the start of every structured result.
+        # P136: focus cycles drop the village-wide overview while nothing urgent waits; the
+        # system prompt stays byte-identical, so only the snapshot shrinks.
+        self.current_cycle_mode = choose_cycle_mode(context, notes, self.state, self.env, self.id)
+        if self.current_cycle_mode == 'focus':
+            context = focus_context(context, self.id)
         if self.policy.prompt_profile == 'compact':
             context = compact_context(context)
         context = order_for_prefix_cache(context)
@@ -1544,6 +1579,111 @@ class Resident:
             except sqlite3.Error as exc:
                 self.event('inbox_delivery_error', f'{type(exc).__name__}: {exc}', True)
         return json.dumps(context, ensure_ascii=False)
+
+    def dream_window(self):
+        """P148: today's dream window (start, end) in minutes UTC, or None when switched off."""
+        if self.env.get('VILLAGE_DREAM', '1') == '0':
+            return None
+        today_str = calendar_today()
+        try:
+            planned = planned_dream_window(self.calendar.list_for_agent(self.id, today_str, today_str))
+        except sqlite3.Error:
+            planned = None
+        return planned or default_dream_window(self.id, int(self.env.get('VILLAGE_DREAM_MINUTES', DREAM_MINUTES_DEFAULT)))
+
+    def is_dreaming(self, minute=None):
+        window = self.dream_window()
+        if not window or not in_dream_window(minute_of_day() if minute is None else minute, window):
+            return False
+        # An open meeting this resident has not reported to yet takes precedence.
+        return not any(not self.meetings.has_report(m['id'], self.id) for m in self.meetings.active())
+
+    def dream_snapshot(self):
+        """P148: the dream context - own memories in batches, today's failures, notes. Nothing is
+        delivered or acknowledged while dreaming: messages wait for the next waking cycle."""
+        self.pending_cursor = self.state.get('seen_board_epoch', 0)
+        self.pending_organic_cursor = self.state.get('seen_organic_epoch', 0)
+        self.delivered_inbox_ids = []
+        self.current_cycle_mode = 'dream'
+        self.state.pop('focus_streak', None)  # wake up with a full overview
+        turns = int(self.state.get('dream_turns', 0))
+        last = self.state.get('last_result') or {}
+        # A batch stays for up to three turns (merging takes update + forget) or until the
+        # resident idles because nothing in it needs a change.
+        if turns >= 3 or (turns > 0 and last.get('action') == 'idle'):
+            self.state['dream_cursor'] = self.state.get('dream_next_cursor', '')
+            turns = 0
+        context = dict(runtime=VERSION, identity=self.id, cycle_mode='dream')
+        start, end = self.dream_window() or (0, 0)
+        context['dream_window_utc'] = f'{start // 60 % 24:02d}:{start % 60:02d}-{end // 60 % 24:02d}:{end % 60:02d}'
+        context['dream_instructions'] = DREAM_INSTRUCTIONS
+        context['dream_actions'] = {name: ACTION_SPECS[name]['doc'] for name in DREAM_ACTIONS if name in ACTION_SPECS}
+        context['your_notes'] = load_notes(self.home)
+        try:
+            cursor = self.state.get('dream_cursor', '')
+            page = self.memory(f'/v1/memories?mine=1&limit={DREAM_BATCH}&after=' + urllib.parse.quote(cursor, safe=''))
+            if not page.get('items') and cursor:  # reached the end: start over next time
+                self.state['dream_cursor'] = cursor = ''
+                page = self.memory(f'/v1/memories?mine=1&limit={DREAM_BATCH}')
+            items = page.get('items', [])
+            batch = [dict(id=x.get('id'), kind=x.get('kind'), scope=x.get('scope'), confidence=x.get('confidence'),
+                          created_at=x.get('created_at'), content=str(x.get('content', ''))[:600]) for x in items]
+            context['memories_to_review'] = batch
+            context['merge_candidates'] = duplicate_pairs(batch)
+            context['own_memories_total'] = page.get('total_own')
+            if items:
+                self.state['dream_next_cursor'] = dream_cursor_of(items[-1])
+        except (OSError, ValueError) as exc:
+            context['memory_status'] = f'Knowledge base unavailable: {exc}; tidy your notes instead'
+        context['todays_cycles'] = trace_summary(self.home, calendar_today())
+        try:
+            gaps = [g for g in self.capabilities.list(model=self.env.get('OLLAMA_MODEL', ''), limit=5)
+                    if g['observed_for_model']][:3]
+            if gaps:
+                context['your_model_gaps'] = gaps
+        except Exception:  # noqa: BLE001 - the register must never stop a dream
+            pass
+        context['last_action_feedback'] = self.state.get('last_result')
+        self.state['dream_turns'] = turns + 1
+        return json.dumps(context, ensure_ascii=False)
+
+    def archive_trace(self, request_id, messages, norm, parsed, last_result, executed):
+        """P143: append this cycle to the resident's private training-trace archive.
+        P144: the same record feeds the capability-gap register (failure classes per model)."""
+        archive = self.env.get('VILLAGE_TRACE_ARCHIVE', '1') != '0'
+        try:
+            message = (norm.raw_response or {}).get('message') or {}
+            system_text = self.redact(messages[0]['content'])
+            system_sha = store_system_prompt(self.home, system_text) if archive else \
+                hashlib.sha256(system_text.encode('utf-8')).hexdigest()[:16]
+            record = build_trace_record(
+                agent=self.id, model=self.env.get('OLLAMA_MODEL', ''),
+                think_level=self.env.get('OLLAMA_THINK_LEVEL', 'off'), num_ctx=self.env.get('OLLAMA_NUM_CTX'),
+                cycle_mode=getattr(self, 'current_cycle_mode', 'full'), request_id=request_id,
+                system_sha=system_sha, user=self.redact(messages[1]['content']),
+                output=self.redact(final_content(norm.content)), thinking=self.redact(str(message.get('thinking') or '')),
+                parsed=parsed, last_result=last_result, executed=executed, metrics=norm.metrics, timestamp=now())
+            if archive:
+                append_trace(self.home, record, int(self.env.get('VILLAGE_TRACE_MAX_MB', TRACE_MAX_MB_DEFAULT)))
+        except Exception as exc:  # noqa: BLE001 - the archive must never stop a cycle
+            self.event('trace_archive_failed', str(exc)[:300], True)
+            return
+        try:
+            self.capabilities.observe(record)
+        except Exception as exc:  # noqa: BLE001 - the register must never stop a cycle
+            self.event('capability_observe_failed', str(exc)[:300], True)
+
+    def share_own_files(self):
+        """P149: own files in the shared area become group-readable despite the runtime's umask 077."""
+        if self.env.get('VILLAGE_SHARE_SWEEP', '1') == '0':
+            return
+        try:
+            counts = share_group_readable(self.root)
+        except Exception as exc:  # noqa: BLE001 - the sweep must never stop a cycle
+            self.event('share_sweep_failed', str(exc)[:300], True)
+            return
+        if counts['fixed']:
+            self.event('shared_files_readable', f"fixed={counts['fixed']} scanned={counts['scanned']}")
 
     def auto_record(self, summary, key_material):
         """Runtime-authored, clearly labelled observation. It never counts as an agent action
@@ -1645,6 +1785,11 @@ class Resident:
         if 'meeting_operation' in allowed and not any(
                 not self.meetings.has_report(m['id'], self.id) for m in self.meetings.active()):
             allowed = [x for x in allowed if x != 'meeting_operation']
+        # P148: while dreaming only memory work; memory_update/memory_forget exist only then.
+        if getattr(self, '_dreaming', False):
+            allowed = [x for x in allowed if x in DREAM_ACTIONS]
+        else:
+            allowed = [x for x in allowed if x not in DREAM_ONLY_ACTIONS]
         return allowed
 
     def _loop_breaker_active(self):
@@ -2488,6 +2633,33 @@ class Resident:
                     raise ValueError(f'memory {mem_id} not available (HTTP {exc.code})') from exc
                 self.event('memory_result', f'result=success; action=memory_get; id={mem_id}; scope={result.get("scope", "")}; matches=1')
                 self.feedback(name, json.dumps(result, ensure_ascii=False), True)
+            elif name in DREAM_ONLY_ACTIONS:
+                # P148: tidying the own knowledge base, only in the dream phase.
+                if not getattr(self, '_dreaming', False):
+                    raise ValueError(f'{name} is only available during your dream phase')
+                mem_id = str(args.get('id', '')).strip()
+                if not re.fullmatch(r'[A-Za-z0-9_.:-]{1,120}', mem_id):
+                    raise ValueError('id must be a knowledge-base record id (letters, digits, _ . : -)')
+                path = '/v1/memories/' + urllib.parse.quote(mem_id, safe='')
+                try:
+                    record = self.memory(path)
+                except urllib.error.HTTPError as exc:
+                    raise ValueError(f'memory {mem_id} not available (HTTP {exc.code})') from exc
+                if record.get('agent') != self.id:
+                    raise ValueError('you can only change or forget your own memories')
+                if name == 'memory_update':
+                    value = {k: args[k] for k in ('content', 'confidence') if k in args}
+                    if not value:
+                        raise ValueError('memory_update needs content and/or confidence')
+                    result = self.memory(path, value, method='PATCH')
+                else:
+                    reason = str(args.get('reason', '')).strip()
+                    if not reason:
+                        raise ValueError('memory_forget needs a reason')
+                    archive_forgotten(self.home, record, self.redact(reason)[:300], now())
+                    result = self.memory(path, method='DELETE')
+                self.event('dream_memory', f'action={name}; id={mem_id}')
+                self.feedback(name, json.dumps(result, ensure_ascii=False)[:4000], True)
             elif name == 'notes_operation':
                 notes, summary = apply_notes_operation(load_notes(self.home), args)
                 save_notes(self.home, notes)
@@ -2496,6 +2668,26 @@ class Resident:
             elif name == 'research_request':
                 result = self.research.search(args.get('source'), args.get('query'), args.get('limit', 5))
                 self.event('research_result', json.dumps({k: result.get(k) for k in ('source', 'query', 'sha256', 'results')}, ensure_ascii=False))
+                self.feedback(name, json.dumps(result, ensure_ascii=False), True)
+            elif name == 'capability_operation':
+                # P144: residents register what their own model cannot do yet.
+                op = args.get('operation')
+                model = self.env.get('OLLAMA_MODEL', '')
+                store = self.capabilities
+                if op == 'report':
+                    result = store.report(self.id, model, args.get('title', ''), args.get('description', ''),
+                                          args.get('desired_behavior', ''), args.get('role', 'any'), args.get('request_id', ''),
+                                          args.get('kind', 'skill'))
+                elif op == 'reproduce':
+                    result = store.reproduce(args.get('gap_id', ''), self.id, model, args.get('note', ''), args.get('request_id', ''))
+                elif op == 'add_example':
+                    result = store.add_example(args.get('gap_id', ''), self.id, model, args.get('input', ''),
+                                               args.get('expected', ''), args.get('check', 'manual'))
+                elif op == 'view':
+                    result = store.view(args.get('gap_id', ''))
+                else:
+                    result = store.list(args.get('status'), args.get('role'), model)
+                self.event('capability_result', json.dumps({'operation': op, 'gap_id': args.get('gap_id')}, ensure_ascii=False))
                 self.feedback(name, json.dumps(result, ensure_ascii=False), True)
             elif name == 'calc_operation':
                 tool = args.get('tool')
@@ -3098,7 +3290,14 @@ class Resident:
             except Exception as exc:  # noqa: BLE001 - a gazette failure must not stop the King's cycle
                 self.event('gazette_open_failed', str(exc)[:300])
 
-        snapshot = self.snapshot()
+        # P148: once a day each resident dreams instead of working.
+        dreaming = self.is_dreaming()
+        if dreaming != bool(self.state.get('dreaming')):
+            self.event('dream_started' if dreaming else 'dream_ended', f'window={self.dream_window()}', True)
+            self.state['dreaming'] = dreaming
+            self.state['dream_turns'] = 0
+        self._dreaming = dreaming
+        snapshot = self.dream_snapshot() if dreaming else self.snapshot()
         identity = Path(self.env['AGENT_IDENTITY_PROMPT']).read_text()
         compact = self.policy.prompt_profile == 'compact'
         share = self.env.get('VILLAGE_SHARE_DIR', '/usr/local/share/ai-village')
@@ -3132,7 +3331,7 @@ class Resident:
             generation=self.generation,
         )
         self.tracker.start_request(req_record.request_id)
-        self.event('inference_started', f'request_id={req_record.request_id} generation={self.generation} provider={api_type} model={self.env["OLLAMA_MODEL"]} context={self.env.get("OLLAMA_NUM_CTX")}', True)
+        self.event('inference_started', f'request_id={req_record.request_id} generation={self.generation} provider={api_type} model={self.env["OLLAMA_MODEL"]} context={self.env.get("OLLAMA_NUM_CTX")} mode={getattr(self, "current_cycle_mode", "full")}', True)
         if api_type == 'openai':
             request = build_openai_request(
                 url=self.env['OLLAMA_URL'],
@@ -3206,10 +3405,19 @@ class Resident:
                 self.state['last_error_category'] = None
 
             # P06: Atomically authorize execution against active generation and duplicate run prevention
-            if self.tracker.mark_action_executed(req_record.request_id, self.generation):
+            previous_result = self.state.get('last_result')
+            executed = self.tracker.mark_action_executed(req_record.request_id, self.generation)
+            if executed:
                 self.execute(parsed)
             else:
                 self.event('action_discarded', f'request_id={req_record.request_id} execution denied: generation mismatch or duplicate execution', True)
+            # P143: keep this cycle as training material. feedback() always stores a new
+            # dict, so an unchanged object means execute() produced no result of its own.
+            current_result = self.state.get('last_result')
+            self.archive_trace(req_record.request_id, messages, norm, parsed,
+                               current_result if current_result is not previous_result else None, executed)
+            if executed:
+                self.share_own_files()
         except (OSError, ValueError) as exc:
             elapsed_ms = int((time.monotonic() - start) * 1000)
             meta = read_pause_metadata(self.pause_marker) if is_paused(self.pause_marker) else {}

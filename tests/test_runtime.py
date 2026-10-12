@@ -12,7 +12,6 @@ sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'web'))
 from runtime import Resident,Tasks,resource_snapshot,tail,event_time,COLLABORATION_PRESSURE_CEILING,MEETING_REPORT_CEILING,GAZETTE_REVIEW_CEILING,GAZETTE_CLOSE_CEILING,GAZETTE_CONTRIBUTE_CEILING,GAZETTE_GAME_WINNER_CEILING,CALENDAR_PLAN_CEILING,CALENDAR_WEEK_PLAN_CEILING,GAZETTE_CONTRIBUTE_DEADLINE_HOUR_UTC,GAZETTE_PUBLISH_DEADLINE_HOUR_UTC,gazette_deadline_passed,LOOP_BREAKER_STREAK,GAZETTE_ASSIGN_CEILING,GAZETTE_WRITING_SLOT_CEILING
 from village.gazette import REVIEWER_AGENT
 from village.calendar import today as calendar_today
-from village.calendar import is_workday as real_calendar_is_workday
 from decision import decision
 from village.collaboration import CooperationCheckpoint
 
@@ -34,7 +33,7 @@ class RuntimeTests(unittest.TestCase):
         # of which loop 10+ guarded actions for unrelated gates) immune to
         # it regardless of which real day the suite happens to run on;
         # calendar-specific tests below explicitly patch it back to True.
-        self._calendar_workday_patch = patch('runtime.calendar_is_workday', return_value=False)
+        self._calendar_workday_patch = patch('runtime.calendar_is_planning_day', return_value=False)
         self._calendar_workday_patch.start()
         self.addCleanup(self._calendar_workday_patch.stop)
         # P81: the Gazette contribute/close gates now also bypass their
@@ -348,8 +347,9 @@ class RuntimeTests(unittest.TestCase):
         # squeeze, but not what this test is about (trim PRIORITY order,
         # which still needs 'projects' to require trimming at all). A
         # modest bump restores that without letting the full 14k-char
-        # 'projects' list fit untrimmed.
-        agent = Resident(dict(self.env, OLLAMA_NUM_CTX='9216'))
+        # 'projects' list fit untrimmed. P144 (capability_operation) grew
+        # 'tools' again: 9216 -> 9728, same reasoning.
+        agent = Resident(dict(self.env, OLLAMA_NUM_CTX='9728'))
         big_projects = [{'id': str(i), 'title': 'x' * 700, 'owner': '01-a', 'status': 'open'} for i in range(20)]
         agent.tasks.path.write_text(json.dumps(big_projects))
         (self.root/'board/organic-inbox.jsonl').write_text(
@@ -1210,7 +1210,7 @@ class RuntimeTests(unittest.TestCase):
         # P75 (operator directive): "verpflichtende Aufgabe an die Agents
         # Ihren Tagesablauf zu planen". Same proven ceiling pattern as
         # every gate above.
-        with patch('runtime.calendar_is_workday', return_value=True):
+        with patch('runtime.calendar_is_planning_day', return_value=True):
             for i in range(CALENDAR_PLAN_CEILING - 1):
                 self.agent.execute({'tool_call': {'name': 'execute_bash', 'arguments': {'command': f'printf ok{i}'}}})
             self.assertTrue(self.agent.state['last_result']['ok'])  # not yet gated
@@ -1222,14 +1222,14 @@ class RuntimeTests(unittest.TestCase):
         self.assertIn('"operation":"create"', result)
 
     def test_calendar_plan_gate_never_fires_on_a_weekend(self):
-        with patch('runtime.calendar_is_workday', return_value=False):
+        with patch('runtime.calendar_is_planning_day', return_value=False):
             for i in range(CALENDAR_PLAN_CEILING + 5):
                 self.agent.execute({'tool_call': {'name': 'execute_bash', 'arguments': {'command': f'printf ok{i}'}}})
         self.assertTrue(self.agent.state['last_result']['ok'])
 
     def test_calendar_operation_itself_is_never_gated_by_plan_pressure(self):
         from village.calendar import today as cal_today
-        with patch('runtime.calendar_is_workday', return_value=True):
+        with patch('runtime.calendar_is_planning_day', return_value=True):
             for i in range(CALENDAR_PLAN_CEILING + 5):
                 self.agent.execute({'tool_call': {'name': 'execute_bash', 'arguments': {'command': f'printf ok{i}'}}})
             self.agent.execute({'tool_call': {'name': 'calendar_operation', 'arguments': {
@@ -1239,7 +1239,7 @@ class RuntimeTests(unittest.TestCase):
 
     def test_calendar_plan_gate_resets_once_touched(self):
         from village.calendar import today as cal_today
-        with patch('runtime.calendar_is_workday', return_value=True):
+        with patch('runtime.calendar_is_planning_day', return_value=True):
             self.agent.execute({'tool_call': {'name': 'calendar_operation', 'arguments': {
                 'operation': 'create', 'title': 'Focus block', 'kind': 'focus',
                 'scheduled_date': cal_today(), 'start_time': '09:00', 'duration_minutes': 60}}})
@@ -1251,7 +1251,7 @@ class RuntimeTests(unittest.TestCase):
         from village.calendar import today as cal_today
         event = self.agent.calendar.create_event('02-b', 'Sync', 'meeting', cal_today(), '09:00', 30,
                                                   attendees=['01-a'])
-        with patch('runtime.calendar_is_workday', return_value=True), \
+        with patch('runtime.calendar_is_planning_day', return_value=True), \
              patch.object(self.agent, 'memory', return_value={'items': []}):
             ctx = json.loads(self.agent.snapshot())
         self.assertIn('calendar_daily_note', ctx)
@@ -1319,12 +1319,12 @@ class RuntimeTests(unittest.TestCase):
         # P81 (operator: "immer eine Woche vorgeplant [...] jeder Tag [...]
         # ohne Luecken"). setUp() pins calendar_is_workday to False by
         # default (see class setUp) - patch it back on for this check.
-        with patch('runtime.calendar_is_workday', return_value=True):
+        with patch('runtime.calendar_is_planning_day', return_value=True):
             pending = self.agent.calendar_pending_week_gaps('2026-09-28')
         self.assertIsNotNone(pending)
         day, gaps = pending
         self.assertEqual(day, '2026-09-28')
-        self.assertEqual(gaps, [(9 * 60, 17 * 60)])
+        self.assertEqual(gaps, [(0, 24 * 60)])  # P147: the whole day is planned
 
     def test_calendar_pending_week_gaps_none_once_fully_covered(self):
         # A recurring series, not a single day - the 7-day horizon checks
@@ -1333,17 +1333,26 @@ class RuntimeTests(unittest.TestCase):
         # the recurrence materialization's own real-weekday logic - a
         # blanket True would wrongly expect coverage on real weekends too,
         # which daily_weekday correctly never creates.
-        self.agent.calendar.create_event('01-a', 'All week', 'focus', '2026-09-28', '09:00', 480,
-                                         recurrence='daily_weekday')
-        with patch('runtime.calendar_is_workday', side_effect=real_calendar_is_workday):
+        # P147: every day, all 24 hours - three daily 8h series cover it.
+        for start in ('00:00', '08:00', '16:00'):
+            self.agent.calendar.create_event('01-a', 'Block', 'focus', '2026-09-28', start, 480, recurrence='daily')
+        with patch('runtime.calendar_is_planning_day', return_value=True):
             self.assertIsNone(self.agent.calendar_pending_week_gaps('2026-09-28'))
 
+    def test_office_hours_alone_no_longer_cover_the_day(self):
+        # P147 (operator: "Die müssen nicht schlafen"): 09:00-17:00 leaves the night open.
+        self.agent.calendar.create_event('01-a', 'Office', 'focus', '2026-09-28', '09:00', 480, recurrence='daily')
+        with patch('runtime.calendar_is_planning_day', return_value=True):
+            day, gaps = self.agent.calendar_pending_week_gaps('2026-09-28')
+        self.assertEqual(gaps, [(0, 9 * 60), (17 * 60, 24 * 60)])
+
     def test_calendar_week_gap_hint_names_the_concrete_gap(self):
-        with patch('runtime.calendar_is_workday', return_value=True):
+        with patch('runtime.calendar_is_planning_day', return_value=True):
             hint = self.agent.calendar_week_gap_hint('2026-09-28')
         self.assertIn('2026-09-28', hint)
-        self.assertIn('09:00', hint)
-        self.assertIn('17:00', hint)
+        self.assertIn('00:00', hint)
+        self.assertIn('24:00', hint)
+        self.assertIn('all 24 hours', hint)
 
     def test_calendar_week_plan_gate_eventually_blocks_other_actions(self):
         # Satisfy the separate, lower-bar P75 daily-touch gate first (any
@@ -1351,7 +1360,7 @@ class RuntimeTests(unittest.TestCase):
         # under test here - both share the same ceiling and would
         # otherwise both fire on the same call, and P75's is checked first.
         self.agent.calendar.create_event('01-a', 'satisfies daily touch', 'other', '2099-01-01', '09:00', 15)
-        with patch('runtime.calendar_is_workday', return_value=True):
+        with patch('runtime.calendar_is_planning_day', return_value=True):
             for i in range(CALENDAR_WEEK_PLAN_CEILING - 1):
                 self.agent.execute({'tool_call': {'name': 'execute_bash', 'arguments': {'command': f'printf ok{i}'}}})
             self.assertTrue(self.agent.state['last_result']['ok'])  # not yet gated
@@ -1362,18 +1371,15 @@ class RuntimeTests(unittest.TestCase):
         self.assertIn('"operation":"create"', result)
 
     def test_calendar_week_plan_gate_resets_once_the_week_is_covered(self):
-        self.agent.calendar.create_event('01-a', 'All week', 'focus', calendar_today(), '09:00', 480,
-                                         recurrence='daily_weekday')
-        # Real is_workday (see test above) - daily_weekday only ever
-        # covers real weekdays, so the check must agree on which days
-        # those are rather than treating every offset as a workday.
-        with patch('runtime.calendar_is_workday', side_effect=real_calendar_is_workday):
+        for start in ('00:00', '08:00', '16:00'):  # P147: full 24h, every day
+            self.agent.calendar.create_event('01-a', 'Block', 'focus', calendar_today(), start, 480, recurrence='daily')
+        with patch('runtime.calendar_is_planning_day', return_value=True):
             for i in range(CALENDAR_WEEK_PLAN_CEILING + 5):
                 self.agent.execute({'tool_call': {'name': 'execute_bash', 'arguments': {'command': f'printf ok{i}'}}})
         self.assertEqual(self.agent.state.get('calendar_week_plan_pressure', 0), 0)
 
     def test_calendar_operation_itself_is_never_gated_by_week_plan_pressure(self):
-        with patch('runtime.calendar_is_workday', return_value=True):
+        with patch('runtime.calendar_is_planning_day', return_value=True):
             for i in range(CALENDAR_WEEK_PLAN_CEILING + 5):
                 self.agent.execute({'tool_call': {'name': 'execute_bash', 'arguments': {'command': f'printf ok{i}'}}})
             self.agent.execute({'tool_call': {'name': 'calendar_operation', 'arguments': {
@@ -1612,6 +1618,10 @@ class RuntimeTests(unittest.TestCase):
         self.assertIn(f'{GAZETTE_CONTRIBUTE_DEADLINE_HOUR_UTC}:00 UTC', ctx['gazette_daily_note'])
 
     def test_organic_message_not_reissued_every_turn(self):
+        # P144: at the minimal 8192 window the always-present 'tools' list alone
+        # (one doc line per action) leaves no room for the message; this test is
+        # about re-issuing, not about the squeeze, so it runs one notch higher.
+        self.agent = Resident(dict(self.env, OLLAMA_NUM_CTX='9216'))
         (self.root/'board/organic-inbox.jsonl').write_text(json.dumps({'timestamp':'2026-09-24T11:00:00Z','message':'A dated request'})+'\n')
         with patch.object(self.agent,'memory',return_value={'items':[]}):
             first=json.loads(self.agent.snapshot())
@@ -1658,3 +1668,18 @@ class RuntimeTests(unittest.TestCase):
 
 
 if __name__=='__main__': unittest.main()
+
+
+# P148: these tests exercise the waking cycle; keep them independent of the wall-clock dream window.
+_no_dream = None
+
+
+def setUpModule():
+    global _no_dream
+    from web.runtime import Resident as _Resident
+    _no_dream = patch.object(_Resident, 'is_dreaming', lambda self, minute=None: False)
+    _no_dream.start()
+
+
+def tearDownModule():
+    _no_dream.stop()

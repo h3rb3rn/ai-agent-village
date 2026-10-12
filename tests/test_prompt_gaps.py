@@ -70,7 +70,11 @@ class PromptBudgetTests(unittest.TestCase):
         # between-turn memory and on-demand knowledge-base detail).
         # 14450->14650 for P134 (container lab and M10 use made explicit -
         # unused for two weeks while the prompt read as "no downloads").
-        self.assertLess(len(FULL), 14650)
+        # 14650->14900 for P144 (capability_operation: residents register what
+        # their own base model cannot do yet, as future training data).
+        # 14900->15100 for P146 (operator directive: admit knowledge gaps and
+        # research them instead of inventing; facts go to the knowledge base).
+        self.assertLess(len(FULL), 15100)
 
 
 if __name__ == "__main__":

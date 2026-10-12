@@ -24,7 +24,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 logger = logging.getLogger("memory.gateway")
 
@@ -397,6 +397,34 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json(401, {"error": "unauthorized"})
 
         owner = caller(self)
+
+        # 3a. P148: page through the caller's OWN memories, oldest first, for the dream phase
+        # (review, merge, forget). Without ?mine=1 the listing below is unchanged.
+        query = parse_qs(urlsplit(self.path).query)
+        if route == "/v1/memories" and query.get("mine", [""])[0] == "1" and owner not in (None, "*"):
+            try:
+                limit = max(1, min(50, int(query.get("limit", ["12"])[0])))
+            except ValueError:
+                return self.send_json(400, {"error": "limit must be an integer"})
+            # Keyset cursor "created_at|id": timestamps have one-second resolution, so the id
+            # breaks ties and no memory written in the same second is skipped.
+            after_ts, _, after_id = query.get("after", [""])[0].partition("|")
+            try:
+                conn = db()
+                rows = conn.execute(
+                    """
+                    SELECT * FROM memories
+                    WHERE agent = ? AND (created_at > ? OR (created_at = ? AND id > ?))
+                      AND (expires_at IS NULL OR expires_at = '' OR expires_at > ?)
+                    ORDER BY created_at ASC, id ASC LIMIT ?
+                    """,
+                    (owner, after_ts, after_ts, after_id, now(), limit),
+                ).fetchall()
+                total = conn.execute("SELECT COUNT(*) FROM memories WHERE agent = ?", (owner,)).fetchone()[0]
+                conn.close()
+                return self.send_json(200, {"items": [format_memory_row(r) for r in rows], "total_own": total})
+            except sqlite3.OperationalError as exc:
+                return self.send_json(500, {"error": f"Database error: {exc}"})
 
         # 3. List memories
         if route == "/v1/memories":

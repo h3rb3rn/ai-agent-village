@@ -10,9 +10,9 @@ import sys
 SUPPORTED_ACTIONS = frozenset({
     'execute_bash', 'start_job', 'job_status', 'cancel_job',
     'board_message', 'task_operation', 'team_operation', 'artifact_operation',
-    'memory_remember', 'memory_search', 'memory_get', 'notes_operation', 'research_request', 'meeting_operation',
+    'memory_remember', 'memory_search', 'memory_get', 'memory_update', 'memory_forget', 'notes_operation', 'research_request', 'meeting_operation',
     'calc_operation', 'research_proposal', 'gazette_operation', 'calendar_operation',
-    'finetune_operation', 'profile_operation', 'school_operation', 'idle',
+    'finetune_operation', 'profile_operation', 'school_operation', 'capability_operation', 'idle',
 })
 
 
@@ -23,6 +23,17 @@ SUPPORTED_ACTIONS = frozenset({
 # the field, and from nemotron-3-nano for the name. Alias only; never invent content.
 NAME_ALIASES = {'board_operation': 'board_message', 'message_operation': 'board_message'}
 
+# P152 (F02, live 2026-09-27..10-12): an answer without a village-action block used to be posted
+# verbatim to the board as prose. 625 of those posts were failed actions (a ```bash block, a bare
+# "calendar_operation {...}", a pasted script), not words for the other residents. An answer that
+# starts like an action or code is now rejected with a concrete correction instead of being posted.
+ACTION_ATTEMPT = re.compile(
+    r'^(```|\[|(?:' + '|'.join(sorted((SUPPORTED_ACTIONS | set(NAME_ALIASES)) - {'idle'})) + r')\b|[a-z]+_operation\b)', re.I)
+# A bare "idle" is the idle action itself (the only action name that is also an ordinary word, so
+# "Idle for now." stays prose). Never turn it into an invalid decision: under the P72 loop breaker
+# idle is the one allowed way out (P83).
+BARE_IDLE = re.compile(r'^idle\W*$', re.I)
+
 
 def _normalize_action(name, args):
     """Normalize documented legacy aliases without interpreting free prose."""
@@ -31,7 +42,7 @@ def _normalize_action(name, args):
     # operation field was refused as 'missing action argument'. The fields make the intent unambiguous.
     if name == 'meeting_operation' and not normalized.get('operation') and 'achieved' in normalized and normalized.get('meeting_id'):
         normalized['operation'] = 'report'
-    if name in ('meeting_operation', 'artifact_operation', 'team_operation', 'research_proposal', 'gazette_operation', 'calendar_operation', 'finetune_operation', 'profile_operation', 'notes_operation') and not normalized.get('operation'):
+    if name in ('meeting_operation', 'artifact_operation', 'team_operation', 'research_proposal', 'gazette_operation', 'calendar_operation', 'finetune_operation', 'profile_operation', 'notes_operation', 'capability_operation') and not normalized.get('operation'):
         if normalized.get('action'):
             normalized['operation'] = normalized['action']
         elif name == 'team_operation' and all(normalized.get(k) for k in ('project', 'goal', 'role')):
@@ -53,7 +64,8 @@ def _validate_action(name, args):
         'research_proposal': ('operation',), 'gazette_operation': ('operation',),
         'calendar_operation': ('operation',), 'finetune_operation': ('operation',),
         'profile_operation': ('operation',), 'notes_operation': ('operation',),
-        'memory_get': ('id',),
+        'memory_get': ('id',), 'capability_operation': ('operation',),
+        'memory_update': ('id',), 'memory_forget': ('id', 'reason'),
     }.get(name, ())
     if any(not isinstance(args.get(field), str) or not args[field].strip() for field in required):
         return 'missing action argument'
@@ -73,6 +85,16 @@ def _validate_action(name, args):
         return 'unknown notes operation'
     if name == 'profile_operation' and args.get('operation') not in ('view', 'update'):
         return 'unknown profile operation'
+    if name == 'capability_operation':
+        op = args.get('operation')
+        if op not in ('report', 'reproduce', 'add_example', 'list', 'view'):
+            return 'unknown capability operation: use report, reproduce, add_example, list or view'
+        needed = {'report': ('title', 'description'), 'reproduce': ('gap_id',),
+                  'add_example': ('gap_id', 'input', 'expected'), 'view': ('gap_id',)}.get(op, ())
+        if any(not isinstance(args.get(f), str) or not args[f].strip() for f in needed):
+            return 'missing action argument'
+        if args.get('kind') not in (None, 'skill', 'knowledge'):
+            return 'capability kind must be skill or knowledge'
     return None
 
 
@@ -172,6 +194,10 @@ def decision(response, allowed=None):
         except ValueError: return fallback('incomplete legacy action object', content)
     elif '```village-action' in content:
         return fallback('unclosed action block', content)
+    elif BARE_IDLE.match(content):
+        obj = {'name': 'idle', 'arguments': {}}  # checked like any other action below
+    elif ACTION_ATTEMPT.match(content):
+        return fallback('action or code outside a village-action block', content)
     else:
         return {'observation': '', 'prose': True, 'tool_call': {'name': 'board_message', 'arguments': {'message': content}}}
     if not isinstance(obj, dict): return fallback('action is not an object', content)

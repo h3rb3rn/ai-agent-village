@@ -393,19 +393,35 @@ class DayGapsTests(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
         self.store = CalendarStore(self.tmp / "coordination.sqlite3")
 
+    def window(self, agent):
+        # The merge/tolerance logic below is checked on a fixed 09:00-17:00 window;
+        # the default planning window is the whole day since P147.
+        return self.store.day_gaps(agent, "2026-09-28", 9 * 60, 17 * 60)
+
+    def test_default_window_is_the_whole_day(self):
+        self.assertEqual(self.store.day_gaps("01-king", "2026-09-28"), [(0, 24 * 60)])
+
+    def test_three_eight_hour_blocks_cover_the_whole_day(self):
+        for start in ("00:00", "08:00", "16:00"):
+            self.store.create_event("01-king", "Block", "focus", "2026-09-28", start, 480)
+        self.assertEqual(self.store.day_gaps("01-king", "2026-09-28"), [])
+
+    def test_a_classic_office_day_leaves_night_gaps(self):
+        self.store.create_event("01-king", "Office", "focus", "2026-09-28", "09:00", 480)
+        self.assertEqual(self.store.day_gaps("01-king", "2026-09-28"), [(0, 9 * 60), (17 * 60, 24 * 60)])
+
     def test_empty_day_is_one_full_window_gap(self):
-        gaps = self.store.day_gaps("01-king", "2026-09-28")
-        self.assertEqual(gaps, [(9 * 60, 17 * 60)])
+        self.assertEqual(self.window("01-king"), [(9 * 60, 17 * 60)])
 
     def test_fully_covered_day_has_no_gaps(self):
         self.store.create_event("01-king", "Morning", "focus", "2026-09-28", "09:00", 240)  # 09:00-13:00
         self.store.create_event("01-king", "Afternoon", "focus", "2026-09-28", "13:00", 240)  # 13:00-17:00
-        self.assertEqual(self.store.day_gaps("01-king", "2026-09-28"), [])
+        self.assertEqual(self.window("01-king"), [])
 
     def test_gap_between_two_events_is_reported(self):
         self.store.create_event("01-king", "Morning", "focus", "2026-09-28", "09:00", 60)  # 09:00-10:00
         self.store.create_event("01-king", "Afternoon", "focus", "2026-09-28", "15:00", 60)  # 15:00-16:00
-        gaps = self.store.day_gaps("01-king", "2026-09-28")
+        gaps = self.window("01-king")
         # 10:00-15:00 (300min, exceeds the 60min tolerance) is reported;
         # 16:00-17:00 (exactly 60min) sits AT the tolerance, not over it.
         self.assertEqual(gaps, [(600, 900)])
@@ -414,22 +430,22 @@ class DayGapsTests(unittest.TestCase):
         self.store.create_event("01-king", "Morning", "focus", "2026-09-28", "09:00", 240)  # 09:00-13:00
         # 20-minute gap, then resumes - well under the 60-minute tolerance.
         self.store.create_event("01-king", "Afternoon", "focus", "2026-09-28", "13:20", 220)  # 13:20-17:00
-        self.assertEqual(self.store.day_gaps("01-king", "2026-09-28"), [])
+        self.assertEqual(self.window("01-king"), [])
 
     def test_cancelled_events_do_not_count_as_coverage(self):
         event = self.store.create_event("01-king", "Morning", "focus", "2026-09-28", "09:00", 480)
         self.store.cancel_event(event["id"], "01-king")
-        self.assertEqual(self.store.day_gaps("01-king", "2026-09-28"), [(9 * 60, 17 * 60)])
+        self.assertEqual(self.window("01-king"), [(9 * 60, 17 * 60)])
 
     def test_overlapping_events_are_merged_not_double_counted(self):
         self.store.create_event("01-king", "A", "focus", "2026-09-28", "09:00", 300)  # 09:00-14:00
         self.store.create_event("01-king", "B", "meeting", "2026-09-28", "12:00", 300)  # 12:00-17:00
-        self.assertEqual(self.store.day_gaps("01-king", "2026-09-28"), [])
+        self.assertEqual(self.window("01-king"), [])
 
     def test_attendee_coverage_counts_same_as_organizer(self):
         self.store.create_event("02-explorer", "Their meeting", "meeting", "2026-09-28", "09:00", 480,
                                 attendees=["01-king"])
-        self.assertEqual(self.store.day_gaps("01-king", "2026-09-28"), [])
+        self.assertEqual(self.window("01-king"), [])
 
 
 if __name__ == "__main__":

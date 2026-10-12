@@ -69,6 +69,8 @@ _FORMAT_REASONS = {
     "multiple action blocks", "incomplete village-action block",
     "incomplete legacy action object", "unknown action or malformed arguments",
     "missing action argument",
+    # P152: an action or code block outside a village-action block (previously posted to the board)
+    "action or code outside a village-action block",
 }
 _FORMAT_DETAIL_RE = re.compile(r"reason=(.+?);\s*preview=(.*)$", re.S)
 

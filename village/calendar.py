@@ -43,6 +43,14 @@ def is_workday(date_str: str) -> bool:
     return weekday_of(date_str) < 5
 
 
+def is_planning_day(date_str: str) -> bool:
+    """P147 (operator, 2026-10-12): "Die müssen nicht schlafen. Ich erwarte einen vollen
+    Kalender der alle 24h/Tag ausplant." Every day is planned, weekends included; is_workday
+    remains only for the daily_weekday recurrence."""
+    datetime.strptime(date_str, "%Y-%m-%d")
+    return True
+
+
 def shift_date(date_str: str, days: int) -> str:
     return (datetime.strptime(date_str, "%Y-%m-%d") + timedelta(days=days)).strftime("%Y-%m-%d")
 
@@ -60,8 +68,9 @@ def time_to_minutes(t: str) -> int:
 # ist ohne Luecken." A conventional workday window and a tolerance below
 # which a short breathing gap does not count as a real scheduling hole -
 # nobody needs back-to-back minute-perfect blocks.
-WORK_WINDOW_START_MINUTES = 9 * 60
-WORK_WINDOW_END_MINUTES = 17 * 60
+# P147: the residents do not sleep - the planning window is the whole day (was 09:00-17:00).
+WORK_WINDOW_START_MINUTES = 0
+WORK_WINDOW_END_MINUTES = 24 * 60
 MAX_GAP_MINUTES = 60
 WEEK_HORIZON_DAYS = 7
 
@@ -94,7 +103,7 @@ GAZETTE_WRITING_MIN_MINUTES = 15
 EVENT_KINDS = (
     "standup", "jourfixe", "meeting", "focus", "personal", "reflection",
     "gazette_writing", "weekend_project", "weekend_social", "weekend_idle",
-    "weekend_dream", "other",
+    "weekend_dream", "dream", "other",
 )
 STATUSES = ("planned", "confirmed", "rescheduled", "cancelled")
 RESPONSES = ("pending", "accepted", "declined", "proposed_alternative")

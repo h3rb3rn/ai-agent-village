@@ -47,7 +47,7 @@ class DefaultAdvisoryTests(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_calendar_and_writing_slot_never_block_by_default(self):
-        with patch('runtime.calendar_is_workday', return_value=True), \
+        with patch('runtime.calendar_is_planning_day', return_value=True), \
              patch.object(Resident, 'calendar_pending_daily_plan', return_value=True), \
              patch.object(Resident, 'calendar_pending_week_gaps', return_value=('2026-10-12', [(540, 1020)])), \
              patch.object(Resident, 'calendar_pending_gazette_writing_slot', return_value=True):
@@ -71,9 +71,15 @@ class DefaultAdvisoryTests(unittest.TestCase):
             self.assertEqual(ctx['collaboration_checkpoint']['enforcement'], 'advisory')
             self.assertTrue(self.agent.guard('execute_bash', {'command': 'echo work'}))
 
-    def test_week_gap_hint_is_not_shown_by_default(self):
-        with patch.object(Resident, 'calendar_pending_week_gaps', return_value=('2026-10-12', [(540, 1020)])):
-            self.assertEqual(self.agent.calendar_week_gap_hint('2026-10-10'), '')
+    def test_week_gap_hint_is_advisory_and_never_urgent(self):
+        # P147 (operator: "Ich erwarte einen vollen Kalender der alle 24h/Tag ausplant"): the
+        # gap is named again, but in its own overview field - it never blocks a focus cycle.
+        from village.focus import URGENT_FIELDS, OVERVIEW_FIELDS
+        with patch.object(Resident, 'calendar_pending_week_gaps', return_value=('2026-10-12', [(0, 1440)])):
+            self.assertIn('2026-10-12', self.agent.calendar_week_gap_hint('2026-10-10'))
+            self.assertNotIn('2026-10-12', self.agent.calendar_daily_note())
+        self.assertNotIn('calendar_week_gaps', URGENT_FIELDS)
+        self.assertIn('calendar_week_gaps', OVERVIEW_FIELDS)
 
     def test_meeting_operation_offered_only_while_a_meeting_is_open(self):
         self.assertNotIn('meeting_operation', self.agent.effective_allowed_actions())
@@ -89,7 +95,7 @@ class EditorStepsStayHardTests(unittest.TestCase):
                         VILLAGE_ROOT=str(self.root), VILLAGE_MAX_OUTPUT_BYTES='4096',
                         VILLAGE_COMMAND_TIMEOUT_SECONDS='2', VILLAGE_POLICY_FILE='/nonexistent',
                         VILLAGE_POLICY_LOCAL_FILE=str(self.root / 'none.json'))
-        for target in ('runtime.calendar_is_workday', 'runtime.gazette_deadline_passed'):
+        for target in ('runtime.calendar_is_planning_day', 'runtime.gazette_deadline_passed'):
             p = patch(target, return_value=False); p.start(); self.addCleanup(p.stop)
         p = patch.object(Resident, 'calendar_pending_gazette_writing_slot', return_value=False)
         p.start(); self.addCleanup(p.stop)

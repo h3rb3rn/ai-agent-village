@@ -31,7 +31,7 @@ class ReliabilityTests(unittest.TestCase):
         # P75: pin the calendar plan gate/hint to "weekend" so it never
         # competes for budget or pressure in tests unrelated to it - same
         # rationale as test_runtime.py's class-level patch.
-        self._calendar_workday_patch = patch.object(rt, 'calendar_is_workday', return_value=False)
+        self._calendar_workday_patch = patch.object(rt, 'calendar_is_planning_day', return_value=False)
         self._calendar_workday_patch.start()
         self.addCleanup(self._calendar_workday_patch.stop)
         self.agent = Resident(self.env)
@@ -155,6 +155,21 @@ def unittest_patch_peers(ids):
         if str(path).endswith('runtime-peers.json'): return [{'id': i} for i in ids]
         return real(path, default)
     return patch.object(rt, 'read_json', fake)
+
+
+# P148: these tests exercise the waking cycle; keep them independent of the wall-clock dream window.
+_no_dream = None
+
+
+def setUpModule():
+    global _no_dream
+    from web.runtime import Resident as _Resident
+    _no_dream = patch.object(_Resident, 'is_dreaming', lambda self, minute=None: False)
+    _no_dream.start()
+
+
+def tearDownModule():
+    _no_dream.stop()
 
 
 if __name__ == '__main__':
@@ -313,7 +328,8 @@ class SnapshotToolsSyncTests(unittest.TestCase):
         snap = json.loads(self.agent.snapshot())
         expected = set(normalize_allowed(self.agent.policy.allowed_actions))
         # P126: meeting_operation is only offered while a meeting is open.
-        self.assertEqual(set(snap['tools']), expected - {'meeting_operation'})
+        # P148: memory_update/memory_forget exist only in the dream phase.
+        self.assertEqual(set(snap['tools']), expected - {'meeting_operation', 'memory_update', 'memory_forget'})
         self.assertIn('calc_operation', snap['tools'])
         self.assertIn('research_proposal', snap['tools'])
         self.assertIn('huggingface', snap['tools']['research_request'])
