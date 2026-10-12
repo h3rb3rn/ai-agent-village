@@ -42,6 +42,7 @@ from village.dreaming import (DREAM_ACTIONS, DREAM_ONLY_ACTIONS, DREAM_BATCH, DR
                               default_window as default_dream_window, planned_window as planned_dream_window,
                               in_window as in_dream_window, minute_of_day, duplicate_pairs, cursor_of as dream_cursor_of,
                               trace_summary, archive_forgotten)
+from village.sharing import share_group_readable
 from village.traces import append_trace, build_record as build_trace_record, store_system_prompt, TRACE_MAX_MB_DEFAULT
 from village.coordinator import CoordinationStore
 from village.inference import (
@@ -1663,6 +1664,18 @@ class Resident:
             self.capabilities.observe(record)
         except Exception as exc:  # noqa: BLE001 - the register must never stop a cycle
             self.event('capability_observe_failed', str(exc)[:300], True)
+
+    def share_own_files(self):
+        """P149: own files in the shared area become group-readable despite the runtime's umask 077."""
+        if self.env.get('VILLAGE_SHARE_SWEEP', '1') == '0':
+            return
+        try:
+            counts = share_group_readable(self.root)
+        except Exception as exc:  # noqa: BLE001 - the sweep must never stop a cycle
+            self.event('share_sweep_failed', str(exc)[:300], True)
+            return
+        if counts['fixed']:
+            self.event('shared_files_readable', f"fixed={counts['fixed']} scanned={counts['scanned']}")
 
     def auto_record(self, summary, key_material):
         """Runtime-authored, clearly labelled observation. It never counts as an agent action
@@ -3395,6 +3408,8 @@ class Resident:
             current_result = self.state.get('last_result')
             self.archive_trace(req_record.request_id, messages, norm, parsed,
                                current_result if current_result is not previous_result else None, executed)
+            if executed:
+                self.share_own_files()
         except (OSError, ValueError) as exc:
             elapsed_ms = int((time.monotonic() - start) * 1000)
             meta = read_pause_metadata(self.pause_marker) if is_paused(self.pause_marker) else {}

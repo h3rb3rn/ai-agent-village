@@ -13,6 +13,7 @@ from village.calendar import CalendarStore
 from village.coordinator import CoordinationStore
 from village.teams import TeamStore
 from village.residents import list_residents, get_resident, get_resident_art
+from village import conversations
 from event_history import read_history
 
 ROOT = Path(os.environ["VILLAGE_ROOT"])
@@ -23,6 +24,8 @@ TELEMETRY = ROOT / "telemetry" / "latest.json"
 TELEMETRY_DB = ROOT / "telemetry" / "events.sqlite3"
 AGENT_TELEMETRY = ROOT / "telemetry" / "agent-events.jsonl"
 GAZETTE_ARCHIVE = ROOT / "gazette" / "archive"
+COORDINATION_DB = ROOT / "board" / "coordination.sqlite3"
+CONVERSATIONS_CACHE = ROOT / "web" / "conversations-report.json"
 HOST = os.environ.get("VILLAGE_WEBUI_BIND", "0.0.0.0")
 PORT = int(os.environ.get("VILLAGE_WEBUI_PORT", "8080"))
 MAX_MESSAGE = int(os.environ.get("VILLAGE_WEBUI_MAX_MESSAGE_CHARS", "4000"))
@@ -262,6 +265,30 @@ def gazette_game_stats():
         pass
     return {"wins": wins, "quizmaster": quizmaster}
 
+def conversations_report():
+    """P150: the daily conversation report (matrix, topics, per-resident figures)."""
+    agents = telemetry().get('agents', [])
+    models = {a.get('id'): a.get('model', '') for a in agents if a.get('id')}
+    names = {a.get('id'): a.get('name', '') for a in agents if a.get('id')}
+    return conversations.daily_report(COORDINATION_DB, CONVERSATIONS_CACHE, models, names)
+
+def conversations_page(params):
+    """P150: one page of the full-text archive (direct messages and board posts)."""
+    get = lambda key: params.get(key, [''])[0][:200]
+    agent_id = re.compile(r'[A-Za-z0-9_.-]{0,64}')
+    agent, other = get('agent'), get('other')
+    if not agent_id.fullmatch(agent) or not agent_id.fullmatch(other):
+        agent = other = ''
+    topic = get('topic') if get('topic') in conversations.TOPIC_IDS else ''
+    source = get('source') if get('source') in conversations.PUBLIC_SOURCES else ''
+    try:
+        page = max(0, min(int(get('page') or 0), 100000))
+    except ValueError:
+        page = 0
+    return conversations.query_messages(COORDINATION_DB, agent=agent, other=other, both=get('both') != '0',
+                                        topic=topic, source=source, q=get('q'),
+                                        newest_first=get('order') != 'asc', page=page)
+
 def lab_index():
     """Solo tasks + collaborative teams, normalized into one feed for the
     Forschungslabor dashboard (P87, operator: "eine Zentrale Anlaufstelle
@@ -335,7 +362,7 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args): pass
     def do_GET(self):
         route = urlsplit(self.path).path
-        if route in ('/', '/dashboard', '/agents', '/habitat', '/board', '/timeline', '/signals', '/gazette', '/lab', '/residents'):
+        if route in ('/', '/dashboard', '/agents', '/habitat', '/board', '/conversations', '/timeline', '/signals', '/gazette', '/lab', '/residents'):
             return send(self, HTTPStatus.OK, (ASSETS / 'observatory.html').read_text())
         if route in ('/assets/observatory.css', '/assets/observatory.js'):
             name = route.rsplit('/', 1)[-1]
@@ -374,6 +401,11 @@ class Handler(BaseHTTPRequestHandler):
             return send(self, HTTPStatus.OK, json.dumps(signal_index(), ensure_ascii=False), 'application/json; charset=utf-8')
         if route == '/api/gazette':
             return send(self, HTTPStatus.OK, json.dumps(gazette_index(), ensure_ascii=False), 'application/json; charset=utf-8')
+        if route == '/api/conversations':
+            return send(self, HTTPStatus.OK, json.dumps(conversations_report(), ensure_ascii=False), 'application/json; charset=utf-8')
+        if route == '/api/conversations/messages':
+            params = parse_qs(urlsplit(self.path).query)
+            return send(self, HTTPStatus.OK, json.dumps(conversations_page(params), ensure_ascii=False), 'application/json; charset=utf-8')
         if route == '/api/lab':
             return send(self, HTTPStatus.OK, json.dumps(lab_index(), ensure_ascii=False), 'application/json; charset=utf-8')
         if route == '/api/residents':

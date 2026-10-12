@@ -82,6 +82,8 @@ RELEASE_FILES = [
     ("village/traces.py", "lib/village/traces.py", 0o644),
     ("village/capabilities.py", "lib/village/capabilities.py", 0o644),
     ("village/dreaming.py", "lib/village/dreaming.py", 0o644),
+    ("village/sharing.py", "lib/village/sharing.py", 0o644),
+    ("village/conversations.py", "lib/village/conversations.py", 0o644),
     *[(f"village/assets/ascii_art/{f}", f"lib/village/assets/ascii_art/{f}", 0o644)
       for f in sorted(os.listdir(Path(__file__).resolve().parent / "assets/ascii_art")) if f.endswith(".txt")],
     ("village/__init__.py", "lib/village/__init__.py", 0o644),
