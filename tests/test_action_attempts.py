@@ -57,6 +57,11 @@ class ActionAttemptTests(unittest.TestCase):
         self.assertIn('```village-action', guidance)
         self.assertIn('"name":"execute_bash"', guidance)
 
+    def test_the_deterministic_auditor_owns_the_new_reason(self):
+        # Otherwise every such rejection would be sent to the slow LLM reviewer.
+        from village.auditor import FORMAT_REASONS
+        self.assertIn(REASON, FORMAT_REASONS)
+
 
 if __name__ == '__main__':
     unittest.main()

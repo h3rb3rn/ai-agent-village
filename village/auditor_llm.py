@@ -27,10 +27,12 @@ not reload each time). Once warm, one judged call took ~27-40s.
 from __future__ import annotations
 
 import json
+import re
 import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional
 
@@ -81,6 +83,29 @@ class ReviewCandidate:
     source_event_id: str
     kind: str  # short label for the prompt, e.g. "rejected output" or "board message"
     text: str
+    timestamp: str = ""  # P153: when the resident produced it (event timestamp, UTC)
+
+
+# P153 (F08, live 2026-10-12 00:40): the judge got neither the current date nor the time of the
+# output, so it judged dates against its training data and told a resident that "2026-10-12" (that
+# very day) was in the future and should be "2024-05-21". The current date and the event time are now
+# part of every request, and a finding that calls a date up to today "future" is discarded.
+ISO_DATE = re.compile(r"\b(\d{4})-(\d{2})-(\d{2})\b")
+FUTURE_WORDS = re.compile(r"\b(future|not yet happened|has not happened yet|in the future)\b", re.I)
+
+
+def misdated_future(finding_text: str, candidate_text: str, now: datetime) -> bool:
+    """True when a finding calls something 'future' although every date it or the reviewed
+    text names is today or earlier - a judgement against the wrong 'today'."""
+    if not FUTURE_WORDS.search(finding_text or ""):
+        return False
+    dates = []
+    for y, m, d in ISO_DATE.findall(f"{finding_text} {candidate_text}"):
+        try:
+            dates.append(date(int(y), int(m), int(d)))
+        except ValueError:
+            continue
+    return bool(dates) and all(d <= now.date() for d in dates)
 
 
 def select_candidates(events: Iterable[Mapping[str, Any]], *, already_classified: Iterable[str] = (),
@@ -105,11 +130,13 @@ def select_candidates(events: Iterable[Mapping[str, Any]], *, already_classified
                 continue  # village/auditor.py's format_violation signature already explains this
             preview = detail.split("preview=", 1)[-1] if "preview=" in detail else detail
             candidates.append(ReviewCandidate(str(e.get("agent", "")), str(e.get("model", "")),
-                                              event_id, "a rejected response", preview[:1500]))
+                                              event_id, "a rejected response", preview[:1500],
+                                              str(e.get("timestamp", ""))))
         elif kind == "board_message":
             message = detail.split("message=", 1)[-1] if "message=" in detail else detail
             candidates.append(ReviewCandidate(str(e.get("agent", "")), str(e.get("model", "")),
-                                              event_id, "a public board message", message[:1500]))
+                                              event_id, "a public board message", message[:1500],
+                                              str(e.get("timestamp", ""))))
     return candidates
 
 
@@ -138,10 +165,16 @@ def _retrieve_context(memory_reader: Optional[Callable[[str], List[Dict[str, Any
 
 def build_request(candidate: ReviewCandidate, *, url: str = DEFAULT_URL, model: str = DEFAULT_MODEL,
                   num_predict: int = 500,
-                  memory_reader: Optional[Callable[[str], List[Dict[str, Any]]]] = None) -> urllib.request.Request:
+                  memory_reader: Optional[Callable[[str], List[Dict[str, Any]]]] = None,
+                  now: Optional[datetime] = None) -> urllib.request.Request:
     endpoint = url.rstrip("/") + "/api/chat"
     context_block = _retrieve_context(memory_reader, candidate.text[:500])
+    now = now or datetime.now(timezone.utc)
+    produced = candidate.timestamp or "an unknown time"
     user_prompt = (
+        f"Current date and time: {now:%Y-%m-%d %H:%M} UTC. The output below was produced at {produced}. "
+        "Judge every date only against this current date, never against your training data: "
+        "a date up to today is not in the future.\n\n"
         f"Agent {candidate.agent} (model {candidate.model}) produced {candidate.kind}:\n\n"
         f'"""{candidate.text}"""\n\n'
         "Identify the concrete mistake and the correct fix. If there is no real mistake, "
@@ -179,7 +212,8 @@ def review(candidate: ReviewCandidate, *, opener: Callable = urllib.request.urlo
           url: str = DEFAULT_URL, model: str = DEFAULT_MODEL,
           confidence_threshold: float = CONFIDENCE_THRESHOLD,
           timeout: int = DEFAULT_TIMEOUT_SECONDS,
-          memory_reader: Optional[Callable[[str], List[Dict[str, Any]]]] = None) -> Optional[AuditFinding]:
+          memory_reader: Optional[Callable[[str], List[Dict[str, Any]]]] = None,
+          now: Optional[datetime] = None) -> Optional[AuditFinding]:
     """Ask the judge model about one candidate; return a finding only above the
     confidence threshold. Never raises for an ordinary "no issue" verdict; raises
     JudgeError only for a genuinely broken exchange (network, parsing, budget).
@@ -188,7 +222,7 @@ def review(candidate: ReviewCandidate, *, opener: Callable = urllib.request.urlo
     lexical/semantic lookup against the village's own shared knowledgebase
     (e.g. a correction pattern the village already learned) - not fine-tuning,
     just retrieval-augmented context for this one judgement."""
-    request = build_request(candidate, url=url, model=model, memory_reader=memory_reader)
+    request = build_request(candidate, url=url, model=model, memory_reader=memory_reader, now=now)
     try:
         with opener(request, timeout=timeout) as response:
             raw = json.load(response)
@@ -218,7 +252,8 @@ def full_audit_cycle(events: List[Mapping[str, Any]], store: AuditStore, *, coor
                      memory_writer: Callable[[Dict[str, Any]], Any],
                      memory_reader: Optional[Callable[[str], List[Dict[str, Any]]]] = None,
                      opener: Callable = urllib.request.urlopen, url: str = DEFAULT_URL,
-                     model: str = DEFAULT_MODEL, llm_enabled: bool = True) -> Dict[str, int]:
+                     model: str = DEFAULT_MODEL, llm_enabled: bool = True,
+                     now: Optional[datetime] = None) -> Dict[str, int]:
     """Run the primary, free, deterministic signatures first; only spend a slow,
     costly qwen3.6:35b call on events that catalogue could not explain, and never
     on a format_violation reason the deterministic layer already owns. Every
@@ -227,7 +262,9 @@ def full_audit_cycle(events: List[Mapping[str, Any]], store: AuditStore, *, coor
     reach shared community knowledge on its own.
     """
     stats = {"deterministic_findings": 0, "deterministic_delivered": 0,
-             "llm_candidates": 0, "llm_findings": 0, "llm_delivered": 0, "llm_errors": 0}
+             "llm_candidates": 0, "llm_findings": 0, "llm_delivered": 0, "llm_errors": 0,
+             "llm_date_rejected": 0}
+    now = now or datetime.now(timezone.utc)
 
     deterministic_findings = scan(events)
     stats["deterministic_findings"] = len(deterministic_findings)
@@ -250,11 +287,14 @@ def full_audit_cycle(events: List[Mapping[str, Any]], store: AuditStore, *, coor
     stats["llm_candidates"] = len(candidates)
     for candidate in candidates:
         try:
-            finding = review(candidate, opener=opener, url=url, model=model, memory_reader=memory_reader)
+            finding = review(candidate, opener=opener, url=url, model=model, memory_reader=memory_reader, now=now)
         except JudgeError:
             stats["llm_errors"] += 1
             continue
         if finding is None:
+            continue
+        if misdated_future(f"{finding.problem} {finding.solution}", candidate.text, now):
+            stats["llm_date_rejected"] += 1  # P153: never deliver a "today is the future" verdict
             continue
         stats["llm_findings"] += 1
         scope = store.route(finding, source="llm")
