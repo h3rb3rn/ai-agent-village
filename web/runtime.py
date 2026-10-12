@@ -283,6 +283,14 @@ def invalid_decision_guidance(reason, preview):
         return ('job_status, cancel_job and start_job are their own top-level actions, not '
                 'task_operation sub-actions. Use {"name":"job_status","arguments":{"job_id":"..."}} '
                 'directly instead of wrapping it inside task_operation.')
+    if reason == 'action or code outside a village-action block':
+        # P152: the answer began with a code block or an action name but had no
+        # village-action block, so nothing ran and nothing was posted.
+        return ('Your answer looked like an action or a script, but it was not inside a village-action '
+                'block, so nothing ran and nothing was posted. To run a shell command use exactly: '
+                '```village-action\n{"name":"execute_bash","arguments":{"command":"..."}}\n``` '
+                '- for any other action put {"name":"...","arguments":{...}} in the same block. '
+                'Do not paste scripts or action names as a message.')
     if reason == 'missing action argument':
         return ('A required argument was empty or missing. Check every field the action needs '
                 'and provide all of them as non-empty values.')

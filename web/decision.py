@@ -23,6 +23,17 @@ SUPPORTED_ACTIONS = frozenset({
 # the field, and from nemotron-3-nano for the name. Alias only; never invent content.
 NAME_ALIASES = {'board_operation': 'board_message', 'message_operation': 'board_message'}
 
+# P152 (F02, live 2026-09-27..10-12): an answer without a village-action block used to be posted
+# verbatim to the board as prose. 625 of those posts were failed actions (a ```bash block, a bare
+# "calendar_operation {...}", a pasted script), not words for the other residents. An answer that
+# starts like an action or code is now rejected with a concrete correction instead of being posted.
+ACTION_ATTEMPT = re.compile(
+    r'^(```|\[|(?:' + '|'.join(sorted((SUPPORTED_ACTIONS | set(NAME_ALIASES)) - {'idle'})) + r')\b|[a-z]+_operation\b)', re.I)
+# A bare "idle" is the idle action itself (the only action name that is also an ordinary word, so
+# "Idle for now." stays prose). Never turn it into an invalid decision: under the P72 loop breaker
+# idle is the one allowed way out (P83).
+BARE_IDLE = re.compile(r'^idle\W*$', re.I)
+
 
 def _normalize_action(name, args):
     """Normalize documented legacy aliases without interpreting free prose."""
@@ -183,6 +194,10 @@ def decision(response, allowed=None):
         except ValueError: return fallback('incomplete legacy action object', content)
     elif '```village-action' in content:
         return fallback('unclosed action block', content)
+    elif BARE_IDLE.match(content):
+        obj = {'name': 'idle', 'arguments': {}}  # checked like any other action below
+    elif ACTION_ATTEMPT.match(content):
+        return fallback('action or code outside a village-action block', content)
     else:
         return {'observation': '', 'prose': True, 'tool_call': {'name': 'board_message', 'arguments': {'message': content}}}
     if not isinstance(obj, dict): return fallback('action is not an object', content)
