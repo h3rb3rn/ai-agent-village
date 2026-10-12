@@ -410,7 +410,9 @@ def analyse(messages: Iterable[Dict[str, Any]], data: Optional[Dict[str, Any]] =
     return {'messages': results, 'naive_timestamps': naive, 'first_ref': first_ref, 'reuse': reuse,
             'tasks': tasks, 'artifacts': artifacts, 'revisions': revisions, 'verifications': verifications,
             'task_artifacts': task_artifacts, 'prepared': prepared, 'now': now,
-            'sources': dict(data.get('sources') or {}, events=events_status)}
+            'sources': dict(data.get('sources') or {}, events=events_status),
+            'rows': {k: len(data.get(k) or []) for k in ('messages', 'receipts', 'tasks', 'revisions', 'artifacts', 'verifications')}
+            | {'events': len(events or [])}}
 
 
 def loops(results: List[Dict[str, Any]], min_length: int = LOOP_MIN) -> List[Dict[str, Any]]:
@@ -531,7 +533,7 @@ def build_report(analysis: Dict[str, Any], exports: Optional[Dict[str, int]] = N
         'generated_at_utc': iso(now),
         'window': {'start_utc': iso(since) or (prepared[0]['timestamp'] if prepared else None),
                    'end_utc': iso(until) or (prepared[-1]['timestamp'] if prepared else None)},
-        'sources': [{'kind': k, 'status': v} for k, v in sorted(sources.items())]
+        'sources': [{'kind': k, 'status': v, 'rows': analysis['rows'].get(k)} for k, v in sorted(sources.items())]
         + ([{'kind': 'export', 'status': 'available'}] if exports else []),
         'metrics': dict(_figures(results, with_events),
                         reply_depth={'max': max(depths) if depths else 0,
@@ -563,7 +565,8 @@ def to_markdown(report: Dict[str, Any], top: int = 10) -> str:
     m = report['metrics']
     lines = [f"# Conversation-to-Outcome ({report['schema_version']})", '',
              f"Generated {report['generated_at_utc']} · window {report['window']['start_utc']} – {report['window']['end_utc']}", '',
-             'Sources: ' + ', '.join(f"{s['kind']}={s['status']}" for s in report['sources']), '',
+             'Sources: ' + ', '.join(f"{s['kind']}={s['status']}" + (f" ({s['rows']} rows)" if s.get('rows') is not None else '')
+                                    for s in report['sources']), '',
              '## Village', '', '| Metric | Value |', '|---|---|']
     for key in ('messages_sent', 'explicit_link_rate', 'task_activity_per_100_messages', 'verified_outcomes_per_100_messages',
                 'actions_per_100_messages', 'ack_only_rate', 'promise_rate', 'semantic_repeat_rate', 'progress_rate'):

@@ -133,6 +133,8 @@ class LinkTests(Fixture):
         self.assertEqual((latency['median'], latency['count'], latency['denominator']), (0.92, 2, 4))
         self.assertEqual(r['metrics']['artifact_reuse_count'], {'artifacts': 1, 'agents': 1})  # the King verified one
         self.assertEqual(r['interventions'], [])
+        rows = {s['kind']: s.get('rows') for s in r['sources']}
+        self.assertEqual((rows['verifications'], rows['artifacts'], rows['events']), (2, 2, 1))  # message events are no action
 
     def test_missing_sources_are_reported_and_give_unknown(self):
         r = oc.run(self.coord, None, None, now=NOW)
