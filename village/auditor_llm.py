@@ -108,6 +108,15 @@ def misdated_future(finding_text: str, candidate_text: str, now: datetime) -> bo
     return bool(dates) and all(d <= now.date() for d in dates)
 
 
+# P154 (live 2026-10-12 12:08 and 13:33 UTC): a rejected response with an empty preview ("no final
+# answer returned", "output budget exhausted") reached the judge as an empty quote. With nothing to
+# review, qwen3.6:35b judged its own task and told 01-king to "generate a JSON verdict with has_issue,
+# category, problem, solution and confidence" - the judge's schema, wrong advice for a resident. An
+# empty output is never sent to the judge; the runtime's invalid_decision guidance already covers it.
+# A finding that still demands the judge's own verdict fields is discarded as well.
+JUDGE_SCHEMA_ECHO = re.compile(r"\bhas_issue\b", re.I)
+
+
 def select_candidates(events: Iterable[Mapping[str, Any]], *, already_classified: Iterable[str] = (),
                       known_format_reasons: frozenset = frozenset(), limit: int = MAX_CANDIDATES_PER_CYCLE
                       ) -> List[ReviewCandidate]:
@@ -129,11 +138,15 @@ def select_candidates(events: Iterable[Mapping[str, Any]], *, already_classified
             if reason in known_format_reasons:
                 continue  # village/auditor.py's format_violation signature already explains this
             preview = detail.split("preview=", 1)[-1] if "preview=" in detail else detail
+            if not preview.strip():
+                continue  # P154: nothing to judge (e.g. "no final answer returned")
             candidates.append(ReviewCandidate(str(e.get("agent", "")), str(e.get("model", "")),
                                               event_id, "a rejected response", preview[:1500],
                                               str(e.get("timestamp", ""))))
         elif kind == "board_message":
             message = detail.split("message=", 1)[-1] if "message=" in detail else detail
+            if not message.strip():
+                continue
             candidates.append(ReviewCandidate(str(e.get("agent", "")), str(e.get("model", "")),
                                               event_id, "a public board message", message[:1500],
                                               str(e.get("timestamp", ""))))
@@ -263,7 +276,7 @@ def full_audit_cycle(events: List[Mapping[str, Any]], store: AuditStore, *, coor
     """
     stats = {"deterministic_findings": 0, "deterministic_delivered": 0,
              "llm_candidates": 0, "llm_findings": 0, "llm_delivered": 0, "llm_errors": 0,
-             "llm_date_rejected": 0}
+             "llm_date_rejected": 0, "llm_schema_echo_rejected": 0}
     now = now or datetime.now(timezone.utc)
 
     deterministic_findings = scan(events)
@@ -295,6 +308,9 @@ def full_audit_cycle(events: List[Mapping[str, Any]], store: AuditStore, *, coor
             continue
         if misdated_future(f"{finding.problem} {finding.solution}", candidate.text, now):
             stats["llm_date_rejected"] += 1  # P153: never deliver a "today is the future" verdict
+            continue
+        if JUDGE_SCHEMA_ECHO.search(f"{finding.problem} {finding.solution}"):
+            stats["llm_schema_echo_rejected"] += 1  # P154: the judge confused its own task with the resident's
             continue
         stats["llm_findings"] += 1
         scope = store.route(finding, source="llm")

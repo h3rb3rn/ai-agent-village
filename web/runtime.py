@@ -72,7 +72,7 @@ from village.calendar import is_planning_day as calendar_is_planning_day
 from village.calendar import shift_date as calendar_shift_date
 from village.calendar import WEEK_HORIZON_DAYS as CALENDAR_WEEK_HORIZON_DAYS
 from village.gazette_pdf import render_edition_pdf
-from village.collaboration import assess as assess_collaboration, is_checkpoint_action
+from village.collaboration import assess as assess_collaboration, is_checkpoint_action, needs_no_reply
 from village.lifecycle import InferenceState, InferenceTracker, classify_error
 from village.security import redact_text, sanitize_tool_env
 from village.actions import ACTION_SPECS, action_schema, normalize_allowed
@@ -324,6 +324,7 @@ SATURATION_STOPWORDS = frozenset(
     'script local check fix complete final finalize build run prototype tool simple specific task '
     'shared review follow before after using based'.split())
 OWN_RECENT_RESULTS = 8
+RECEIVED_RECENT = 8  # P155: texts kept per sender to recognise a repeated message
 # Stored action results keep both ends: structured JSON (memory/task/research
 # results) is ranked best-first at the head, command output reports errors at
 # the tail. The old [:6000] then [-2500:] pair silently kept only the middle.
@@ -1042,6 +1043,23 @@ class Resident:
             "approach faster than repeating it alone."
         )
 
+    def asks_for_reply(self, item):
+        """P155: only a message that asks or tells something new obliges a reply; a pure
+        acknowledgement, announcement or repeat of the same sender does not (see collaboration.py)."""
+        text = str(item.get('detail', '')).split('message=', 1)[-1]
+        earlier = [t for i, t in self.state.get('received_recent', {}).get(str(item.get('agent')), []) if i != item.get('id')]
+        return not needs_no_reply(text, earlier)
+
+    def remember_received(self, addressed):
+        """Keep the last RECEIVED_RECENT texts per sender, so a repeat is recognised in later cycles."""
+        recent = self.state.setdefault('received_recent', {})
+        for item in addressed:
+            sender, msg_id = str(item.get('agent')), item.get('id')
+            rows = recent.setdefault(sender, [])
+            if msg_id and all(i != msg_id for i, _ in rows):
+                rows.append([msg_id, str(item.get('detail', '')).split('message=', 1)[-1][:600]])
+                del rows[:-RECEIVED_RECENT]
+
     def snapshot(self):
         peers = read_json(Path('/etc/ai-village/runtime-peers.json'), [])
         events = tail(self.board / 'events.jsonl', 800)
@@ -1076,8 +1094,8 @@ class Resident:
         partner = self.pair_partner(peers)
         if partner:
             # Paired mode: the runtime selects the conversation partner (routing only).
-            discussion_target = next((x for x in reversed(addressed) if x.get('agent') == partner), None) \
-                or next((x for x in chosen if x.get('agent') == partner), None)
+            discussion_target = next((x for x in reversed(addressed) if x.get('agent') == partner and self.asks_for_reply(x)), None) \
+                or next((x for x in chosen if x.get('agent') == partner and self.asks_for_reply(x)), None)
         else:
             discussion_target = candidates[turn % len(candidates)] if candidates else None
         self.state['discussion_turn'] = turn + 1
@@ -1129,7 +1147,9 @@ class Resident:
         projects.sort(key=task_priority, reverse=True)
         own_project = next((x for x in projects if x.get('owner')==self.id and x.get('status')=='active'), None)
         active_teams = self.teams.list_for_agent(self.id)
-        direct_ack_target = next((x for x in addressed if x.get('detail', '').startswith(f'to={self.id};')), None)
+        direct_ack_target = next((x for x in addressed if x.get('detail', '').startswith(f'to={self.id};')
+                                  and self.asks_for_reply(x)), None)
+        self.remember_received(addressed)
         collaboration_checkpoint = assess_collaboration(
             events,
             self.id,

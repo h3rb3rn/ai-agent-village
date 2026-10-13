@@ -7,6 +7,7 @@ another expensive or mutating step.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Iterable, Mapping, Any
@@ -112,3 +113,37 @@ def is_checkpoint_action(checkpoint: CooperationCheckpoint, action: str) -> bool
     """Return whether an action satisfies the currently requested checkpoint."""
     return checkpoint.required_action is None or action in CHECKPOINT_ACTIONS.get(checkpoint.stage, {checkpoint.required_action})
 
+
+
+# P155 (live 2026-10-12/13): every addressed message became `direct_ack_target`, and the prompt
+# asked to acknowledge it first. An acknowledgement is itself an addressed message, so two
+# residents acknowledged each other forever (86% of 471 messages in three fixed pairs, 45%
+# announcements, the same "recipe will follow" for 22 hours). A message that only
+# acknowledges, thanks or announces - or repeats what the sender already said - asks nothing,
+# so it no longer obliges a reply. It stays visible in the snapshot; only the obligation goes.
+ACK_OPENING = re.compile(
+    r"^\W*(?:[\w.-]+\s*[,:]\s*)?(?:acknowledged|acknowledge|ack\b|i acknowledge|i understand|i understood|understood|"
+    r"thanks|thank you|received|noted|got it|i see|i'll|i will|will do|standing by|sounds good|confirmed|ok\b|okay)",
+    re.I)
+REPEAT_SIMILARITY = 0.7
+_WORD = re.compile(r"[a-z0-9_./-]{3,}")
+
+
+def _words(text: str) -> set:
+    return set(_WORD.findall(text.lower()))
+
+
+def similarity(a: str, b: str) -> float:
+    wa, wb = _words(a), _words(b)
+    return len(wa & wb) / len(wa | wb) if wa and wb else 0.0
+
+
+def needs_no_reply(text: str, earlier: Iterable[str] = ()) -> bool:
+    """True for a message that asks nothing: no question, and it either opens as an
+    acknowledgement/announcement or repeats an earlier message of the same sender."""
+    text = str(text or "")
+    if "?" in text:
+        return False
+    if ACK_OPENING.match(text):
+        return True
+    return any(similarity(text, e) >= REPEAT_SIMILARITY for e in earlier)
