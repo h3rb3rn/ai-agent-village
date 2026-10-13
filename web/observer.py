@@ -103,16 +103,32 @@ class Resources:
         return {'processes': processes[:512], 'containers': list(containers.values()), 'connections': sockets[:128], 'service_links': edges, 'gpu_processes': gpu_processes, 'gpu_ids': gpu_ids, 'scope': 'Host-Prozesse nach Unix-UID/SubUID; Container über libpod-cgroups. TCP nur im Host-Netzwerknamespace. Kein Vollinventar gestoppter Container.'}
 
 
+RESULT_COMMAND = re.compile(r'(?:^|; )command=(.*?)(?:; output=|$)', re.S)
+
+
+def result_signature(detail):
+    """P160: the normalized command of a command_result ('' when the event does not name it)."""
+    match = RESULT_COMMAND.search(detail)
+    return ' '.join(match[1].split()) if match else ''
+
+
 def outcome_stats(events):
-    """Shell exit status is an execution result, not proof of task completion."""
+    """Shell exit status is an execution result, not proof of task completion.
+    P160 (live 2026-10-13: 02-explorer ran the same habitat_inventory.py 11 times, shown as 11
+    successes): 'distinct_success' counts each successfully run command once; the rest is
+    'repeated_success'. Operator view only, never part of a resident's context."""
     result = {}
     for e in events:
         agent = e.get('agent')
         if not agent: continue
-        s = result.setdefault(agent, {'success': 0, 'failure': 0, 'unclassified': 0, 'invalid': 0, 'blocked': 0, 'repeated_attempts': 0, 'commands': {}, 'inference_errors': 0})
+        s = result.setdefault(agent, {'success': 0, 'failure': 0, 'unclassified': 0, 'invalid': 0, 'blocked': 0, 'repeated_attempts': 0, 'commands': {}, 'succeeded': set(), 'repeated_success': 0, 'inference_errors': 0})
         kind, detail = e.get('event', ''), str(e.get('detail', ''))
         if kind == 'command_result':
-            if re.match(r'result=success;', detail): s['success'] += 1
+            if re.match(r'result=success;', detail):
+                s['success'] += 1
+                sig = result_signature(detail)
+                if sig and sig in s['succeeded']: s['repeated_success'] += 1
+                elif sig: s['succeeded'].add(sig)
             elif re.match(r'result=failure\(', detail): s['failure'] += 1
             else: s['unclassified'] += 1
         if kind == 'command_start':
@@ -126,7 +142,9 @@ def outcome_stats(events):
     for s in result.values():
         s['repeated_attempts'] = sum(max(0,n-1) for n in s['commands'].values())
         s['repeats'] = [{'command': c, 'count': n} for c,n in sorted(s.pop('commands').items(), key=lambda x: -x[1]) if n>1][:5]
+        s.pop('succeeded')
         total = s['success'] + s['failure']
         s['success_rate'] = s['success']/total if total else None
+        s['distinct_success'] = s['success'] - s['repeated_success']
         s['completed_actions'] = total
     return result

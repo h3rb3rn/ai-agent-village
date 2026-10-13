@@ -438,7 +438,8 @@
     "table_blocked": "Blockiert",
     "table_repeats": "Wiederholte Versuche",
     "no_actions": "Keine abgeschlossenen Aktionen",
-    "show_commands": "Befehle anzeigen"
+    "show_commands": "Befehle anzeigen",
+    "distinct": "davon {n} verschiedene Befehle"
   },
   "services_panel": {
     "title": "Container & beobachtete Verbindungen",
@@ -510,8 +511,8 @@
     "aria_chart": "Historischer Fähigkeitsindex",
     "no_data": "Noch keine ausreichenden Aktionsdaten.",
     "windows": "{n} Zeitfenster",
-    "tooltip": "{period} · Index {index} · {success} Erfolg / {failure} Fehler / {invalid} verworfen",
-    "hint": "0–100 je Zeitfenster; erfolgreiche Shell-Aktionen, verworfene Antworten und Wiederholungsblockaden werden gewichtet. Die Statistik bleibt unsicherheitsbehaftet und kontextabhängig."
+    "tooltip": "{period} · Index {index} · {success} Erfolg ({distinct} verschieden) / {failure} Fehler / {invalid} verworfen",
+    "hint": "0–100 je Zeitfenster; verschiedene erfolgreiche Shell-Befehle (derselbe Befehl zählt nur einmal), verworfene Antworten und Wiederholungsblockaden werden gewichtet. Die Statistik bleibt unsicherheitsbehaftet und kontextabhängig."
   },
   "footer": {
     "no_measurement": "Noch keine Messung",

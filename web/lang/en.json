@@ -438,7 +438,8 @@
     "table_blocked": "Blocked",
     "table_repeats": "Repeated attempts",
     "no_actions": "No completed actions",
-    "show_commands": "Show commands"
+    "show_commands": "Show commands",
+    "distinct": "{n} distinct commands"
   },
   "services_panel": {
     "title": "Containers & observed connections",
@@ -510,8 +511,8 @@
     "aria_chart": "Historical skill index",
     "no_data": "Not enough action data yet.",
     "windows": "{n} time windows",
-    "tooltip": "{period} · index {index} · {success} success / {failure} failure / {invalid} rejected",
-    "hint": "0-100 per time window; successful shell actions, rejected responses and repeat blocks are weighted. The statistic remains uncertain and context-dependent."
+    "tooltip": "{period} · index {index} · {success} success ({distinct} distinct) / {failure} failure / {invalid} rejected",
+    "hint": "0-100 per time window; distinct successful shell commands (re-running the same command counts once), rejected responses and repeat blocks are weighted. The statistic remains uncertain and context-dependent."
   },
   "footer": {
     "no_measurement": "No measurement yet",

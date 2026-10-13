@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 import base64, fcntl, hashlib, hmac, html, json, os, re, secrets, time
-from observer import outcome_stats
+from observer import outcome_stats, result_signature
 from collections import defaultdict, deque
 from datetime import datetime, timezone
 from http import HTTPStatus
@@ -167,14 +167,21 @@ def inference_events(limit=200):
     return read_history((AGENT_TELEMETRY, AGENT_TELEMETRY.with_name('agent-events.previous.jsonl')), limit=limit)
 
 def skill_history(events):
-    buckets = {}
+    """P160: a successful command counts once per window ('distinct_success'); re-running the same
+    command adds to 'repeated_success' and dilutes the success share instead of raising it. The
+    old exit-code index stays as 'capability_index_exitcode' so the series remains comparable."""
+    buckets = {}; succeeded = {}
     for item in events:
         agent = item.get('agent'); period = item.get('timestamp', '')[:13]
         if not agent or not period: continue
-        row = buckets.setdefault((agent, period), {'agent': agent, 'period': period, 'success': 0, 'failure': 0, 'invalid': 0, 'repeats': 0, 'messages': 0})
+        row = buckets.setdefault((agent, period), {'agent': agent, 'period': period, 'success': 0, 'failure': 0, 'invalid': 0, 'repeats': 0, 'messages': 0, 'repeated_success': 0})
         event = item.get('event', ''); detail = str(item.get('detail', ''))
         if event == 'command_result':
-            if 'result=success' in detail: row['success'] += 1
+            if 'result=success' in detail:
+                row['success'] += 1
+                sig = result_signature(detail); seen = succeeded.setdefault((agent, period), set())
+                if sig and sig in seen: row['repeated_success'] += 1
+                elif sig: seen.add(sig)
             elif 'result=failure' in detail: row['failure'] += 1
         elif event == 'invalid_decision': row['invalid'] += 1
         elif event == 'escalation': row['repeats'] += 1
@@ -182,7 +189,10 @@ def skill_history(events):
     output=[]
     for row in buckets.values():
         attempts=row['success']+row['failure']; decisions=attempts+row['invalid']
-        row['capability_index']=round(max(0, min(100, (row['success']/attempts*70 if attempts else 0) + (max(0, 1-row['invalid']/max(1,decisions))*20) + (min(1,row['messages']/max(1,decisions))*10) - row['repeats']*5)), 1)
+        row['distinct_success']=row['success']-row['repeated_success']
+        rest=(max(0, 1-row['invalid']/max(1,decisions))*20) + (min(1,row['messages']/max(1,decisions))*10) - row['repeats']*5
+        row['capability_index']=round(max(0, min(100, (row['distinct_success']/attempts*70 if attempts else 0) + rest)), 1)
+        row['capability_index_exitcode']=round(max(0, min(100, (row['success']/attempts*70 if attempts else 0) + rest)), 1)
         output.append(row)
     return sorted(output, key=lambda x:(x['agent'],x['period']))
 

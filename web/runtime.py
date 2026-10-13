@@ -79,7 +79,7 @@ from village.actions import ACTION_SPECS, action_schema, normalize_allowed
 from village.tools import call_tool
 from village.policy import agent_policy, load_policy
 from village.prompting import build_system_prompt, compact_context, user_suffix
-from village.preflight import inspect as preflight_inspect
+from village.preflight import correct as preflight_correct, inspect as preflight_inspect
 
 VERSION = '2026-09-25-dynamic-teams-1'
 
@@ -1083,6 +1083,20 @@ class Resident:
         except Exception as exc:  # observation must never cost a cycle
             self.event('prompt_preflight_error', f'{type(exc).__name__}: {exc}', True)
 
+    def correct_prompt(self, context):
+        """P158 stage 2: before the snapshot is sent, drop or rewrite hints that ask for an action
+        this cycle does not offer, cut today's calendar to the next entries and show unchanged
+        recurring notes less often (village/preflight.py correct()). Every correction goes to the
+        operator telemetry; a failure leaves the snapshot as it was and never costs a cycle."""
+        try:
+            fixes, self.state['prompt_recurring'] = preflight_correct(
+                context, normalize_allowed(self.effective_allowed_actions()), ACTION_SPECS, minute_of_day(),
+                self.state.get('prompt_recurring'))
+            if fixes:
+                self.event('prompt_corrected', json.dumps(fixes, ensure_ascii=False, separators=(',', ':')), True)
+        except Exception as exc:  # correction must never cost a cycle
+            self.event('prompt_correction_error', f'{type(exc).__name__}: {exc}', True)
+
     def asks_for_reply(self, item):
         """P155: only a message that asks or tells something new obliges a reply; a pure
         acknowledgement, announcement or repeat of the same sender does not (see collaboration.py)."""
@@ -1473,10 +1487,14 @@ class Resident:
         # replies mentioned it. Today's lesson now sits in every resident's context until answered.
         try:
             from datetime import date as _date
-            from village.school import Curriculum, daily_announcement
+            from village.school import Curriculum, answers_for, daily_announcement
             today_day = _date.fromisoformat(gazette_today())
-            lesson_text = daily_announcement(Curriculum(self.board / 'school.sqlite3'), today_day)
-            if lesson_text:
+            plan = Curriculum(self.board / 'school.sqlite3')
+            lesson_text = daily_announcement(plan, today_day)
+            # P159 (live 2026-10-13: 01-king answered five times, stored=False each time): the
+            # lesson stayed in the context after the resident's one answer of the day was stored,
+            # although P117 promised "until answered". It now leaves once this resident answered.
+            if lesson_text and self.id not in answers_for(plan, today_day):
                 context['school_lesson'] = lesson_text
         except Exception:
             pass
@@ -1516,12 +1534,16 @@ class Resident:
             # _loop_breaker_allowed_actions()) - named explicitly so the
             # hint stays true regardless of which of the widened set this
             # resident's own role actually permits.
-            allowed_now = ', '.join(self._loop_breaker_allowed_actions())
+            # P158: name what is really offered (P126/P135 hide meeting_operation without an
+            # open meeting), and the meeting example only while it can be followed.
+            offered = self.effective_allowed_actions()
+            allowed_now = ', '.join(offered)
+            example = " (e.g. an open meeting's own report)" if 'meeting_operation' in offered else ''
             context['loop_breaker_note'] = (
                 f"You have failed to produce a valid action {streak} times in a row (or kept "
                 "repeating the exact same rejected content), and it has not started working. "
                 f"This cycle only accepts: {allowed_now}. If one of them resolves a real open "
-                "obligation (e.g. an open meeting's own report), send exactly that and nothing "
+                f"obligation{example}, send exactly that and nothing "
                 "else; otherwise send {\"name\":\"idle\",\"arguments\":{}} to reset cleanly. Next "
                 "cycle, try a genuinely different, simpler approach to whatever you were "
                 f"attempting. {self.sparring_partner_hint()}"
@@ -1577,6 +1599,7 @@ class Resident:
         # P124: last_action_feedback is already bounded head+tail by feedback();
         # a second tail-only cut here used to discard the best-ranked memory
         # hits and the start of every structured result.
+        self.correct_prompt(context)
         # P136: focus cycles drop the village-wide overview while nothing urgent waits; the
         # system prompt stays byte-identical, so only the snapshot shrinks.
         self.current_cycle_mode = choose_cycle_mode(context, notes, self.state, self.env, self.id)
