@@ -124,6 +124,7 @@ def build_record(*, agent: str, model: str, think_level: str, num_ctx: Any, cycl
         'thinking': (thinking or '')[:THINKING_CHARS],
         'action': {'name': tool.get('name'), 'arguments': tool.get('arguments')},
         'fallback_reason': parsed.get('fallback_reason'),
+        'repaired': parsed.get('repaired'),  # P157: accepted only after a parser repair - raw output is the weakness
         'label': trace_label(parsed, last_result, executed),
         'result': str((last_result or {}).get('result', ''))[:RESULT_CHARS] if executed else '',
         'metrics': metrics,

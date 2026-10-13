@@ -71,6 +71,7 @@ RELEASE_FILES = [
     ("village/event_retention.py", "lib/village/event_retention.py", 0o644),
     ("village/actions.py", "lib/village/actions.py", 0o644),
     ("village/collaboration.py", "lib/village/collaboration.py", 0o644),
+    ("village/preflight.py", "lib/village/preflight.py", 0o644),
     ("village/policy.py", "lib/village/policy.py", 0o644),
     ("village/prompting.py", "lib/village/prompting.py", 0o644),
     ("village/tools.py", "lib/village/tools.py", 0o644),

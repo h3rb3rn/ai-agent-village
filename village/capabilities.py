@@ -202,6 +202,9 @@ OBSERVED: Dict[str, Dict[str, str]] = {
         desired_behavior='Track own history; change the approach after a result.'),
 }
 
+REPAIRED_SIGNATURES = {'arguments_text': 'observed:arguments_not_object',
+                       'command_quotes': 'observed:incomplete_action_block'}
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -214,6 +217,10 @@ def _slug(text: str) -> str:
 def observed_signature(record: Dict[str, Any]) -> Optional[str]:
     """Map a P143 trace record to an observed gap signature, or None."""
     label = record.get('label')
+    # P157: an action the parser repaired still shows the model's weakness; count it as before.
+    repaired = REPAIRED_SIGNATURES.get(record.get('repaired') or '')
+    if repaired:
+        return repaired
     reason = str(record.get('fallback_reason') or '').lower()
     result = str(record.get('result') or '')
     if label == 'invalid_format':

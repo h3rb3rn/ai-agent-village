@@ -79,6 +79,7 @@ from village.actions import ACTION_SPECS, action_schema, normalize_allowed
 from village.tools import call_tool
 from village.policy import agent_policy, load_policy
 from village.prompting import build_system_prompt, compact_context, user_suffix
+from village.preflight import inspect as preflight_inspect
 
 VERSION = '2026-09-25-dynamic-teams-1'
 
@@ -324,6 +325,11 @@ SATURATION_STOPWORDS = frozenset(
     'script local check fix complete final finalize build run prototype tool simple specific task '
     'shared review follow before after using based'.split())
 OWN_RECENT_RESULTS = 8
+NO_ANSWER_REASONS = ('output budget exhausted', 'no final answer returned')  # P157
+REPAIR_HINTS = {  # P157: the exact form the parser had to reconstruct
+    'arguments_text': '"arguments" as a JSON object, e.g. {"name":"execute_bash","arguments":{"command":"ls"}}',
+    'command_quotes': 'double quotes inside "command" escaped as \\" (or use single quotes in the shell command)',
+}
 RECEIVED_RECENT = 8  # P155: texts kept per sender to recognise a repeated message
 # Stored action results keep both ends: structured JSON (memory/task/research
 # results) is ranked best-first at the head, command output reports errors at
@@ -1043,6 +1049,40 @@ class Resident:
             "approach faster than repeating it alone."
         )
 
+    def cycle_think_level(self):
+        """P157: the configured think level, except once after a cycle that thought until the
+        output budget ran out."""
+        level = self.env.get('OLLAMA_THINK_LEVEL', 'off')
+        if self.state.pop('think_off_once', False):
+            level = 'off'
+        self._cycle_think_level = level
+        return level
+
+    def note_repair(self, parsed, previous_result):
+        """P157: an action the parser had to repair ran; log it and tell the resident the exact
+        form, so the tolerance never becomes a habit. The trace keeps the raw output."""
+        kind = parsed['repaired']
+        name = parsed['tool_call']['name']
+        self.event('decision_repaired', f'kind={kind}; action={name}')
+        hint = (f' Note: your action was accepted only after a repair ({kind}). Next time write '
+                + REPAIR_HINTS.get(kind, 'a valid village-action block') + '.')
+        result = self.state.get('last_result')
+        if isinstance(result, dict) and result is not previous_result:
+            result['result'] = str(result.get('result', '')) + hint
+
+    def observe_prompt(self, base, identity, live, snapshot, allowed):
+        """P156 stage 1: measure the prompt about to be sent (sizes, contradictions, stale
+        sections, duplicates) for the operator's telemetry only. Never changes the prompt and
+        never fails a cycle."""
+        try:
+            report, self.state['preflight_sections'] = preflight_inspect(
+                {'base': base, 'identity': identity, 'live': live}, snapshot, normalize_allowed(allowed),
+                ACTION_SPECS, self.state.get('preflight_sections'))
+            report['mode'] = getattr(self, 'current_cycle_mode', 'full')
+            self.event('prompt_preflight', json.dumps(report, ensure_ascii=False, separators=(',', ':')), True)
+        except Exception as exc:  # observation must never cost a cycle
+            self.event('prompt_preflight_error', f'{type(exc).__name__}: {exc}', True)
+
     def asks_for_reply(self, item):
         """P155: only a message that asks or tells something new obliges a reply; a pure
         acknowledgement, announcement or repeat of the same sender does not (see collaboration.py)."""
@@ -1678,7 +1718,7 @@ class Resident:
                 hashlib.sha256(system_text.encode('utf-8')).hexdigest()[:16]
             record = build_trace_record(
                 agent=self.id, model=self.env.get('OLLAMA_MODEL', ''),
-                think_level=self.env.get('OLLAMA_THINK_LEVEL', 'off'), num_ctx=self.env.get('OLLAMA_NUM_CTX'),
+                think_level=getattr(self, '_cycle_think_level', self.env.get('OLLAMA_THINK_LEVEL', 'off')), num_ctx=self.env.get('OLLAMA_NUM_CTX'),
                 cycle_mode=getattr(self, 'current_cycle_mode', 'full'), request_id=request_id,
                 system_sha=system_sha, user=self.redact(messages[1]['content']),
                 output=self.redact(final_content(norm.content)), thinking=self.redact(str(message.get('thinking') or '')),
@@ -3340,8 +3380,10 @@ class Resident:
                                                               allowed_now, action_format, self.policy.role_brief)},
             {'role': 'user', 'content': snapshot + user_suffix(action_format)}
         ]
+        self.observe_prompt(full_text or core_text, identity, live, snapshot, allowed_now)
         api_type = self.env.get('API_TYPE', 'ollama').lower()
         api_token = self.env.get('API_TOKEN', self.env.get('OLLAMA_API_TOKEN'))
+        think_level = self.cycle_think_level()
         start = time.monotonic()
 
         # P06: Create persistent request record before network dispatch (state=queued -> requesting)
@@ -3358,7 +3400,7 @@ class Resident:
                 model=self.env['OLLAMA_MODEL'],
                 messages=messages,
                 num_predict=int(self.env.get('OLLAMA_NUM_PREDICT', '768')),
-                think_level=self.env.get('OLLAMA_THINK_LEVEL', 'off'),
+                think_level=think_level,
                 api_token=api_token,
             )
         else:
@@ -3368,7 +3410,7 @@ class Resident:
                 messages=messages,
                 num_ctx=int(self.env.get('OLLAMA_NUM_CTX', '8192')),
                 num_predict=int(self.env.get('OLLAMA_NUM_PREDICT', '768')),
-                think_level=self.env.get('OLLAMA_THINK_LEVEL', 'off'),
+                think_level=think_level,
                 keep_alive=self.env.get('OLLAMA_KEEP_ALIVE', '10m'),
                 api_token=api_token,
                 response_format=response_format,
@@ -3402,6 +3444,11 @@ class Resident:
             # Private last output, bounded; do not broadcast rejected generations to peers.
             write_json(self.home / 'last-response.json', dict(metrics=metrics, content=self.redact(final_content(norm.content))[:65536]))
             parsed = decision(answer, allowed_now)
+            if parsed.get('fallback_reason') in NO_ANSWER_REASONS and think_level != 'off':
+                # P157: thinking used the whole budget (King: 7 of 103 cycles, ~20 min each). The next
+                # cycle runs once without thinking instead of risking the same spiral again.
+                self.state['think_off_once'] = True
+                self.event('think_off_next_cycle', f'reason={parsed["fallback_reason"]}; think_level={think_level}', True)
             if action_format == 'schema':
                 conforming = not parsed.get('fallback_reason') and not parsed.get('prose')
                 streak = 0 if conforming else int(self.state.get('schema_failure_streak', 0)) + 1
@@ -3429,6 +3476,8 @@ class Resident:
             executed = self.tracker.mark_action_executed(req_record.request_id, self.generation)
             if executed:
                 self.execute(parsed)
+                if parsed.get('repaired'):
+                    self.note_repair(parsed, previous_result)
             else:
                 self.event('action_discarded', f'request_id={req_record.request_id} execution denied: generation mismatch or duplicate execution', True)
             # P143: keep this cycle as training material. feedback() always stores a new

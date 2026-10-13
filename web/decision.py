@@ -34,6 +34,28 @@ ACTION_ATTEMPT = re.compile(
 # idle is the one allowed way out (P83).
 BARE_IDLE = re.compile(r'^idle\W*$', re.I)
 
+# P157: tolerate two unambiguous model weaknesses, never guess content. Every repair is marked in
+# the result ('repaired') so the runtime can log it and keep it as a training example.
+# 1. arguments sent as a bare string (nemotron-3-nano: 31 of its rejections) for an action whose
+#    only required field is a string: the string can mean nothing else.
+TEXT_ARGUMENT_FIELD = {'execute_bash': 'command', 'start_job': 'command', 'memory_search': 'query'}
+# 2. a shell command with unescaped double quotes inside "command" (Qwen3.8-4B-Distill), which is
+#    invalid JSON. Only the exact one-field shape is repaired; the quotes are kept as written.
+COMMAND_ONLY = re.compile(
+    r'^\s*\{\s*"name"\s*:\s*"(execute_bash|start_job)"\s*,\s*"arguments"\s*:\s*\{\s*"command"\s*:\s*"(.*)"\s*\}\s*\}\s*$',
+    re.S)
+
+ANOTHER_FIELD = re.compile(r'"\s*[,}]\s*"?[A-Za-z_]+"?\s*:')
+
+
+def _repair_command(text):
+    """Return (obj, 'command_quotes') for the one-field shape whose JSON fails only on quotes."""
+    match = COMMAND_ONLY.match(text)
+    if not match or '\n' in match.group(2).strip('\n') or ANOTHER_FIELD.search(match.group(2)):
+        return None, None  # a further JSON field means the shape is not the one-field command
+    command = match.group(2).replace('\\"', '"')
+    return {'name': match.group(1), 'arguments': {'command': command}}, 'command_quotes'
+
 
 def _normalize_action(name, args):
     """Normalize documented legacy aliases without interpreting free prose."""
@@ -163,7 +185,9 @@ def decision(response, allowed=None):
         if label.strip()=='village-action':
             blocks.append(body); continue
         try: candidate=json.loads(body)
-        except ValueError: continue
+        except ValueError:
+            candidate, _ = _repair_command(body)
+            if candidate is None: continue
         if isinstance(candidate,dict) and ('name' in candidate or 'tool_call' in candidate):
             blocks.append(body)
         elif isinstance(candidate,dict) and candidate.get('action') in ('create','claim','complete','yield'):
@@ -185,13 +209,18 @@ def decision(response, allowed=None):
     # cycle anyway, so deterministically taking the first well-formed block
     # is unambiguous and safe - the model already ordered them as steps.
     extra_blocks = 0
+    repaired = None
     if blocks:
         extra_blocks = len(blocks) - 1
         try: obj, _ = _parse_object(blocks[0])
-        except ValueError: return fallback('incomplete village-action block', content)
+        except ValueError:
+            obj, repaired = _repair_command(blocks[0])
+            if obj is None: return fallback('incomplete village-action block', content)
     elif content.startswith('{'):
         try: obj, extra_blocks = _parse_object(content)
-        except ValueError: return fallback('incomplete legacy action object', content)
+        except ValueError:
+            obj, repaired = _repair_command(content)
+            if obj is None: return fallback('incomplete legacy action object', content)
     elif '```village-action' in content:
         return fallback('unclosed action block', content)
     elif BARE_IDLE.match(content):
@@ -207,9 +236,11 @@ def decision(response, allowed=None):
     # P135 (live 2026-10-11): a string/list 'arguments' raised ValueError in
     # _normalize_action's dict(args) and aborted the whole cycle as an
     # inference_error - a malformed action, not a crash.
+    name = NAME_ALIASES.get(name, name)
+    if isinstance(args, str) and name in TEXT_ARGUMENT_FIELD and args.strip():
+        args, repaired = {TEXT_ARGUMENT_FIELD[name]: args}, 'arguments_text'
     if not isinstance(args, dict):
         return fallback('arguments must be a JSON object', content)
-    name = NAME_ALIASES.get(name, name)
     args = _normalize_action(name, args)
     reason = _validate_action(name, args)
     if reason:
@@ -219,6 +250,8 @@ def decision(response, allowed=None):
     result = {'observation': str(obj.get('observation', ''))[:2000], 'tool_call': {'name': name, 'arguments': args}}
     if extra_blocks:
         result['extra_blocks_ignored'] = extra_blocks
+    if repaired:
+        result['repaired'] = repaired
     return result
 
 

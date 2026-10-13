@@ -15,8 +15,10 @@ from decision import decision
 
 class DecisionTests(unittest.TestCase):
     def test_string_arguments_are_a_malformed_action_not_a_crash(self):
-        for args in ('ls -la', ['a', 'b']):
-            parsed = decision({'message': {'content': json.dumps({'name': 'execute_bash', 'arguments': args})}})
+        # P157: a bare string for execute_bash is now repaired (see test_tolerance); a list, or a
+        # string for an action with more than one field, is still a malformed action.
+        for name, args in (('execute_bash', ['a', 'b']), ('board_message', 'hello')):
+            parsed = decision({'message': {'content': json.dumps({'name': name, 'arguments': args})}})
             self.assertIn('arguments must be a JSON object', parsed.get('fallback_reason', ''))
 
 
